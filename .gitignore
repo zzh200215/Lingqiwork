@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+.venv/
+*.pyc
+
+# Data (local-first, personal)
+data/
+backups/
+vault/
+
+# Runtime logs & temp
+*.log
+wb-tts-*/
+wb-pet-*/
+wb-v14-*/
+
+# Node handled by frontend/.gitignore
+
+# Tool / agent data
+.workbuddy/
+.claude/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# TS build cache
+*.tsbuildinfo
+
+# damaged git history kept as backup (not tracked)
+.git.corrupt*/

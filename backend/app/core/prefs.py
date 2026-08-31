@@ -1,0 +1,95 @@
+"""Simple JSON file config (data/config.json) for user preferences.
+
+Kept separate from SQLite so settings survive db rebuilds and stay
+human-editable.
+"""
+import json
+import threading
+from typing import Any
+
+from app.config import settings as app_settings
+
+_lock = threading.Lock()
+
+_DEFAULTS: dict[str, Any] = {
+    "system_prompt": "",  # prepended to every chat as a system message
+    "rag_top_k": 5,
+    "temperature": None,  # None = provider default
+    "mcp_servers": [],  # {"name","type","command","args","url","enabled"}
+    "hybrid_search": True,  # BM25 + vector RRF fusion (False = vector only)
+    "rerank_enabled": True,  # cross-encoder rerank after fusion (bge-reranker-base)
+    "full_context": True,  # short retrieved docs injected whole instead of chunked
+    "full_context_max_chars": 4000,  # per-doc budget for full-context mode
+    "digest_time": "09:00",  # daily vault digest schedule (HH:MM)
+    "digest_enabled": False,
+    "memory_enabled": True,  # inject persistent memories into chat
+    "automemory_enabled": False,  # model decides post-turn what's worth remembering
+    "memory_tidy_enabled": False,  # nightly sleep-time consolidation of near-duplicate memories
+    "memory_tidy_time": "03:30",
+    "asr_model": "small",  # faster-whisper size: tiny | base | small | medium
+    "asr_language": "auto",  # auto | zh | en | ja
+    "tts_voice": "zh-CN-XiaoxiaoNeural",  # edge-tts neural voice
+    "tts_engine": "edge",  # edge (network, neural) | sapi (local Windows voice)
+    "tts_auto": False,  # auto-read assistant answers when they finish
+    "podcast_host_voice": "zh-CN-YunxiNeural",  # 笔记→播客：主持人音色
+    "podcast_guest_voice": "zh-CN-XiaoxiaoNeural",  # 笔记→播客：嘉宾音色
+    "podcast_daily_enabled": False,  # 每日笔记摘要生成后自动转为一期播客
+    "kg_uri": "bolt://localhost:7687",  # user's local Neo4j
+    "kg_user": "neo4j",
+    "kg_password": "",
+    "kg_enabled": False,  # inject knowledge-graph context into RAG answers
+    "artifacts_enabled": False,  # opt-in: run AI code blocks (python/js) locally
+    "artifacts_timeout": 30,  # per-run subprocess timeout, seconds (cap 120)
+    "desktop_notify": True,  # Windows toast on task finish/failure
+    "backup_enabled": False,  # daily automatic backup zip
+    "backup_time": "03:00",
+    "backup_keep": 7,  # rolling retention count
+    "backup_dir": "",  # "" = <project>/backups
+    "image_enabled": True,  # expose the image_gen tool to the model
+    "image_api": "dashscope",  # dashscope (multimodal-generation) | openai (/images/generations)
+    "image_provider": "",  # provider name whose key/base_url to use; "" = first enabled
+    "image_model": "qwen-image-3.0",
+    "image_size": "1024*1024",
+    "repos": [],  # cloned git repos: {"name","url","files","chunks","last_synced"}
+    "watch_dirs": [],  # external indexed folders: {"name","path","enabled","files","chunks",...}
+    "feeds": [],  # rss subs: {"name","url","title","enabled","new","last_synced"}
+    "feeds_enabled": False,  # daily RSS fetch into vault/feeds/
+    "feeds_time": "08:00",
+    "smtp_host": "",
+    "smtp_port": 587,
+    "smtp_user": "",
+    "smtp_password": "",
+    "smtp_from": "",  # "" = same as smtp_user
+    "smtp_to": "",  # comma-separated recipients
+    "smtp_tls": True,  # STARTTLS on 587; port 465 uses implicit TLS automatically
+    "email_on_digest": False,  # mail the daily note digest
+    "email_on_feeds": False,  # mail a summary line per feed after each sync
+    "pet_enabled": True,  # 零柒: resident companion (events + window)
+    "pet_notify": True,  # 零柒: toast on failures & greetings
+    "pet_greet_enabled": True,  # 零柒: daily morning/evening greeting (生物钟)
+    "pet_morning_time": "08:30",  # 零柒: morning greeting schedule (HH:MM)
+    "pet_evening_time": "21:00",  # 零柒: evening recap schedule (HH:MM)
+}
+
+
+def _path():
+    return app_settings.config_path
+
+
+def load_config() -> dict[str, Any]:
+    with _lock:
+        if not _path().exists():
+            return dict(_DEFAULTS)
+        try:
+            data = json.loads(_path().read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return dict(_DEFAULTS)
+    return {**_DEFAULTS, **data}
+
+
+def save_config(update: dict[str, Any]) -> dict[str, Any]:
+    current = load_config()
+    current.update({k: v for k, v in update.items() if k in _DEFAULTS})
+    with _lock:
+        _path().write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    return current

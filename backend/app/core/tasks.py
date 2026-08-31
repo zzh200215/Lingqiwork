@@ -1,0 +1,646 @@
+"""Scheduled prompt runs + autonomous agent tasks (ROADMAP V2.3).
+
+A task = name + prompt + trigger. Two execution modes:
+  simple — one prompt, one model answer (optionally with tools, ≤6 rounds)
+  agent  — the model gets a goal and drives a tool loop (budget in rounds)
+           until it can produce the final answer; every call is logged to
+           `task_runs` for replay.
+
+Triggers: cron (APScheduler), or vault file changes (`trigger_kind="watch"`).
+A linear pipeline is expressed with `chain_next_id`: on success the upstream
+answer is handed over via `vault/tasks/handoff/<from>-to-<to>.md` and the
+downstream task runs with it injected as its main input.
+"""
+import asyncio
+import fnmatch
+import json
+import logging
+import re
+import sqlite3
+from datetime import datetime
+
+from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import delete, select
+
+from app.config import VAULT_DIR, settings
+from app.core.llm import (
+    MAX_TOOL_ROUNDS,
+    ProviderInfo,
+    run_agentic_chat,
+    stream_chat,
+)
+from app.core.prefs import load_config
+from app.db import SessionLocal
+from app.models import Conversation, Message, ProviderConfig, ScheduledTask, TaskRun
+
+log = logging.getLogger(__name__)
+
+JOB_PREFIX = "task_"
+TASK_DIR = VAULT_DIR / "tasks"
+HANDOFF_DIR = TASK_DIR / "handoff"
+_RESULT_CAP = 20000
+_HANDOFF_CAP = 15000
+_CHAIN_MAX_DEPTH = 5
+_RUNS_KEEP = 20  # run history rows kept per task
+_RETRY_DELAY_SECONDS = 30
+DEFAULT_AGENT_ROUNDS = 12
+MAX_AGENT_ROUNDS = 30
+
+# set by core.triggers: called around every run of a watch-triggered task so
+# its own vault writes don't immediately re-fire it
+WATCH_HOOK: "callable[[int], None] | None" = None
+_BG_TASKS: set[asyncio.Task] = set()  # keep refs so fire-and-forget chains aren't GC'd
+
+
+def validate_cron(expr: str) -> str:
+    """Normalize + validate a 5-field crontab string. Raises ValueError."""
+    cleaned = " ".join((expr or "").split())
+    if len(cleaned.split(" ")) != 5:
+        raise ValueError("cron 需要 5 段：分 时 日 月 周")
+    CronTrigger.from_crontab(cleaned)  # raises ValueError when malformed
+    return cleaned
+
+
+def normalize_watch_path(raw: str) -> str:
+    """Clean a vault-relative watch path ('' = whole vault). Raises ValueError."""
+    p = (raw or "").strip().replace("\\", "/").strip("/")
+    if not p:
+        return ""
+    parts = [seg for seg in p.split("/") if seg not in ("", ".")]
+    if any(seg == ".." for seg in parts) or (len(p) > 1 and p[1] == ":"):
+        raise ValueError("监听路径必须是 vault 内的相对路径")
+    return "/".join(parts)
+
+
+def filter_tools(specs: list[dict], whitelist: str) -> list[dict]:
+    """Keep only specs whose function name matches a whitelist pattern.
+
+    Patterns are fnmatch-style ('vault_*', 'server__*'); empty or '*' = all.
+    """
+    tokens = [t for t in re.split(r"[,\s]+", (whitelist or "").strip()) if t]
+    if not tokens or "*" in tokens:
+        return specs
+    return [
+        s
+        for s in specs
+        if any(fnmatch.fnmatchcase(s.get("function", {}).get("name", ""), tok) for tok in tokens)
+    ]
+
+
+# ---------- scheduling ----------
+
+
+def reschedule() -> None:
+    """Register every enabled cron-trigger task; watch-trigger ones are event driven.
+
+    Reads through plain sqlite3: the scheduler API is sync and this runs at
+    startup and after every task edit.
+    """
+    from app.core import scheduler as sched
+
+    rows: list[tuple[int, str, str]] = []
+    try:
+        conn = sqlite3.connect(settings.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, cron, name FROM tasks "
+                "WHERE enabled = 1 AND (trigger_kind = 'cron' OR trigger_kind IS NULL) "
+                "ORDER BY id"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:  # table may not exist yet on a fresh db
+        log.debug("tasks table unavailable, nothing to schedule", exc_info=True)
+
+    keep: set[str] = set()
+    for task_id, cron, name in rows:
+        job_id = f"{JOB_PREFIX}{task_id}"
+        try:
+            sched.set_cron(job_id, _run_job, validate_cron(cron), args=[task_id])
+            keep.add(job_id)
+        except ValueError:
+            log.warning("task %s (%s) has invalid cron %r, skipped", task_id, name, cron)
+    sched.prune_jobs(JOB_PREFIX, keep)
+
+
+def next_run(task_id: int) -> str | None:
+    from app.core import scheduler as sched
+
+    return sched.next_run(f"{JOB_PREFIX}{task_id}")
+
+
+async def _run_job(task_id: int) -> None:
+    try:
+        result = await run_task(task_id, trigger="cron")
+        log.info("task %s finished: %s", task_id, result.get("status"))
+    except Exception:  # noqa: BLE001 - a failed run must not kill the scheduler
+        log.exception("task %s crashed", task_id)
+
+
+# ---------- execution ----------
+
+
+async def _resolve(model_id: str) -> tuple[ProviderConfig, str]:
+    async with SessionLocal() as db:
+        if model_id and "/" in model_id:
+            pname, model = model_id.split("/", 1)
+            p = (
+                await db.execute(select(ProviderConfig).where(ProviderConfig.name == pname))
+            ).scalar_one_or_none()
+            if p and p.enabled:
+                return p, model
+        providers = (
+            await db.execute(select(ProviderConfig).where(ProviderConfig.enabled.is_(True)))
+        ).scalars().all()
+    for p in providers:
+        if p.models:
+            return p, p.models[0]
+    raise RuntimeError("没有已启用且配置了模型的 provider")
+
+
+def _safe_name(name: str) -> str:
+    return re.sub(r'[\\/:*?"<>|\s]+', "-", name).strip("-") or "task"
+
+
+def _handoff_path(upstream_name: str, downstream_name: str):
+    return HANDOFF_DIR / f"{_safe_name(upstream_name)}-to-{_safe_name(downstream_name)}.md"
+
+
+def _write_handoff(upstream_name: str, downstream_name: str, answer: str) -> str | None:
+    """Park the upstream answer in the vault so the downstream run (and the
+    user, in an editor) can read/adjust it before the next stage fires."""
+    try:
+        HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
+        p = _handoff_path(upstream_name, downstream_name)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        p.write_text(
+            f"# 上游产出：{upstream_name} → {downstream_name}\n\n> 任务链交接文件 · {stamp}\n\n{answer}\n",
+            encoding="utf-8",
+        )
+        try:
+            return p.relative_to(VAULT_DIR).as_posix()
+        except ValueError:  # handoff dir relocated outside the vault (tests)
+            return str(p)
+    except OSError:
+        log.warning("could not write chain handoff", exc_info=True)
+        return None
+
+
+def _read_handoff(upstream_name: str, downstream_name: str) -> str:
+    p = _handoff_path(upstream_name, downstream_name)
+    try:
+        text = p.read_text(encoding="utf-8", errors="ignore").strip()
+    except OSError:
+        return ""
+    if len(text) > _HANDOFF_CAP:
+        text = text[:_HANDOFF_CAP] + "\n...[交接内容过长已截断]"
+    return text
+
+
+async def run_task(
+    task_id: int,
+    manual: bool = False,
+    trigger: str = "cron",
+    upstream_task_id: int | None = None,
+    chain_depth: int = 0,
+) -> dict:
+    """Execute one task now. Never raises: failures land in last_status/task_runs."""
+    async with SessionLocal() as db:
+        task = await db.get(ScheduledTask, task_id)
+        if not task:
+            return {"status": "error", "error": "task not found"}
+        snapshot = {
+            "name": task.name,
+            "prompt": task.prompt,
+            "model_id": task.model_id,
+            "use_rag": task.use_rag,
+            "tools_enabled": task.tools_enabled,
+            "save_to_vault": task.save_to_vault,
+            "conversation_id": task.conversation_id,
+            "mode": task.mode or "simple",
+            "tool_whitelist": task.tool_whitelist or "",
+            "max_rounds": task.max_rounds or DEFAULT_AGENT_ROUNDS,
+            "retry": task.retry if task.retry is not None else 1,
+            "notify_on_error": bool(task.notify_on_error),
+            "trigger_kind": task.trigger_kind or "cron",
+            "chain_next_id": task.chain_next_id,
+        }
+        if trigger == "chain" and upstream_task_id:
+            up = await db.get(ScheduledTask, upstream_task_id)
+            if up:
+                snapshot["upstream_name"] = up.name
+                snapshot["upstream_output"] = _read_handoff(up.name, task.name)
+
+    if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
+        WATCH_HOOK(task_id)  # suppress self-trigger from our own writes
+    run_id = await _create_run(task_id, trigger, upstream_task_id, snapshot["mode"])
+
+    started = datetime.now()
+    attempts = 1 if manual else 1 + max(0, min(int(snapshot["retry"] or 0), 3))
+    answer, sources, model_id = "", [], snapshot["model_id"]
+    rounds = tool_calls = 0
+    tokens_in = tokens_out = None
+    log_entries: list[dict] = []
+    status, error = "error", ""
+    for attempt in range(1, attempts + 1):
+        log_entries = []
+        try:
+            result = await _execute(snapshot, log_entries)
+            answer, sources, model_id = result["answer"], result["sources"], result["model_id"]
+            rounds, tool_calls = result["rounds"], result["tool_calls"]
+            tokens_in = result.get("tokens_in")
+            tokens_out = result.get("tokens_out")
+            status, error = "ok", ""
+            break
+        except Exception as e:  # noqa: BLE001 - report, never propagate to scheduler
+            log.exception("task %s attempt %d/%d failed", task_id, attempt, attempts)
+            error = f"{type(e).__name__}: {e}"
+            if attempt < attempts:
+                await asyncio.sleep(_RETRY_DELAY_SECONDS)
+
+    vault_file = None
+    conv_id = snapshot["conversation_id"]
+    if status == "ok":
+        conv_id = await _persist(
+            task_id, snapshot, answer, sources, model_id, trigger, upstream_task_id,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+        )
+        if snapshot["save_to_vault"]:
+            vault_file = _write_vault(snapshot["name"], answer, started)
+        await _finish_run(
+            run_id, "ok", answer=answer, model_id=model_id,
+            rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+        )
+        await _fire_chain(task_id, snapshot, answer, chain_depth, manual)
+        if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
+            WATCH_HOOK(task_id)
+    else:
+        await _finish_run(
+            run_id, "error", error=error, model_id=model_id,
+            rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+        )
+        if not manual and snapshot["notify_on_error"]:
+            await _notify_error(snapshot, trigger, error)
+
+    if trigger != "manual" and load_config().get("desktop_notify", True):
+        try:
+            from app.core import notify
+
+            if status == "error":
+                await asyncio.to_thread(notify.desktop, f"任务失败：{snapshot['name']}", error[:180])
+            elif snapshot["mode"] == "agent":  # long unattended runs only
+                await asyncio.to_thread(notify.desktop, f"任务完成：{snapshot['name']}", (answer or "")[:180])
+        except Exception:  # noqa: BLE001 - a broken toaster must not fail the task
+            log.debug("desktop notification failed", exc_info=True)
+
+    # 零柒: surface the run to the resident companion (best-effort, ROADMAP V14)
+    try:
+        from app.core import pet
+
+        if status == "ok":
+            pet.emit("task_done", name=snapshot["name"], detail=(answer or "")[:120])
+        else:
+            pet.emit("task_failed", name=snapshot["name"], detail=error[:160])
+    except Exception:  # noqa: BLE001
+        log.debug("pet emit failed", exc_info=True)
+
+    async with SessionLocal() as db:
+        task = await db.get(ScheduledTask, task_id)
+        if task:
+            task.last_run = started.astimezone()
+            task.last_status = status
+            task.last_result = (answer or error)[:_RESULT_CAP]
+            if conv_id:
+                task.conversation_id = conv_id
+            await db.commit()
+
+    return {
+        "status": status,
+        "error": error,
+        "answer": answer,
+        "model_id": model_id,
+        "conversation_id": conv_id,
+        "vault_file": vault_file,
+        "manual": manual,
+        "sources": len(sources),
+        "run_id": run_id,
+        "rounds": rounds,
+        "tool_calls": tool_calls,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "log": log_entries,
+    }
+
+
+async def _fire_chain(
+    task_id: int, snapshot: dict, answer: str, chain_depth: int, manual: bool
+) -> int | None:
+    """Hand the answer to the downstream task (vault file) and run it.
+
+    Manual runs continue the chain in the background so the HTTP response
+    returns after the first stage; scheduled runs wait for the whole pipeline.
+    """
+    nxt_id = snapshot.get("chain_next_id")
+    if not nxt_id or chain_depth >= _CHAIN_MAX_DEPTH:
+        return None
+
+    async def _go() -> None:
+        try:
+            async with SessionLocal() as db:
+                nxt = await db.get(ScheduledTask, nxt_id)
+                if not nxt or not nxt.enabled:
+                    log.info("chain: downstream task %s missing/disabled, skipped", nxt_id)
+                    return
+                downstream_name = nxt.name
+            _write_handoff(snapshot["name"], downstream_name, answer)
+            await run_task(nxt_id, trigger="chain", upstream_task_id=task_id, chain_depth=chain_depth + 1)
+        except Exception:  # noqa: BLE001 - the pipeline must not crash the caller
+            log.exception("chain handoff to task %s failed", nxt_id)
+
+    if manual:
+        t = asyncio.create_task(_go())
+        _BG_TASKS.add(t)
+        t.add_done_callback(_BG_TASKS.discard)
+    else:
+        await _go()
+    return nxt_id
+
+
+async def _create_run(task_id: int, trigger: str, upstream: int | None, mode: str) -> int:
+    async with SessionLocal() as db:
+        row = TaskRun(task_id=task_id, trigger=trigger, upstream_task_id=upstream, mode=mode)
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        return row.id
+
+
+async def _finish_run(
+    run_id: int,
+    status: str,
+    *,
+    answer: str = "",
+    error: str = "",
+    model_id: str = "",
+    rounds: int = 0,
+    tool_calls: int = 0,
+    log_entries: list[dict] | None = None,
+    tokens_in: int | None = None,
+    tokens_out: int | None = None,
+) -> None:
+    async with SessionLocal() as db:
+        row = await db.get(TaskRun, run_id)
+        if not row:
+            return
+        row.status = status
+        row.finished_at = datetime.now().astimezone()
+        row.answer = answer[:_RESULT_CAP]
+        row.error = error[:2000]
+        row.model_id = model_id
+        row.rounds = rounds
+        row.tool_calls = tool_calls
+        row.log_json = json.dumps(log_entries or [], ensure_ascii=False)
+        row.tokens_in = tokens_in
+        row.tokens_out = tokens_out
+        sub = (
+            select(TaskRun.id)
+            .where(TaskRun.task_id == row.task_id)
+            .order_by(TaskRun.id.desc())
+            .offset(_RUNS_KEEP)
+        )
+        await db.execute(delete(TaskRun).where(TaskRun.task_id == row.task_id, TaskRun.id.in_(sub)))
+        await db.commit()
+
+
+async def _notify_error(t: dict, trigger: str, error: str) -> None:
+    from app.core import mailer
+
+    try:
+        await asyncio.to_thread(
+            mailer.send,
+            f"任务失败：{t['name']}",
+            f"任务「{t['name']}」（{trigger} 触发）在 {datetime.now():%Y-%m-%d %H:%M} 执行失败：\n\n{error[:1500]}",
+        )
+    except Exception:  # noqa: BLE001 - notification failure must not mask the real error
+        log.warning("task failure notification mail could not be sent", exc_info=True)
+
+
+async def _execute(t: dict, log_entries: list[dict]) -> dict:
+    provider, model = await _resolve(t["model_id"])
+    model_id = f"{provider.name}/{model}"
+    prefs = load_config()
+    info = ProviderInfo(kind=provider.kind, base_url=provider.base_url, api_key=provider.api_key)
+
+    messages: list[dict] = []
+    system = (prefs.get("system_prompt") or "").strip()
+    if system:
+        messages.append({"role": "system", "content": system})
+    task_note = (
+        f"你正在执行用户的定时任务「{t['name']}」，当前时间 {datetime.now():%Y-%m-%d %H:%M}。"
+        "请直接输出任务结果（markdown），不要寒暄、不要复述任务本身。"
+    )
+    if t.get("mode") == "agent":
+        task_note += (
+            "这是无人值守的自主执行环境：你可以连续多轮调用工具来收集信息、执行操作，"
+            "每轮工具结果会返回给你，直到能给出完整结果为止。不要请求用户确认；"
+            "个别工具失败就换方法或跳过。全部完成后，你的最终文本回复就是任务产出，会被自动存档。"
+        )
+    messages.append({"role": "system", "content": task_note})
+    if t.get("upstream_output"):
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    f"本任务由上游任务「{t['upstream_name']}」通过任务链触发。"
+                    f"上游产出如下，请以它为主要输入完成任务：\n\n---\n{t['upstream_output']}\n---"
+                ),
+            }
+        )
+
+    sources: list[dict] = []
+    if t["use_rag"]:
+        from app.core import indexer
+        from app.routers.chat import _build_rag_context
+
+        try:
+            sources = await asyncio.to_thread(
+                indexer.search_auto, t["prompt"], int(prefs.get("rag_top_k", 5))
+            )
+        except Exception:  # noqa: BLE001 - RAG failure must not fail the task
+            log.warning("task RAG retrieval failed", exc_info=True)
+            sources = []
+        if sources:
+            messages.append({"role": "system", "content": _build_rag_context(sources)})
+
+    messages.append({"role": "user", "content": t["prompt"]})
+
+    agent = t.get("mode") == "agent"
+    use_tools = agent or t.get("tools_enabled")
+    stats = {"rounds": 0, "tool_calls": 0}
+    usage: dict = {}
+
+    async def _plain() -> str:
+        chunks = [c async for c in stream_chat(info, model, messages, usage=usage)]
+        return "".join(chunks).strip()
+
+    if not use_tools:
+        answer = await _plain()
+        if not answer:
+            raise RuntimeError("模型返回空内容")
+        return {"answer": answer, "sources": sources, "model_id": model_id, **stats, "tokens_in": usage.get("input"), "tokens_out": usage.get("output")}
+
+    from app.core.mcp import mcp_manager
+
+    specs = mcp_manager.tool_specs(include_memory=bool(prefs.get("memory_enabled", True)))
+    specs = filter_tools(specs, t.get("tool_whitelist") or "")
+    if not specs:  # nothing whitelisted / no MCP servers → plain run
+        answer = await _plain()
+        if not answer:
+            raise RuntimeError("模型返回空内容")
+        return {"answer": answer, "sources": sources, "model_id": model_id, **stats, "tokens_in": usage.get("input"), "tokens_out": usage.get("output")}
+
+    async def _run_tool(name: str, args: dict) -> str:
+        result = await mcp_manager.call_tool(name, args)
+        stats["tool_calls"] += 1
+        text = str(result)
+        log_entries.append(
+            {"tool": name, "args": args, "ok": not text.startswith("[tool error]"), "result": text[:600]}
+        )
+        return result
+
+    def _on_round(n: int) -> None:
+        stats["rounds"] = n
+
+    max_rounds = (
+        max(1, min(int(t.get("max_rounds") or DEFAULT_AGENT_ROUNDS), MAX_AGENT_ROUNDS))
+        if agent
+        else MAX_TOOL_ROUNDS
+    )
+    parts: list[str] = []
+    answer = await run_agentic_chat(
+        info,
+        model,
+        messages,
+        specs,
+        _run_tool,
+        parts.append,
+        lambda name, args: log.info("task tool call: %s %s", name, args),
+        max_rounds=max_rounds,
+        on_round=_on_round,
+        usage=usage,
+    )
+    answer = (answer or "").strip() or "".join(parts).strip()
+    if not answer:
+        raise RuntimeError("模型返回空内容")
+    return {
+        "answer": answer,
+        "sources": sources,
+        "model_id": model_id,
+        **stats,
+        "tokens_in": usage.get("input"),
+        "tokens_out": usage.get("output"),
+    }
+
+
+async def _persist(
+    task_id: int,
+    t: dict,
+    answer: str,
+    sources: list[dict],
+    model_id: str,
+    trigger: str,
+    upstream_task_id: int | None,
+    tokens_in: int | None = None,
+    tokens_out: int | None = None,
+) -> int:
+    """Append the run to the task's conversation (created on first run)."""
+    if trigger == "chain" and t.get("upstream_name"):
+        label = f"任务链 · 上游「{t['upstream_name']}」"
+    else:
+        label = {"cron": "定时任务", "manual": "手动运行", "watch": "文件变化触发"}.get(trigger, trigger)
+    async with SessionLocal() as db:
+        conv = await db.get(Conversation, t["conversation_id"]) if t["conversation_id"] else None
+        if not conv:
+            conv = Conversation(
+                title=f"⏰ {t['name']}"[:255], model_id=model_id, folder="定时任务"
+            )
+            db.add(conv)
+            await db.flush()
+        conv.model_id = model_id
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        db.add(
+            Message(
+                conversation_id=conv.id,
+                role="user",
+                content=f"[{label} {stamp}] {t['prompt']}",
+            )
+        )
+        db.add(
+            Message(
+                conversation_id=conv.id,
+                role="assistant",
+                content=answer,
+                model_id=model_id,
+                sources_json=json.dumps(sources, ensure_ascii=False) if sources else None,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+            )
+        )
+        await db.commit()
+        log.info("task %s appended to conversation %s", task_id, conv.id)
+        return conv.id
+
+
+def _write_vault(name: str, answer: str, when: datetime) -> str | None:
+    """Save the answer under vault/tasks/ so the watcher indexes it for RAG."""
+    try:
+        TASK_DIR.mkdir(parents=True, exist_ok=True)
+        p = TASK_DIR / f"{_safe_name(name)}-{when:%Y-%m-%d-%H%M}.md"
+        p.write_text(
+            f"# {name}\n\n> 定时任务自动生成 · {when:%Y-%m-%d %H:%M}\n\n{answer}\n",
+            encoding="utf-8",
+        )
+        return p.relative_to(VAULT_DIR).as_posix()
+    except OSError:
+        log.warning("could not write task result to vault", exc_info=True)
+        return None
+
+
+# ---------- natural language -> cron ----------
+_PARSE_SYSTEM = (
+    "把用户的中文定时需求转成 JSON，只输出 JSON，不要解释、不要代码块。字段：\n"
+    '{"cron": "5 段标准 crontab（分 时 日 月 周，本地时区）", '
+    '"name": "不超过 12 字的任务名", "prompt": "要交给模型执行的完整指令"}\n'
+    "示例：每天早上8点总结知识库新增内容 → "
+    '{"cron": "0 8 * * *", "name": "知识库日报", "prompt": "总结我知识库里最近新增或修改的内容，按主题归纳要点。"}'
+)
+
+
+async def parse_schedule(text: str) -> dict:
+    """Ask the model to turn '每天早上8点…' into a cron + task draft."""
+    provider, model = await _resolve("")
+    info = ProviderInfo(kind=provider.kind, base_url=provider.base_url, api_key=provider.api_key)
+    chunks = [
+        c
+        async for c in stream_chat(
+            info,
+            model,
+            [
+                {"role": "system", "content": _PARSE_SYSTEM},
+                {"role": "user", "content": text},
+            ],
+        )
+    ]
+    raw = "".join(chunks).strip()
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        raise ValueError(f"模型未返回 JSON：{raw[:120]}")
+    data = json.loads(m.group(0))
+    cron = validate_cron(str(data.get("cron", "")))
+    return {
+        "cron": cron,
+        "name": str(data.get("name") or "").strip()[:100] or "新任务",
+        "prompt": str(data.get("prompt") or text).strip(),
+    }
