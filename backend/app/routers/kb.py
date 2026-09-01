@@ -65,9 +65,21 @@ async def kb_search_post(body: QueryIn):
 
 @router.get("/files")
 async def kb_files():
-    """List indexed-source candidates in the vault."""
-    files = [p.relative_to(VAULT_DIR).as_posix() for p in VAULT_DIR.rglob("*") if p.is_file() and ingest.is_supported(p)]
-    return {"vault_dir": str(VAULT_DIR), "files": sorted(files)}
+    """List indexed-source candidates in the vault (with size + mtime for the table UI)."""
+    entries: list[dict] = []
+    for p in VAULT_DIR.rglob("*"):
+        if not p.is_file() or not ingest.is_supported(p):
+            continue
+        st = p.stat()
+        entries.append(
+            {
+                "path": p.relative_to(VAULT_DIR).as_posix(),
+                "size": st.st_size,
+                "mtime": int(st.st_mtime),
+            }
+        )
+    entries.sort(key=lambda e: e["path"])
+    return {"vault_dir": str(VAULT_DIR), "files": entries}
 
 
 @router.post("/upload")

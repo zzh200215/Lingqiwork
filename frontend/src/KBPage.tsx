@@ -20,15 +20,47 @@ interface Hit {
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
 
+const fileIcon = (name: string) => {
+  const ext = (name.toLowerCase().split('.').pop() || '').trim()
+  if (ext === 'pdf') return '📕'
+  if (ext === 'md' || ext === 'markdown') return '📝'
+  if (ext === 'docx' || ext === 'doc') return '📘'
+  if (ext === 'txt') return '📄'
+  return '📎'
+}
+
+const fmtSize = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const fmtTime = (ts: number) => {
+  const d = new Date(ts * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+const scoreColor = (s: number) => (s >= 0.7 ? 'bg-emerald-500' : s >= 0.4 ? 'bg-amber-500' : 'bg-neutral-400')
+
+const hitColor = (v: number) =>
+  v >= 0.8
+    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+    : v >= 0.5
+      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+      : 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
+
 export default function KbPage() {
   const [tab, setTab] = useState<'index' | 'repos' | 'dirs' | 'eval' | 'kg'>('index')
   const [stats, setStats] = useState<KbStats | null>(null)
-  const [files, setFiles] = useState<{ vault_dir: string; files: string[] } | null>(null)
+  const [files, setFiles] = useState<{ vault_dir: string; files: { path: string; size: number; mtime: number }[] } | null>(null)
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<Hit[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  const [uploadMsg, setUploadMsg] = useState('')
+  const [overview, setOverview] = useState<{ notes: number; clippings: number; repos: number; dirs: number } | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploaded, setUploaded] = useState<{ ok: { name: string; chunks: number }[]; fail: { name: string; err: string }[] }>({ ok: [], fail: [] })
   const [dragOver, setDragOver] = useState(false)
   const [clipUrl, setClipUrl] = useState('')
   const [clipMsg, setClipMsg] = useState('')
@@ -340,12 +372,23 @@ export default function KbPage() {
   }
 
   const refresh = useCallback(async () => {
-    const [s, f] = await Promise.all([
+    const [s, f, reposR, dirsR] = await Promise.all([
       fetch('/api/kb/stats').then((r) => r.json()),
       fetch('/api/kb/files').then((r) => r.json()),
+      api.listRepos(),
+      api.listDirs(),
     ])
     setStats(s)
     setFiles(f)
+    setRepos(reposR.repos)
+    setDirs(dirsR.dirs)
+    const all = (f.files as { path: string }[]).map((x) => x.path)
+    setOverview({
+      notes: all.filter((p) => !p.startsWith('clippings/')).length,
+      clippings: all.filter((p) => p.startsWith('clippings/')).length,
+      repos: reposR.repos.length,
+      dirs: dirsR.dirs.length,
+    })
   }, [])
 
   useEffect(() => {
@@ -353,7 +396,10 @@ export default function KbPage() {
   }, [refresh])
 
   async function uploadFiles(list: FileList | File[]) {
-    setUploadMsg('')
+    setUploaded({ ok: [], fail: [] })
+    setUploading(true)
+    const ok: { name: string; chunks: number }[] = []
+    const fail: { name: string; err: string }[] = []
     for (const file of Array.from(list)) {
       const fd = new FormData()
       fd.append('file', file)
@@ -361,11 +407,13 @@ export default function KbPage() {
         const r = await fetch('/api/kb/upload', { method: 'POST', body: fd })
         const data = await r.json()
         if (!r.ok) throw new Error(data.detail || data.message || '上传失败')
-        setUploadMsg((prev) => `${prev}${prev ? '\n' : ''}✅ ${data.filename} → ${data.chunks} 块`)
+        ok.push({ name: data.filename, chunks: data.chunks })
       } catch (e) {
-        setUploadMsg((prev) => `${prev}${prev ? '\n' : ''}❌ ${file.name}: ${String(e)}`)
+        fail.push({ name: file.name, err: String(e) })
       }
+      setUploaded({ ok: [...ok], fail: [...fail] })
     }
+    setUploading(false)
     await refresh()
   }
 
@@ -419,23 +467,49 @@ export default function KbPage() {
 
   const box = 'rounded-md border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-700'
 
+  const srcTotal = overview ? overview.notes + overview.clippings + overview.repos + overview.dirs : 0
+  const reposTotalFiles = repos.reduce((s, r) => s + (r.files ?? 0), 0)
+  const reposTotalChunks = repos.reduce((s, r) => s + (r.chunks ?? 0), 0)
+  const dirsTotalFiles = dirs.reduce((s, d) => s + (d.enabled ? (d.files ?? 0) : 0), 0)
+  const dirsTotalChunks = dirs.reduce((s, d) => s + (d.enabled ? (d.chunks ?? 0) : 0), 0)
+
   return (
     <Layout page="kb">
-      <div className="mx-auto max-w-3xl px-6 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">知识库</h1>
+      <div className="mx-auto max-w-7xl px-6 py-8">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">知识库</h1>
+          <p className="mt-0.5 text-xs text-neutral-400">管理 RAG 的知识来源：文档、仓库、目录与图谱</p>
+        </div>
         <div className="flex gap-1 rounded-md bg-neutral-100 p-1 text-sm dark:bg-neutral-900">
-          {([['index', '索引与检索'], ['repos', '代码仓库'], ['dirs', '本地目录'], ['eval', '评估'], ['kg', '知识图谱']] as const).map(([key, label]) => (
+          {([
+            ['index', '📚 索引与检索', undefined as number | undefined],
+            ['repos', '📦 代码仓库', repos.length],
+            ['dirs', '📁 本地目录', dirs.length],
+            ['eval', '📊 评估', evalItems.length],
+            ['kg', '🕸️ 图谱', undefined as number | undefined],
+          ] as const).map(([key, label, count]) => (
             <button
               key={key}
               onClick={() => setTab(key)}
-              className={`rounded px-3 py-1 transition-colors ${
+              className={`flex items-center gap-1.5 rounded px-3 py-1 transition-colors ${
                 tab === key
                   ? 'bg-white font-medium shadow-sm dark:bg-neutral-800'
                   : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
               }`}
             >
               {label}
+              {count != null && count > 0 && (
+                <span
+                  className={`rounded-full px-1.5 text-[10px] leading-4 ${
+                    tab === key
+                      ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300'
+                      : 'bg-neutral-200 text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300'
+                  }`}
+                >
+                  {count}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -444,100 +518,218 @@ export default function KbPage() {
       {tab === 'index' && (
         <>
 
-      {/* Status */}
-      <section className="mb-6 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-neutral-600 dark:text-neutral-300">
-            <span className="font-medium">{stats?.files ?? '–'}</span> 个文件 ·{' '}
-            <span className="font-medium">{stats?.chunks ?? '–'}</span> 个块 · 监听:{' '}
-            <span className={stats?.watcher === 'running' ? 'text-green-600' : 'text-neutral-400'}>
-              {stats?.watcher ?? '…'}
+      {/* 概览卡 */}
+      <section className="mb-6 rounded-2xl border border-neutral-200 bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 p-5 shadow-sm dark:border-neutral-800 dark:from-violet-950/30 dark:via-neutral-900 dark:to-fuchsia-950/20">
+        <div className="flex flex-wrap items-center gap-x-10 gap-y-4">
+          <div className="flex items-end gap-8">
+            <div>
+              <p className="text-3xl font-bold text-neutral-800 dark:text-neutral-100">{stats?.files ?? '–'}</p>
+              <p className="mt-0.5 text-xs text-neutral-500">已索引文件</p>
+            </div>
+            <div>
+              <p className="text-3xl font-bold text-neutral-800 dark:text-neutral-100">{stats?.chunks ?? '–'}</p>
+              <p className="mt-0.5 text-xs text-neutral-500">向量块</p>
+            </div>
+          </div>
+          <div className="ml-auto flex items-center gap-2 rounded-full border border-neutral-200 bg-white/70 px-3 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800/60">
+            <span className={`h-2 w-2 rounded-full ${stats?.watcher === 'running' ? 'bg-emerald-500' : 'bg-neutral-400'}`} />
+            <span className="text-neutral-600 dark:text-neutral-300">
+              监听 {stats?.watcher === 'running' ? '运行中' : stats?.watcher ?? '…'}
             </span>
           </div>
-          <button
-            onClick={reindex}
-            disabled={busy}
-            className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
-          >
-            全量重建索引
-          </button>
         </div>
-        <p className="mt-2 break-all text-xs text-neutral-400">vault 目录：{files?.vault_dir}</p>
-        {files && files.files.length > 0 && (
-          <ul className="mt-2 max-h-40 overflow-y-auto text-xs text-neutral-500">
-            {files.files.map((f) => (
-              <li key={f}>· {f}</li>
-            ))}
-          </ul>
+
+        {overview && srcTotal > 0 && (
+          <div className="mt-5 border-t border-neutral-200/70 pt-4 dark:border-neutral-700/50">
+            <div className="flex items-center justify-between text-xs text-neutral-500">
+              <span className="font-medium">来源构成</span>
+              <span>共 {srcTotal} 项</span>
+            </div>
+            <div className="mt-2 flex h-2.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+              {overview.notes > 0 && <div className="bg-violet-500" style={{ width: `${(overview.notes / srcTotal) * 100}%` }} />}
+              {overview.clippings > 0 && <div className="bg-fuchsia-500" style={{ width: `${(overview.clippings / srcTotal) * 100}%` }} />}
+              {overview.repos > 0 && <div className="bg-sky-500" style={{ width: `${(overview.repos / srcTotal) * 100}%` }} />}
+              {overview.dirs > 0 && <div className="bg-emerald-500" style={{ width: `${(overview.dirs / srcTotal) * 100}%` }} />}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+              <span className="flex items-center gap-1.5 text-neutral-600 dark:text-neutral-300">
+                <span className="h-2 w-2 rounded-full bg-violet-500" />笔记 {overview.notes}
+              </span>
+              <span className="flex items-center gap-1.5 text-neutral-600 dark:text-neutral-300">
+                <span className="h-2 w-2 rounded-full bg-fuchsia-500" />剪藏 {overview.clippings}
+              </span>
+              <button
+                onClick={() => setTab('repos')}
+                className="flex items-center gap-1.5 rounded-md text-left text-neutral-600 transition-colors hover:text-sky-600 dark:text-neutral-300 dark:hover:text-sky-400"
+                title="管理代码仓库"
+              >
+                <span className="h-2 w-2 rounded-full bg-sky-500" />仓库 {overview.repos} →
+              </button>
+              <button
+                onClick={() => setTab('dirs')}
+                className="flex items-center gap-1.5 rounded-md text-left text-neutral-600 transition-colors hover:text-emerald-600 dark:text-neutral-300 dark:hover:text-emerald-400"
+                title="管理本地目录"
+              >
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />目录 {overview.dirs} →
+              </button>
+            </div>
+          </div>
         )}
-        {message && <p className="mt-2 text-xs text-neutral-500">{message}</p>}
       </section>
 
-      {/* Upload */}
+      {/* 添加知识 */}
       <section className="mb-6">
-        <div
-          onDragOver={(e) => {
-            e.preventDefault()
-            setDragOver(true)
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault()
-            setDragOver(false)
-            if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files)
-          }}
-          onClick={() => fileInputRef.current?.click()}
-          className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center text-sm transition-colors ${
-            dragOver
-              ? 'border-neutral-500 bg-neutral-100 dark:bg-neutral-900'
-              : 'border-neutral-300 text-neutral-500 hover:border-neutral-400 dark:border-neutral-700'
-          }`}
-        >
-          拖 PDF / Word / Markdown / TXT 到此处，或点击选择文件（自动分词入库）
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".md,.markdown,.txt,.pdf,.docx"
-            className="hidden"
-            onChange={(e) => e.target.files && uploadFiles(e.target.files)}
-          />
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+          <span>➕</span> 添加知识
+        </h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+              if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files)
+            }}
+            onClick={() => fileInputRef.current?.click()}
+            className={`cursor-pointer rounded-2xl border-2 border-dashed p-5 text-center transition-colors ${
+              dragOver
+                ? 'border-violet-400 bg-violet-50 dark:bg-violet-950/30'
+                : 'border-neutral-300 hover:border-violet-300 dark:border-neutral-700'
+            }`}
+          >
+            <div className="mb-2 text-2xl">📤</div>
+            <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+              {uploading ? '上传中…' : '拖拽文件到这里，或点击选择'}
+            </p>
+            <p className="mt-1 text-xs text-neutral-400">PDF · Word · Markdown · TXT，自动分词入库</p>
+            <div className="mt-3 flex flex-wrap justify-center gap-1.5 text-[11px]">
+              {['📕 PDF', '📘 Word', '📝 Markdown', '📄 TXT'].map((t) => (
+                <span
+                  key={t}
+                  className="rounded-full bg-neutral-100 px-2 py-0.5 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".md,.markdown,.txt,.pdf,.docx"
+              className="hidden"
+              onChange={(e) => e.target.files && uploadFiles(e.target.files)}
+            />
+          </div>
+
+          <div className="flex flex-col rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-xl">🌐</span>
+              <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-200">网页剪藏</h3>
+            </div>
+            <p className="mb-3 text-xs leading-relaxed text-neutral-400">
+              粘贴 URL，抓正文存为 Markdown 到 vault/clippings/ 并自动索引。
+            </p>
+            <div className="mt-auto flex gap-2">
+              <input
+                value={clipUrl}
+                onChange={(e) => setClipUrl(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && clip()}
+                placeholder="https://example.com/article"
+                className={`${box} flex-1`}
+              />
+              <button
+                onClick={clip}
+                disabled={clipping || !clipUrl.trim()}
+                className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:from-neutral-200 disabled:to-neutral-200 disabled:text-neutral-400 dark:disabled:from-neutral-800 dark:disabled:to-neutral-800"
+              >
+                {clipping ? '剪藏中…' : '剪藏'}
+              </button>
+            </div>
+            {clipMsg && <p className="mt-2 whitespace-pre-wrap text-xs text-neutral-500">{clipMsg}</p>}
+          </div>
         </div>
-        {uploadMsg && (
-          <pre className="mt-2 whitespace-pre-wrap rounded-md bg-neutral-100 p-2 text-xs text-neutral-600 dark:bg-neutral-900 dark:text-neutral-300">
-            {uploadMsg}
-          </pre>
+
+        {(uploaded.ok.length > 0 || uploaded.fail.length > 0) && (
+          <div className="mt-3 space-y-2">
+            {uploaded.ok.map((u) => (
+              <div
+                key={u.name}
+                className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm dark:border-emerald-900/50 dark:bg-emerald-950/30"
+              >
+                <span>{fileIcon(u.name)}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-emerald-800 dark:text-emerald-200">
+                  {u.name}
+                </span>
+                <span className="shrink-0 text-xs text-emerald-600 dark:text-emerald-400">{u.chunks} 块</span>
+                <span className="text-emerald-600 dark:text-emerald-400">✓</span>
+              </div>
+            ))}
+            {uploaded.fail.map((f) => (
+              <div
+                key={f.name}
+                className="flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm dark:border-rose-900/50 dark:bg-rose-950/30"
+              >
+                <span>❌</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-rose-800 dark:text-rose-200">{f.name}</span>
+                <span className="shrink-0 max-w-[40%] truncate text-xs text-rose-500">{f.err}</span>
+              </div>
+            ))}
+          </div>
         )}
       </section>
 
-      {/* Web clipper */}
-      <section className="mb-6 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-        <h2 className="mb-3 font-medium">🌐 网页剪藏</h2>
-        <p className="-mt-1 mb-2 text-xs leading-relaxed text-neutral-400">
-          粘贴 URL，抓取正文存为 Markdown 到 vault/clippings/ 并自动索引。
-        </p>
-        <div className="flex gap-2">
-          <input
-            value={clipUrl}
-            onChange={(e) => setClipUrl(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && clip()}
-            placeholder="https://example.com/article"
-            className={`${box} flex-1`}
-          />
-          <button
-            onClick={clip}
-            disabled={clipping || !clipUrl.trim()}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:from-neutral-200 disabled:to-neutral-200 disabled:text-neutral-400 dark:disabled:from-neutral-800 dark:disabled:to-neutral-800"
-          >
-            {clipping ? '剪藏中…' : '剪藏'}
-          </button>
+      {/* 文档库 */}
+      <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+            <span>📚</span> 文档库
+            <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
+              {files?.files.length ?? 0}
+            </span>
+          </h2>
+          <span className="max-w-[55%] truncate text-xs text-neutral-400">vault 目录：{files?.vault_dir}</span>
         </div>
-        {clipMsg && <p className="mt-2 whitespace-pre-wrap text-xs text-neutral-500">{clipMsg}</p>}
+        {files && files.files.length > 0 ? (
+          <div className="overflow-hidden rounded-lg border border-neutral-100 dark:border-neutral-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-neutral-50 text-xs text-neutral-400 dark:bg-neutral-900/60">
+                <tr>
+                  <th className="px-3 py-2 font-normal">文件</th>
+                  <th className="px-3 py-2 font-normal">大小</th>
+                  <th className="px-3 py-2 font-normal">修改时间</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                {files.files.map((f) => (
+                  <tr key={f.path} className="transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/40">
+                    <td className="px-3 py-2">
+                      <span className="flex items-center gap-2">
+                        <span>{fileIcon(f.path)}</span>
+                        <span className="min-w-0 truncate font-mono text-xs text-neutral-700 dark:text-neutral-200">{f.path}</span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">{fmtSize(f.size)}</td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">{fmtTime(f.mtime)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-400">vault 里还没有可索引的文件，上传或放进文档即可自动入库。</p>
+        )}
       </section>
 
-      {/* Search debug */}
-      <section className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-        <h2 className="mb-3 font-medium">检索调试</h2>
+      {/* 检索测试 */}
+      <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+          <span>🔍</span> 检索测试
+        </h2>
         <div className="flex gap-2">
           <input
             value={query}
@@ -558,12 +750,14 @@ export default function KbPage() {
           <div className="mt-4 flex flex-col gap-3">
             {!hits.length && <p className="text-sm text-neutral-400">无命中（索引为空或无相关内容）</p>}
             {hits.map((h) => (
-              <div key={h.id} className="rounded-md bg-neutral-100 p-3 text-sm dark:bg-neutral-900">
-                <div className="mb-1 flex items-center justify-between text-xs text-neutral-500">
-                  <span>
-                    {h.source} · chunk {h.chunk}
+              <div key={h.id} className="rounded-lg border border-neutral-200 bg-white p-3 text-sm dark:border-neutral-800 dark:bg-neutral-900/60">
+                <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-neutral-500">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span>{fileIcon(h.source || '')}</span>
+                    <span className="truncate font-mono text-neutral-600 dark:text-neutral-300">{h.source || '—'}</span>
+                    {h.chunk != null && <span className="shrink-0 text-neutral-400">· chunk {h.chunk}</span>}
                     {h.channels && (
-                      <span className="ml-2 inline-flex gap-1">
+                      <span className="ml-1 inline-flex shrink-0 gap-1">
                         {h.channels.includes('vec') && (
                           <span className="rounded bg-violet-100 px-1 py-px text-[10px] text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
                             向量
@@ -583,7 +777,12 @@ export default function KbPage() {
                     )}
                   </span>
                   <span className="flex shrink-0 items-center gap-2">
-                    <span>score {h.score}</span>
+                    <span className="flex items-center gap-1.5" title={`相关性 ${h.score.toFixed(3)}`}>
+                      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+                        <span className={`block h-full rounded-full ${scoreColor(h.score)}`} style={{ width: pct(h.score) }} />
+                      </span>
+                      <span className="font-mono">{pct(h.score)}</span>
+                    </span>
                     {h.source?.endsWith('.md') && (
                       <a
                         href={`/notes.html?path=${encodeURIComponent(h.source)}`}
@@ -594,23 +793,63 @@ export default function KbPage() {
                     )}
                   </span>
                 </div>
-                <p className="whitespace-pre-wrap leading-relaxed">{h.text}</p>
+                <p className="whitespace-pre-wrap leading-relaxed text-neutral-700 dark:text-neutral-200">{h.text}</p>
               </div>
             ))}
           </div>
         )}
       </section>
 
-      <p className="mt-6 text-xs leading-relaxed text-neutral-400">
-        把 .md / .txt / .pdf / .docx 放进 vault 目录即可自动索引；「全量重建」手动触发一遍。对话页打开「知识库(RAG)」开关即可在聊天中引用。
-      </p>
+      {/* 维护 */}
+      <section className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+            <span>🛠️</span> 维护
+          </h2>
+          <button
+            onClick={reindex}
+            disabled={busy}
+            className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+          >
+            全量重建索引
+          </button>
+        </div>
+        {message && <p className="mt-2 text-xs text-neutral-500">{message}</p>}
+        <p className="mt-3 text-xs leading-relaxed text-neutral-400">
+          把 .md / .txt / .pdf / .docx 放进 vault 目录即可自动索引；「全量重建」手动触发一遍。对话页打开「知识库(RAG)」开关即可在聊天中引用。
+        </p>
+      </section>
         </>
       )}
 
       {tab === 'repos' && (
         <>
-          <section className="mb-6 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-            <h2 className="mb-2 text-sm font-medium">添加仓库</h2>
+          <section className="mb-6 rounded-2xl border border-neutral-200 bg-gradient-to-br from-sky-50 via-white to-white p-5 shadow-sm dark:border-neutral-800 dark:from-sky-950/20 dark:via-neutral-900 dark:to-neutral-900">
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+              <div className="flex items-end gap-6">
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{repos.length}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">已索引仓库</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{reposTotalFiles}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">文件</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{reposTotalChunks}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">块</p>
+                </div>
+              </div>
+              <span className="ml-auto text-xs text-neutral-400">
+                来源标记 <code className="text-neutral-500">repos/名字/路径</code>
+              </span>
+            </div>
+          </section>
+
+          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+            <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+              <span>📦</span> 添加代码仓库
+            </h2>
             <div className="flex flex-wrap gap-2">
               <input
                 value={repoUrl}
@@ -641,7 +880,12 @@ export default function KbPage() {
           </section>
 
           <section className="mb-6">
-            <h2 className="mb-2 text-sm font-medium">已索引仓库（{repos.length}）</h2>
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+              <span>📦</span> 已索引仓库
+              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
+                {repos.length}
+              </span>
+            </h2>
             {repos.length === 0 ? (
               <p className="text-xs text-neutral-400">还没有仓库。索引后代码和文档都能在对话里被 RAG 检索到。</p>
             ) : (
@@ -649,46 +893,54 @@ export default function KbPage() {
                 {repos.map((r) => (
                   <li
                     key={r.name}
-                    className="rounded-lg border border-neutral-200 p-3 text-sm dark:border-neutral-800"
+                    className="flex items-center gap-4 rounded-xl border border-neutral-200 p-4 text-sm transition-colors hover:border-violet-300 dark:border-neutral-800 dark:hover:border-violet-500/40"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{r.name}</span>
-                          {!r.cloned && (
-                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
-                              目录缺失
-                            </span>
-                          )}
-                          {r.truncated && (
-                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
-                              已截断
-                            </span>
-                          )}
-                        </div>
-                        <div className="truncate text-xs text-neutral-400">{r.url}</div>
-                        <div className="mt-1 text-xs text-neutral-500">
-                          {r.files ?? '–'} 个文件 · {r.chunks ?? '–'} 个块
-                          {r.last_synced ? ` · 上次同步 ${r.last_synced.replace('T', ' ')}` : ''}
-                        </div>
-                        {r.errors && r.errors.length > 0 && (
-                          <div className="mt-1 text-xs text-red-500">
-                            {r.errors.length} 个文件失败：{r.errors[0]}
-                          </div>
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-lg dark:bg-violet-900/40">
+                      📦
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-neutral-800 dark:text-neutral-100">{r.name}</span>
+                        {!r.cloned && (
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                            目录缺失
+                          </span>
+                        )}
+                        {r.truncated && (
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                            已截断
+                          </span>
                         )}
                       </div>
-                      <div className="flex shrink-0 gap-1">
+                      <div className="mt-0.5 truncate font-mono text-xs text-neutral-400">{r.url}</div>
+                      <div className="mt-0.5 text-[11px] text-neutral-400">
+                        {r.last_synced ? `上次同步 ${r.last_synced.replace('T', ' ')}` : '尚未同步'}
+                      </div>
+                      {r.errors && r.errors.length > 0 && (
+                        <div className="mt-0.5 text-xs text-red-500">{r.errors.length} 个文件失败：{r.errors[0]}</div>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-5">
+                      <div className="text-right">
+                        <p className="text-lg font-semibold leading-none text-neutral-800 dark:text-neutral-100">{r.files ?? '–'}</p>
+                        <p className="mt-1 text-[11px] text-neutral-400">文件</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-semibold leading-none text-neutral-800 dark:text-neutral-100">{r.chunks ?? '–'}</p>
+                        <p className="mt-1 text-[11px] text-neutral-400">块</p>
+                      </div>
+                      <div className="flex gap-1.5">
                         <button
                           onClick={() => syncRepo(r.name)}
                           disabled={!!repoBusy}
-                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-40 dark:border-neutral-700"
+                          className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs disabled:opacity-40 dark:border-neutral-700"
                         >
                           {repoBusy === r.name ? '…' : '同步'}
                         </button>
                         <button
                           onClick={() => removeRepo(r.name)}
                           disabled={!!repoBusy}
-                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs text-red-600 disabled:opacity-40 dark:border-neutral-700"
+                          className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs text-red-600 disabled:opacity-40 dark:border-neutral-700"
                         >
                           删除
                         </button>
@@ -708,8 +960,35 @@ export default function KbPage() {
 
       {tab === 'dirs' && (
         <>
-          <section className="mb-6 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-            <h2 className="mb-2 text-sm font-medium">添加本地目录</h2>
+          <section className="mb-6 rounded-2xl border border-neutral-200 bg-gradient-to-br from-emerald-50 via-white to-white p-5 shadow-sm dark:border-neutral-800 dark:from-emerald-950/20 dark:via-neutral-900 dark:to-neutral-900">
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+              <div className="flex items-end gap-6">
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{dirs.length}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">已索引目录</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{dirsTotalFiles}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">文件</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{dirsTotalChunks}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">块</p>
+                </div>
+              </div>
+              <span className="ml-auto flex items-center gap-2 text-xs text-neutral-400">
+                实时监听：
+                <span className={dirWatcher === 'running' ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-400'}>
+                  {dirWatcher || '…'}
+                </span>
+              </span>
+            </div>
+          </section>
+
+          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+            <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+              <span>📁</span> 添加本地目录
+            </h2>
             <div className="flex flex-wrap gap-2">
               <input
                 value={dirName}
@@ -740,14 +1019,13 @@ export default function KbPage() {
           </section>
 
           <section className="mb-6">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-medium">已索引目录（{dirs.length}）</h2>
-              <span className="text-xs text-neutral-400">
-                实时监听：{' '}
-                <span className={dirWatcher === 'running' ? 'text-green-600' : 'text-neutral-400'}>
-                  {dirWatcher || '…'}
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+                <span>📁</span> 已索引目录
+                <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
+                  {dirs.length}
                 </span>
-              </span>
+              </h2>
             </div>
             {dirs.length === 0 ? (
               <p className="text-xs text-neutral-400">
@@ -758,54 +1036,70 @@ export default function KbPage() {
                 {dirs.map((d) => (
                   <li
                     key={d.name}
-                    className="rounded-lg border border-neutral-200 p-3 text-sm dark:border-neutral-800"
+                    className="flex items-center gap-4 rounded-xl border border-neutral-200 p-4 text-sm transition-colors hover:border-violet-300 dark:border-neutral-800 dark:hover:border-violet-500/40"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium">📁 {d.name}</span>
-                          {!d.enabled && <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">已停用</span>}
-                          {!d.exists && (
-                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
-                              目录缺失
-                            </span>
-                          )}
-                          {d.truncated && (
-                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
-                              已截断
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-0.5 truncate font-mono text-xs text-neutral-400">{d.path}</div>
-                        <div className="mt-1 text-xs text-neutral-500">
-                          {d.enabled ? `${d.files ?? '–'} 个文件 · ${d.chunks ?? '–'} 个块` : '未索引'}
-                          {d.last_synced ? ` · 上次同步 ${d.last_synced.replace('T', ' ')}` : ''}
-                        </div>
-                        {d.errors && d.errors.length > 0 && (
-                          <div className="mt-1 text-xs text-red-500">
-                            {d.errors.length} 个文件失败：{d.errors[0]}
-                          </div>
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-lg dark:bg-emerald-900/40">
+                      📁
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-neutral-800 dark:text-neutral-100">{d.name}</span>
+                        {!d.enabled && (
+                          <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
+                            已停用
+                          </span>
+                        )}
+                        {!d.exists && (
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                            目录缺失
+                          </span>
+                        )}
+                        {d.truncated && (
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                            已截断
+                          </span>
                         )}
                       </div>
-                      <div className="flex shrink-0 gap-1">
+                      <div className="mt-0.5 truncate font-mono text-xs text-neutral-400">{d.path}</div>
+                      <div className="mt-0.5 text-[11px] text-neutral-400">
+                        {d.last_synced ? `上次同步 ${d.last_synced.replace('T', ' ')}` : '尚未同步'}
+                      </div>
+                      {d.errors && d.errors.length > 0 && (
+                        <div className="mt-0.5 text-xs text-red-500">{d.errors.length} 个文件失败：{d.errors[0]}</div>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-5">
+                      <div className="text-right">
+                        <p className="text-lg font-semibold leading-none text-neutral-800 dark:text-neutral-100">
+                          {d.enabled ? (d.files ?? '–') : '—'}
+                        </p>
+                        <p className="mt-1 text-[11px] text-neutral-400">文件</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-semibold leading-none text-neutral-800 dark:text-neutral-100">
+                          {d.enabled ? (d.chunks ?? '–') : '—'}
+                        </p>
+                        <p className="mt-1 text-[11px] text-neutral-400">块</p>
+                      </div>
+                      <div className="flex gap-1.5">
                         <button
                           onClick={() => syncDir(d.name)}
                           disabled={!!dirBusy || !d.enabled}
-                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-40 dark:border-neutral-700"
+                          className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs disabled:opacity-40 dark:border-neutral-700"
                         >
                           {dirBusy === d.name ? '…' : '同步'}
                         </button>
                         <button
                           onClick={() => toggleDir(d)}
                           disabled={!!dirBusy}
-                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs disabled:opacity-40 dark:border-neutral-700"
+                          className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs disabled:opacity-40 dark:border-neutral-700"
                         >
                           {d.enabled ? '停用' : '启用'}
                         </button>
                         <button
                           onClick={() => removeDir(d.name)}
                           disabled={!!dirBusy}
-                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs text-red-600 disabled:opacity-40 dark:border-neutral-700"
+                          className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs text-red-600 disabled:opacity-40 dark:border-neutral-700"
                         >
                           移除
                         </button>
@@ -825,9 +1119,36 @@ export default function KbPage() {
 
       {tab === 'eval' && (
         <>
+          <section className="mb-6 rounded-2xl border border-neutral-200 bg-gradient-to-br from-violet-50 via-white to-white p-5 shadow-sm dark:border-neutral-800 dark:from-violet-950/20 dark:via-neutral-900 dark:to-neutral-900">
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+              <div className="flex items-end gap-6">
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{evalItems.length}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">评估集题目</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{runs.length}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">评估次数</p>
+                </div>
+                {runs.length > 0 && (
+                  <div>
+                    <p className={`text-2xl font-bold ${hitColor(runs[0].hit1)}`}>{pct(runs[0].hit1)}</p>
+                    <p className="mt-0.5 text-xs text-neutral-500">最近 Hit@1</p>
+                  </div>
+                )}
+              </div>
+              <span className="ml-auto text-xs text-neutral-400">改了 top_k / rerank 后重跑即可对比效果</span>
+            </div>
+          </section>
+
           {/* Eval set */}
-          <section className="mb-6 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-            <h2 className="mb-1 font-medium">评估集 · {evalItems.length} 题</h2>
+          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+            <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+              <span>📊</span> 评估集
+              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
+                {evalItems.length} 题
+              </span>
+            </h2>
             <p className="mb-3 text-xs leading-relaxed text-neutral-400">
               每题写一个问题 + 期望检索到的文件，跑一次就能量化 Hit@k / MRR；开启判分再让模型给回答忠实度打 0-5 分。改了 rerank / top_k 后重跑即可对比。
             </p>
@@ -887,7 +1208,7 @@ export default function KbPage() {
               </div>
               <datalist id="vault-files">
                 {(files?.files ?? []).map((f) => (
-                  <option key={f} value={f} />
+                  <option key={f.path} value={f.path} />
                 ))}
               </datalist>
               <div className="flex gap-2">
@@ -914,7 +1235,10 @@ export default function KbPage() {
           </section>
 
           {/* Run */}
-          <section className="mb-6 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+              <span>▶️</span> 运行评估
+            </h2>
             <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={runEvalNow}
@@ -941,8 +1265,13 @@ export default function KbPage() {
           </section>
 
           {/* History */}
-          <section className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-            <h2 className="mb-3 font-medium">分数趋势 · 最近 {runs.length} 次</h2>
+          <section className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+              <span>📈</span> 分数趋势
+              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
+                最近 {runs.length} 次
+              </span>
+            </h2>
             {!runs.length && <p className="text-sm text-neutral-400">还没有评估记录，先添加问题再运行评估。</p>}
             {runs.length > 0 && (
               <div className="overflow-x-auto">
@@ -970,9 +1299,15 @@ export default function KbPage() {
                           {r.hybrid ? ' · 混合' : ' · 纯向量'}
                           {r.rerank ? ' · 精排' : ''}
                         </td>
-                        <td className="py-1.5 pr-3">{pct(r.hit1)}</td>
-                        <td className="py-1.5 pr-3">{pct(r.hit3)}</td>
-                        <td className="py-1.5 pr-3">{pct(r.hitk)}</td>
+                        <td className="py-1.5 pr-3">
+                          <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${hitColor(r.hit1)}`}>{pct(r.hit1)}</span>
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${hitColor(r.hit3)}`}>{pct(r.hit3)}</span>
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${hitColor(r.hitk)}`}>{pct(r.hitk)}</span>
+                        </td>
                         <td className="py-1.5 pr-3">{r.mrr.toFixed(3)}</td>
                         <td className="py-1.5 pr-3">{r.faithfulness === null ? '—' : `${r.faithfulness}/5`}</td>
                         <td className="py-1.5 text-right text-xs">
@@ -1035,17 +1370,42 @@ export default function KbPage() {
       )}
       {tab === 'kg' && (
         <>
-          <section className="mb-6 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-            <div className="mb-1 flex items-center justify-between">
-              <h2 className="font-medium">知识图谱（本地 Neo4j）</h2>
+          <section className="mb-6 rounded-2xl border border-neutral-200 bg-gradient-to-br from-fuchsia-50 via-white to-white p-5 shadow-sm dark:border-neutral-800 dark:from-fuchsia-950/20 dark:via-neutral-900 dark:to-neutral-900">
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+              <div className="flex items-end gap-6">
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{kg?.entities ?? 0}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">实体</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{kg?.relations ?? 0}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">关系</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">{kg?.files ?? 0}</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">文件</p>
+                </div>
+              </div>
               {kg && (
-                <span className={`text-xs ${kg.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-400'}`}>
-                  {kg.ok
-                    ? `已连接 · 实体 ${kg.entities ?? 0} / 关系 ${kg.relations ?? 0} / 文件 ${kg.files ?? 0}`
-                    : '未连接'}
+                <span
+                  className={`ml-auto flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs ${
+                    kg.ok
+                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+                      : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
+                  }`}
+                >
+                  <span className={`h-2 w-2 rounded-full ${kg.ok ? 'bg-emerald-500' : 'bg-neutral-400'}`} />
+                  {kg.ok ? '已连接' : '未连接'}
                 </span>
               )}
             </div>
+          </section>
+
+          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+            <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+              <span>🕸️</span> 知识图谱配置
+              <span className="text-xs font-normal text-neutral-400">本地 Neo4j</span>
+            </h2>
             <p className="-mt-1 mb-3 text-xs leading-relaxed text-neutral-400">
               用模型从笔记中抽取实体与关系，存入你本机的 Neo4j（实体标签 KgEntity，不影响库里已有数据）。开启后聊天里勾选知识库检索时会叠加「向量匹配实体 → 一跳扩展」的图谱上下文。构建按文件增量抽取，文件多时可多次点击。
             </p>
@@ -1110,8 +1470,10 @@ export default function KbPage() {
               {kgMsg && <span className="text-xs text-neutral-400">{kgMsg}</span>}
             </div>
           </section>
-          <section className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-            <h2 className="mb-3 font-medium">检索测试</h2>
+          <section className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+              <span>🔍</span> 图谱检索测试
+            </h2>
             <div className="flex gap-2">
               <input
                 value={kgQ}

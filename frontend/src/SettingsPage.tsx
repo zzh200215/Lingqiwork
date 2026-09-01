@@ -43,6 +43,18 @@ const EMPTY_TASK = {
   chain_next_id: null as number | null,
 }
 
+const SETTING_SECTIONS = [
+  { key: 'general', icon: '⚙️', label: '通用' },
+  { key: 'models', icon: '🧠', label: '模型' },
+  { key: 'agents', icon: '🤖', label: '智能体' },
+  { key: 'automation', icon: '⏰', label: '自动化' },
+  { key: 'content', icon: '🎨', label: '内容生成' },
+  { key: 'data', icon: '💾', label: '数据' },
+  { key: 'mcp', icon: '🔌', label: 'MCP' },
+] as const
+
+type SectionKey = (typeof SETTING_SECTIONS)[number]['key']
+
 export default function SettingsPage() {
   const [providers, setProviders] = useState<ProviderConfig[]>([])
   const [draft, setDraft] = useState({ ...EMPTY })
@@ -825,20 +837,46 @@ export default function SettingsPage() {
   const mcpServers = mcpView?.servers ?? []
   const activeToolCount = mcpView?.active_tools.length ?? 0
 
+  const [section, setSection] = useState<SectionKey>('general')
+
   const inputCls =
     'w-full rounded-md border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-700'
 
   return (
     <Layout page="settings">
-      <div className="mx-auto max-w-3xl px-6 py-8">
+      <div className="mx-auto max-w-6xl px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold">设置</h1>
       </div>
 
+      <div className="flex gap-6">
+        <aside className="w-44 shrink-0">
+          <nav className="sticky top-6 flex flex-col gap-1">
+            {SETTING_SECTIONS.map((s) => (
+              <button
+                key={s.key}
+                onClick={() => setSection(s.key)}
+                className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                  section === s.key
+                    ? 'bg-violet-100 font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
+                    : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
+                }`}
+              >
+                <span className="text-base leading-none">{s.icon}</span>
+                {s.label}
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        <main className="min-w-0 flex-1">
       {/* General preferences */}
-      {prefs && (
-        <section className="mb-8 rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-4 font-medium">通用</h2>
+      {section === 'general' && !prefs && (
+        <p className="py-8 text-sm text-neutral-400">加载中…</p>
+      )}
+      {section === 'general' && prefs && (
+        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="mb-4 flex items-center gap-2 font-semibold"><span>⚙️</span> 通用</h2>
           <div className="flex flex-col gap-4">
             <label className="flex flex-col gap-1 text-sm">
               系统提示词（每次对话都会作为 system 消息注入）
@@ -1098,9 +1136,9 @@ export default function SettingsPage() {
       )}
 
       {/* Artifacts light execution */}
-      {prefs && (
-        <section className="mb-8 rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 font-medium">轻执行 Artifacts</h2>
+      {section === 'content' && prefs && (
+        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>⚡</span> 轻执行 Artifacts</h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-500">
             默认关闭。开启后聊天里的 Python / JavaScript 代码块出现「▶ 运行」按钮，HTML 代码块出现沙箱预览。
             代码在你本机以独立临时目录直接执行（Python 用工作台自带的运行环境），有超时与输出上限，但没有真正的沙箱隔离 —— 请只运行你理解用途的代码。
@@ -1130,9 +1168,9 @@ export default function SettingsPage() {
       )}
 
       {/* Image generation */}
-      {prefs && (
-        <section className="mb-8 rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 font-medium">图片生成</h2>
+      {section === 'content' && prefs && (
+        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>🖼️</span> 图片生成</h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-500">
             开启后模型可调用 image_gen 工具作图，Notes 页也能用「🖼️ 配图」插入。生成的图片会下载到
             data/images/ 并以 /api/images/&lt;name&gt; 提供（DashScope 返回的原始链接带签名会过期）。
@@ -1263,9 +1301,9 @@ export default function SettingsPage() {
       )}
 
       {/* Backup & restore */}
-      {prefs && (
-        <section className="mb-8 rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 font-medium">备份与恢复</h2>
+      {section === 'data' && prefs && (
+        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>💾</span> 备份与恢复</h2>
           <p className="mb-4 text-xs text-neutral-500">
             打包 vault/（全部笔记）+ data/workbench.db（会话/记忆/配置库，一致性快照）+ data/config.json 为 zip。
             向量索引不入包，可由 vault 重建。
@@ -1354,9 +1392,9 @@ export default function SettingsPage() {
       )}
 
       {/* RSS subscriptions */}
-      {prefs && (
-        <section className="mb-8 rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 font-medium">RSS 订阅</h2>
+      {section === 'automation' && prefs && (
+        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>📡</span> RSS 订阅</h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-400">
             抓到的新条目按月追加到 vault/feeds/，自动进 RAG 索引——再配一个定时任务（如「总结 feeds
             目录里今天的新内容」）就是每日情报简报。同一条目只写一次。
@@ -1378,7 +1416,7 @@ export default function SettingsPage() {
             />
             <button
               onClick={savePrefs}
-              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
+              className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
             >
               {prefsSaved ? '已保存' : '保存设置'}
             </button>
@@ -1403,7 +1441,7 @@ export default function SettingsPage() {
             <button
               onClick={addFeed}
               disabled={!!feedBusy || !feedUrl.trim()}
-              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+              className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
             >
               {feedBusy === 'add' ? '抓取中…' : '添加订阅'}
             </button>
@@ -1470,9 +1508,9 @@ export default function SettingsPage() {
       )}
 
       {/* E-mail push */}
-      {prefs && (
-        <section className="mb-8 rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 font-medium">邮件推送</h2>
+      {section === 'automation' && prefs && (
+        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>📧</span> 邮件推送</h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-400">
             用你自己的 SMTP 发件（密码存在本机 data/config.json，接口读取时会打码）。端口 465 走隐式 TLS，587 走
             STARTTLS。
@@ -1559,7 +1597,7 @@ export default function SettingsPage() {
           <div className="mt-3 flex items-center gap-3">
             <button
               onClick={savePrefs}
-              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
+              className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
             >
               {prefsSaved ? '已保存' : '保存设置'}
             </button>
@@ -1576,8 +1614,9 @@ export default function SettingsPage() {
       )}
 
       {/* Scheduled tasks */}
-      <section className="mb-10 flex flex-col gap-3">
-        <h2 className="font-medium">定时任务</h2>
+      {section === 'automation' && (
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>⏰</span> 定时任务</h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           三种玩法：① 简单执行——到点跑一条指令（可带知识库与工具）；② 自主智能体——给目标让它多轮调用工具干到完成，全程留执行日志；
           ③ 任务链——上游任务的产出自动交给下游继续处理（经 vault/tasks/handoff/ 交接，可人工干预）。触发支持 cron 或 vault
@@ -1721,7 +1760,7 @@ export default function SettingsPage() {
           </div>
         ))}
         {!tasks.length && <p className="text-sm text-neutral-400">还没有定时任务</p>}
-        <div className="rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
+        <div className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
           <h3 className="mb-3 text-sm font-medium">
             {taskEditId != null ? `编辑「${taskDraft.name}」` : '新增定时任务'}
           </h3>
@@ -1965,7 +2004,7 @@ export default function SettingsPage() {
             )}
             <button
               onClick={saveTask}
-              className="rounded-md bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
+              className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
             >
               {taskEditId != null ? '保存修改' : '添加'}
             </button>
@@ -1973,10 +2012,12 @@ export default function SettingsPage() {
         </div>
         {taskMsg && <div className="text-xs text-neutral-600 dark:text-neutral-300">{taskMsg}</div>}
       </section>
+      )}
 
       {/* Existing providers */}
-      <section className="mb-10 flex flex-col gap-3">
-        <h2 className="font-medium">模型 Provider</h2>
+      {section === 'models' && (
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>🧠</span> 模型 Provider</h2>
         {providers.map((p) => (
           <div
             key={p.id}
@@ -2006,11 +2047,14 @@ export default function SettingsPage() {
         ))}
         {!providers.length && <p className="text-sm text-neutral-400">尚未配置任何 provider</p>}
       </section>
+      )}
 
       {/* Persistent memory */}
-      <section className="mb-10 flex flex-col gap-3">
+      {section === 'agents' && (
+      <>
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
         <div className="flex items-center justify-between">
-          <h2 className="font-medium">长期记忆</h2>
+          <h2 className="flex items-center gap-2 font-semibold"><span>💭</span> 长期记忆</h2>
           {memories.length > 0 && (
             <button onClick={clearAllMemories} className="text-xs text-red-400 hover:text-red-600">
               清空全部
@@ -2094,7 +2138,7 @@ export default function SettingsPage() {
           <button
             onClick={addMemory}
             disabled={!memInput.trim()}
-            className="rounded-md bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
           >
             添加
           </button>
@@ -2169,8 +2213,8 @@ export default function SettingsPage() {
       </section>
 
       {/* Agent presets */}
-      <section className="mb-10 flex flex-col gap-3">
-        <h2 className="font-medium">智能体预设</h2>
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>🤖</span> 智能体预设</h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           把人设提示词、模型、RAG/工具开关打包成命名预设，对话页顶部一键切换。
         </p>
@@ -2204,7 +2248,7 @@ export default function SettingsPage() {
         ))}
         {!agents.length && <p className="text-sm text-neutral-400">还没有智能体预设</p>}
 
-        <div className="rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
+        <div className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
           <h3 className="mb-3 text-sm font-medium">
             {agentEditId != null ? `编辑「${agentDraft.name}」` : '新增智能体'}
           </h3>
@@ -2296,7 +2340,7 @@ export default function SettingsPage() {
             )}
             <button
               onClick={saveAgent}
-              className="rounded-md bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
+              className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
             >
               {agentEditId != null ? '保存修改' : '添加'}
             </button>
@@ -2305,8 +2349,8 @@ export default function SettingsPage() {
       </section>
 
       {/* Prompt library */}
-      <section className="mb-10 flex flex-col gap-3">
-        <h2 className="font-medium">提示词库</h2>
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>📝</span> 提示词库</h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           常用提示词存成模板，对话页输入框敲 <code className="text-neutral-500">/</code> 即可唤起。
           内容支持 <code className="text-neutral-500">{'{变量}'}</code> 占位符，使用时会逐个询问填入。
@@ -2338,7 +2382,7 @@ export default function SettingsPage() {
         ))}
         {!prompts.length && <p className="text-sm text-neutral-400">还没有提示词模板</p>}
 
-        <div className="rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
+        <div className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
           <h3 className="mb-3 text-sm font-medium">
             {promptEditId != null ? `编辑「${promptDraft.title}」` : '新增提示词'}
           </h3>
@@ -2375,7 +2419,7 @@ export default function SettingsPage() {
             )}
             <button
               onClick={savePrompt}
-              className="rounded-md bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
+              className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
             >
               {promptEditId != null ? '保存修改' : '添加'}
             </button>
@@ -2384,8 +2428,8 @@ export default function SettingsPage() {
       </section>
 
       {/* Agent Skills */}
-      <section className="mb-10 flex flex-col gap-3">
-        <h2 className="font-medium">技能 Skills</h2>
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>🧩</span> 技能 Skills</h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           SKILL.md 指令包：frontmatter 写 name/description（何时使用），正文是完整指导。对话时注入技能清单，模型判断相关就自动加载全文执行。
           技能存于 skills/ 目录，也可直接手动放文件夹进去。
@@ -2431,17 +2475,20 @@ export default function SettingsPage() {
           <button
             onClick={installSkill}
             disabled={skillBusy || !skillUrl.trim()}
-            className="shrink-0 rounded-md bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+            className="shrink-0 rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
           >
             {skillBusy ? '安装中…' : '从 URL 安装'}
           </button>
         </div>
         {skillMsg && <div className="text-xs text-neutral-600 dark:text-neutral-300">{skillMsg}</div>}
       </section>
+      </>
+      )}
 
       {/* Provider editor */}
-      <section className="mb-10 rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="mb-4 font-medium">{editingId ? `编辑 ${draft.name}` : '新增 Provider'}</h2>
+      {section === 'models' && (
+      <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="mb-4 flex items-center gap-2 font-semibold"><span>🧠</span> {editingId ? `编辑 ${draft.name}` : '新增 Provider'}</h2>
         <div className="grid grid-cols-2 gap-4">
           <label className="flex flex-col gap-1 text-sm">
             名称（用于 model_id 前缀）
@@ -2491,18 +2538,21 @@ export default function SettingsPage() {
                 取消
               </button>
             )}
-            <button onClick={save} className="rounded-md bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900">
+            <button onClick={save} className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110">
               {editingId ? '保存修改' : '添加'}
             </button>
           </div>
         </div>
         {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
       </section>
+      )}
 
       {/* MCP tools */}
-      <section className="mb-10 flex flex-col gap-3">
+      {section === 'mcp' && (
+      <>
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
         <div className="flex items-center justify-between">
-          <h2 className="font-medium">MCP 工具服务器</h2>
+          <h2 className="flex items-center gap-2 font-semibold"><span>🔌</span> MCP 工具服务器</h2>
           <span className="text-xs text-neutral-400">{activeToolCount} 个可用工具</span>
         </div>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
@@ -2573,8 +2623,8 @@ export default function SettingsPage() {
       </section>
 
       {/* MCP editor */}
-      <section className="rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="mb-4 font-medium">{mcpEditIdx != null ? `编辑 ${mcpDraft.name}` : '新增 MCP Server'}</h2>
+      <section className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="mb-4 flex items-center gap-2 font-semibold"><span>🔌</span> {mcpEditIdx != null ? `编辑 ${mcpDraft.name}` : '新增 MCP Server'}</h2>
         <div className="grid grid-cols-2 gap-4">
           <label className="flex flex-col gap-1 text-sm">
             名称
@@ -2638,7 +2688,7 @@ export default function SettingsPage() {
                 取消
               </button>
             )}
-            <button onClick={applyMcpDraft} className="rounded-md bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900">
+            <button onClick={applyMcpDraft} className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110">
               {mcpEditIdx != null ? '保存修改' : '添加'}
             </button>
           </div>
@@ -2650,6 +2700,11 @@ export default function SettingsPage() {
         提示：模型在对话页显示为 provider名/模型名。OpenAI 兼容协议可接 DeepSeek、Qwen、Moonshot、Ollama、OpenRouter 等，填对应 base_url 即可。
         MCP server 支持 stdio 与 SSE，可在对话中让模型调用外部工具。
       </p>
+      </>
+      )}
+
+        </main>
+      </div>
       </div>
     </Layout>
   )
