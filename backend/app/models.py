@@ -1,4 +1,4 @@
-"""ORM models: conversations, messages, providers, memories, agents, tasks, evals."""
+"""ORM models: conversations, messages, providers, memories, agents, tasks, evals, cards."""
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
@@ -224,3 +224,72 @@ class PetEvent(Base):
     kind: Mapped[str] = mapped_column(String(20), default="say")
     text: Mapped[str] = mapped_column(Text)  # what 零柒 says
     detail: Mapped[str] = mapped_column(Text, default="")  # optional longer context
+
+
+class Card(Base):
+    """One spaced-repetition card, with its SM-2 scheduling state in place.
+
+    Cards are DERIVED state: generated from a vault note or pasted text, then
+    mutated on every answer. They live in SQLite rather than as vault/*.md
+    because (a) the vault contract is "anything in here gets indexed for RAG",
+    and a few hundred Q/A fragments would compete with real notes in retrieval,
+    and (b) due/interval/ease change on every review, which would make the
+    watcher re-index constantly. `source` points back at the vault file so the
+    review page can deep-link to the original via /notes.html?path=.
+
+    Kinds are tuned for programming skills — scenario/debug carry the weight,
+    because "can you do it" matters more than "can you recite it".
+    """
+
+    __tablename__ = "cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10), default="concept")  # concept|cloze|scenario|debug
+    front: Mapped[str] = mapped_column(Text)  # 题面（cloze 用 ____ 挖空）
+    back: Mapped[str] = mapped_column(Text)  # 答案 + 为什么
+    hint: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(500), default="")  # vault rel path; "" = pasted
+    source_label: Mapped[str] = mapped_column(String(200), default="")  # display name
+    source_excerpt: Mapped[str] = mapped_column(Text, default="")  # what the card was drawn from
+    topic: Mapped[str] = mapped_column(String(100), default="")
+    deck: Mapped[str] = mapped_column(String(100), default="default")
+    origin: Mapped[str] = mapped_column(String(10), default="ai")  # ai | manual
+    model_id: Mapped[str] = mapped_column(String(100), default="")  # which model wrote it
+    suspended: Mapped[bool] = mapped_column(Boolean, default=False)  # leech or shelved by hand
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # --- SM-2 state (updated in place) ---
+    due: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    interval_days: Mapped[float] = mapped_column(Float, default=0.0)
+    ease: Mapped[float] = mapped_column(Float, default=2.5)
+    reps: Mapped[int] = mapped_column(Integer, default=0)
+    lapses: Mapped[int] = mapped_column(Integer, default=0)
+    last_grade: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_review: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CardReview(Base):
+    """One graded answer to one Card — the revlog.
+
+    Every field needed to (a) undo the answer exactly and (b) later fit an
+    FSRS-style model from history is captured here. This is the part that is
+    expensive to add retroactively, so it is complete from day one.
+    """
+
+    __tablename__ = "card_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_id: Mapped[int] = mapped_column(Integer, index=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    grade: Mapped[int] = mapped_column(Integer)  # 1 重来 | 2 困难 | 3 良好 | 4 简单
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)  # think time
+    interval_before: Mapped[float] = mapped_column(Float, default=0.0)
+    interval_after: Mapped[float] = mapped_column(Float, default=0.0)
+    ease_before: Mapped[float] = mapped_column(Float, default=2.5)
+    ease_after: Mapped[float] = mapped_column(Float, default=2.5)
+    reps_before: Mapped[int] = mapped_column(Integer, default=0)
+    due_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# the hot query is "not suspended and due <= now", ordered by due
+Index("ix_cards_queue", Card.suspended, Card.due)
+Index("ix_cards_source", Card.source)

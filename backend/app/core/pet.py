@@ -22,7 +22,18 @@ from app.core.prefs import load_config
 
 log = logging.getLogger(__name__)
 
-KINDS = {"task_done", "task_failed", "digest", "backup", "feeds", "greeting", "say"}
+KINDS = {
+    "task_done",
+    "task_failed",
+    "digest",
+    "backup",
+    "feeds",
+    "greeting",
+    "say",
+    "cards_due",
+    "cards_done",
+    "cards_remedy",
+}
 
 CHAT_SYSTEM = (
     "你是「零柒」，一台本地优先的个人工作台里的常驻小助手。"
@@ -85,6 +96,14 @@ def compose(kind: str, name: str = "", detail: str = "", count: int = 0) -> str:
         return f"备份打好了（{detail}）。"
     if kind == "feeds":
         return f"订阅抓完了，{count} 条新内容已入库。"
+    if kind == "cards_due":
+        tail = f"，已经连着 {detail} 天了" if detail and detail not in ("0", "") else ""
+        return f"今天有 {count} 张卡到期{tail}。十分钟的事。"
+    if kind == "cards_done":
+        tail = f"，连着 {detail} 天" if detail and detail not in ("0", "") else ""
+        return f"今天 {count} 张过完了{tail}。"
+    if kind == "cards_remedy":
+        return f"你老错的那几个点我补了一段讲解（{count} 篇），在 notes 里。"
     if kind == "greeting":
         part = "早上" if now.hour < 11 else ("下午" if now.hour < 18 else "晚上")
         return f"{part}好。今天的事我盯着，有进展我叫你。"
@@ -125,7 +144,10 @@ def emit(
             event_id = int(cur.lastrowid or 0)
         finally:
             conn.close()
-        if kind in ("task_failed", "greeting") and load_config().get("pet_notify", True):
+        # frugal: toast only for things that are useless unseen — failures,
+        # greetings, and the daily review nudge (a bubble in a page you never
+        # opened is worth nothing). At most one review toast per day.
+        if kind in ("task_failed", "greeting", "cards_due") and load_config().get("pet_notify", True):
             try:
                 notify.desktop("零柒", line[:180])
             except Exception:  # noqa: BLE001

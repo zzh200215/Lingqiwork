@@ -13,6 +13,8 @@ vault/
 wb-tts-*/
 wb-pet-*/
 wb-v14-*/
+.smoke*/
+.playwright-mcp/
 
 # Node handled by frontend/.gitignore
 

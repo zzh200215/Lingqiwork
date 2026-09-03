@@ -31,7 +31,7 @@ def shutdown() -> None:
 
 def reschedule_all() -> None:
     """Re-register every config-driven job. Safe to call anytime."""
-    from app.core import backup, digest, feeds, memory_tidy, pet, tasks
+    from app.core import backup, cards, digest, feeds, memory_tidy, pet, tasks
 
     for fn in (
         digest.reschedule,
@@ -40,6 +40,7 @@ def reschedule_all() -> None:
         feeds.reschedule,
         memory_tidy.reschedule,
         pet.reschedule,
+        cards.reschedule,
     ):
         try:
             fn()

@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import Layout from './Layout'
+import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
 import { api, streamNotesAi, type NoteSearchHit, type NotesChatTurn, type PodcastEntry } from './api'
 import { streamPodcastGenerate } from './stream'
@@ -66,6 +67,7 @@ export default function NotesPage() {
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [podOpen, setPodOpen] = useState(false)
+  const [cardsOpen, setCardsOpen] = useState(false)
   const [podBusy, setPodBusy] = useState(false)
   const [podMsg, setPodMsg] = useState('')
   const [podList, setPodList] = useState<PodcastEntry[]>([])
@@ -477,6 +479,7 @@ export default function NotesPage() {
     setPodOpen(next)
     if (next) {
       setChatOpen(false)
+      setCardsOpen(false)
       setPodSources(activePath ? [activePath] : [])
       if (!podVoices.length)
         api
@@ -484,6 +487,18 @@ export default function NotesPage() {
           .then((r) => setPodVoices(r.voices))
           .catch(() => setPodVoices([]))
       void loadPodcasts()
+    }
+  }
+
+  // Cards take a SINGLE note on purpose: merging several sources would blur
+  // which file a card came from, and that link is what makes "O = open source"
+  // worth having.
+  function toggleCards() {
+    const next = !cardsOpen
+    setCardsOpen(next)
+    if (next) {
+      setChatOpen(false)
+      setPodOpen(false)
     }
   }
 
@@ -727,6 +742,18 @@ export default function NotesPage() {
                   }`}
                 >
                   🎙 播客
+                </button>
+                <button
+                  onClick={toggleCards}
+                  disabled={!activePath}
+                  title="用当前笔记出复习卡片"
+                  className={`shrink-0 rounded-md border px-2 py-1 text-xs transition-colors disabled:opacity-40 ${
+                    cardsOpen
+                      ? 'border-violet-400 bg-violet-50 text-violet-700 dark:border-violet-500/50 dark:bg-violet-500/10 dark:text-violet-300'
+                      : 'border-violet-200 text-violet-600 hover:border-violet-400 hover:bg-violet-50 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10'
+                  }`}
+                >
+                  🎴 出卡
                 </button>
               </>
             )}
@@ -1087,7 +1114,7 @@ export default function NotesPage() {
                   </div>
                   <audio controls preload="none" src={`/api/podcast/audio/${p.file}`} className="mt-2 h-8 w-full" />
                   <button
-                    onClick={() => setPodScriptId((s) => (s === p.id ? null : s))}
+                    onClick={() => setPodScriptId((s) => (s === p.id ? null : p.id))}
                     className="mt-1.5 text-[10px] text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
                   >
                     {podScriptId === p.id ? '收起文稿' : '查看文稿'}
@@ -1117,6 +1144,36 @@ export default function NotesPage() {
                   主持人 × 嘉宾 对谈音频
                 </p>
               )}
+            </div>
+          </aside>
+        )}
+
+        {cardsOpen && activePath && (
+          <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
+            <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2 dark:border-neutral-800/80">
+              <h2 className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+                🎴 出复习卡
+              </h2>
+              <button
+                onClick={() => setCardsOpen(false)}
+                className="text-xs text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
+              >
+                收起
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <CardMaker
+                sourcePath={activePath}
+                sourceLabel={activePath}
+                compact
+                onSaved={(n) => setSavedAt(n > 0 ? `入库 ${n} 张卡片` : '')}
+              />
+              <a
+                href="/review.html"
+                className="mt-3 block text-center text-[11px] text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
+              >
+                去复习页 →
+              </a>
             </div>
           </aside>
         )}

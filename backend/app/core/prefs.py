@@ -69,6 +69,12 @@ _DEFAULTS: dict[str, Any] = {
     "pet_greet_enabled": True,  # 零柒: daily morning/evening greeting (生物钟)
     "pet_morning_time": "08:30",  # 零柒: morning greeting schedule (HH:MM)
     "pet_evening_time": "21:00",  # 零柒: evening recap schedule (HH:MM)
+    # --- 复习卡片（SM-2 间隔复习）---
+    "cards_new_per_day": 20,  # new cards introduced per day
+    "cards_review_per_day": 200,  # reviews per day (keeps a backlog from snowballing)
+    "cards_remind_enabled": True,  # daily "N cards due" nudge via 零柒
+    "cards_remind_time": "20:00",
+    "cards_remedy_enabled": True,  # weekly follow-up explainer for weak sources
 }
 
 

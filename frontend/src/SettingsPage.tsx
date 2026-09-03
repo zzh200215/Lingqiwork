@@ -104,6 +104,11 @@ export default function SettingsPage() {
     smtp_tls: boolean
     email_on_digest: boolean
     email_on_feeds: boolean
+    cards_new_per_day: number
+    cards_review_per_day: number
+    cards_remind_enabled: boolean
+    cards_remind_time: string
+    cards_remedy_enabled: boolean
   } | null>(null)
   const [prefsSaved, setPrefsSaved] = useState(false)
 
@@ -213,6 +218,11 @@ export default function SettingsPage() {
         smtp_tls: p.smtp_tls ?? true,
         email_on_digest: p.email_on_digest ?? false,
         email_on_feeds: p.email_on_feeds ?? false,
+        cards_new_per_day: p.cards_new_per_day ?? 20,
+        cards_review_per_day: p.cards_review_per_day ?? 200,
+        cards_remind_enabled: p.cards_remind_enabled ?? true,
+        cards_remind_time: p.cards_remind_time || '20:00',
+        cards_remedy_enabled: p.cards_remedy_enabled ?? true,
       })
       setMcpView(await api.getMcp())
       api.listMemories().then(setMemories).catch(() => {})
@@ -295,6 +305,13 @@ export default function SettingsPage() {
         smtp_tls: prefs.smtp_tls,
         email_on_digest: prefs.email_on_digest,
         email_on_feeds: prefs.email_on_feeds,
+        cards_new_per_day: Math.max(0, Math.min(500, Number(prefs.cards_new_per_day) || 0)),
+        cards_review_per_day: Math.max(0, Math.min(500, Number(prefs.cards_review_per_day) || 0)),
+        cards_remind_enabled: prefs.cards_remind_enabled,
+        cards_remind_time: /^([01]?\d|2[0-3]):[0-5]\d$/.test(prefs.cards_remind_time.trim())
+          ? prefs.cards_remind_time.trim()
+          : '20:00',
+        cards_remedy_enabled: prefs.cards_remedy_enabled,
       }),
     })
     setPrefsSaved(true)
@@ -1388,6 +1405,77 @@ export default function SettingsPage() {
               <p className="mt-2 leading-relaxed">{backups?.restore_hint || ''}</p>
             </details>
           </div>
+        </section>
+      )}
+
+      {/* 复习卡片 */}
+      {section === 'automation' && prefs && (
+        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>🎴</span> 复习卡片</h2>
+          <p className="mb-4 text-xs leading-relaxed text-neutral-400">
+            每日上限不是为了省时间，是为了别让积压把人劝退——某天出了两百张卡，第二天被队列砸懵就再也不打开了。
+          </p>
+          <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+            <label className="flex items-center gap-2">
+              每天新卡上限
+              <input
+                type="number"
+                min={0}
+                max={500}
+                value={prefs.cards_new_per_day}
+                onChange={(e) => setPrefs({ ...prefs, cards_new_per_day: Number(e.target.value) })}
+                className={`${inputCls} w-20`}
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              每天复习上限
+              <input
+                type="number"
+                min={0}
+                max={500}
+                value={prefs.cards_review_per_day}
+                onChange={(e) => setPrefs({ ...prefs, cards_review_per_day: Number(e.target.value) })}
+                className={`${inputCls} w-20`}
+              />
+            </label>
+          </div>
+          <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={prefs.cards_remind_enabled}
+                onChange={(e) => setPrefs({ ...prefs, cards_remind_enabled: e.target.checked })}
+              />
+              每天提醒到期卡片（零柒说，只在真有到期时才吭声）
+            </label>
+            <input
+              value={prefs.cards_remind_time}
+              onChange={(e) => setPrefs({ ...prefs, cards_remind_time: e.target.value })}
+              placeholder="20:00"
+              className={`${inputCls} w-24`}
+            />
+          </div>
+          <label className="mb-3 flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={prefs.cards_remedy_enabled}
+              onChange={(e) => setPrefs({ ...prefs, cards_remedy_enabled: e.target.checked })}
+              className="mt-1"
+            />
+            <span>
+              每周针对答错最多的来源生成一篇补讲
+              <span className="block text-xs leading-relaxed text-neutral-400">
+                周日 21:00 跑。挑近两周平均分最低的 1-2 篇来源，就你答错的那几个点写补充讲解，
+                写进 vault/notes/，自动进 RAG——补讲本身又能再出卡。没有薄弱来源时什么都不做。
+              </span>
+            </span>
+          </label>
+          <button
+            onClick={savePrefs}
+            className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white hover:bg-violet-700"
+          >
+            {prefsSaved ? '已保存' : '保存'}
+          </button>
         </section>
       )}
 

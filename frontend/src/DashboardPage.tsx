@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import Layout from './Layout'
-import { api, type DashboardStats } from './api'
+import { api, type CardStats, type DashboardStats } from './api'
 
 // 仪表盘 — 零柒视角
 // 顶部 banner 用零柒 sprite + LLM 生成的今日一句话；
-// 4 张叙事卡片把裸数字包成"本周你聊了 N 次 / 比上周 +X"这种说法；
+// 5 张叙事卡片把裸数字包成"本周你聊了 N 次 / 比上周 +X"这种说法；
 // 其余图表与列表保留。
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [cards, setCards] = useState<CardStats | null>(null)
   const [briefing, setBriefing] = useState<{ text: string; cached: boolean } | null>(null)
   const [briefingLoading, setBriefingLoading] = useState(true)
   const [error, setError] = useState('')
@@ -28,6 +29,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     api.dashboard().then(setStats).catch((e) => setError(String(e)))
+    // swallowed on purpose: the dashboard must never blank out over one endpoint
+    api.cardStats().then(setCards).catch(() => {})
     void refreshBriefing()
   }, [refreshBriefing])
 
@@ -114,7 +117,7 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
           <NarrativeCard
             tone="violet"
             eyebrow="聊天"
@@ -122,6 +125,20 @@ export default function DashboardPage() {
             label="本周消息"
             sub={chatDeltaText}
             href="/"
+          />
+          <NarrativeCard
+            tone={(cards?.due_now ?? 0) > 0 ? 'rose' : 'sky'}
+            eyebrow="复习"
+            headline={`${cards?.due_now ?? 0}`}
+            label="今天到期"
+            sub={
+              cards && cards.streak > 0
+                ? `连续 ${cards.streak} 天`
+                : cards && cards.total > 0
+                  ? '今天还没开始'
+                  : '还没有卡片'
+            }
+            href="/review.html"
           />
           <NarrativeCard
             tone="fuchsia"

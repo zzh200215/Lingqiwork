@@ -16,6 +16,7 @@ from app.routers import (
     artifacts,
     asr,
     backup,
+    cards,
     chat,
     conversations,
     dashboard,
@@ -147,6 +148,7 @@ app.include_router(pet.router)
 app.include_router(kg.router)
 app.include_router(feeds.router)
 app.include_router(feeds.mail_router)
+app.include_router(cards.router)
 
 
 @app.get("/api/health")

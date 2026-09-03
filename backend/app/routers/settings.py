@@ -3,6 +3,8 @@
 api_key values are masked in responses. MCP servers live in config.json
 (next to prefs) and are applied live via mcp_manager.reload().
 """
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
@@ -79,6 +81,32 @@ class PrefsIn(BaseModel):
     smtp_tls: bool | None = None
     email_on_digest: bool | None = None
     email_on_feeds: bool | None = None
+    # 零柒 (these were in _DEFAULTS but missing here, so they were unsettable)
+    pet_enabled: bool | None = None
+    pet_notify: bool | None = None
+    pet_greet_enabled: bool | None = None
+    pet_morning_time: str | None = None
+    pet_evening_time: str | None = None
+    # 复习卡片
+    cards_new_per_day: int | None = None
+    cards_review_per_day: int | None = None
+    cards_remind_enabled: bool | None = None
+    cards_remind_time: str | None = None
+    cards_remedy_enabled: bool | None = None
+
+    @field_validator("pet_morning_time", "pet_evening_time", "cards_remind_time")
+    @classmethod
+    def check_hhmm(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"\d{1,2}:\d{2}", v.strip()):
+            raise ValueError("时间格式应为 HH:MM")
+        return v
+
+    @field_validator("cards_new_per_day", "cards_review_per_day")
+    @classmethod
+    def check_card_caps(cls, v: int | None) -> int | None:
+        if v is not None and not (0 <= v <= 500):
+            raise ValueError("每日上限应在 0-500 之间")
+        return v
 
     @field_validator("image_api")
     @classmethod

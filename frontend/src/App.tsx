@@ -454,10 +454,15 @@ function ChatView() {
     api.listPrompts().then(setPrompts).catch(() => {})
     api.listNotes().then((r) => setNoteFiles(r.files.map((f) => f.path))).catch(() => {})
     // deep link from dashboard: /?conv=<id>
-    const convParam = new URLSearchParams(window.location.search).get('conv')
+    const params = new URLSearchParams(window.location.search)
+    const convParam = params.get('conv')
     if (convParam) {
       const id = Number(convParam)
       if (Number.isFinite(id) && id > 0) void openConversation(id)
+      window.history.replaceState({}, '', '/')
+    } else if (params.get('new') === '1') {
+      // sidebar "＋ 新对话" from another page hands the intent over via URL
+      void newChat()
       window.history.replaceState({}, '', '/')
     }
   }, [refreshProviders, refreshConversations])
@@ -535,7 +540,6 @@ function ChatView() {
     setMessages([])
     setError('')
   }
-  void newChat // available for future explicit "new chat" button
 
   async function deleteConversation(id: number) {
     if (busy) return

@@ -10,6 +10,7 @@ export default defineConfig({
         index: resolve(__dirname, 'index.html'),
         dashboard: resolve(__dirname, 'dashboard.html'),
         notes: resolve(__dirname, 'notes.html'),
+        review: resolve(__dirname, 'review.html'),
         settings: resolve(__dirname, 'settings.html'),
         kb: resolve(__dirname, 'kb.html'),
         quick: resolve(__dirname, 'quick.html'),

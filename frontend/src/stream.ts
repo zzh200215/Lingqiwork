@@ -210,3 +210,82 @@ export async function streamPodcastGenerate(
   }
   return done
 }
+
+/**
+ * Read an SSE body as (event, data) pairs.
+ *
+ * The three functions above each inline this loop; rather than refactor live
+ * paths (streamChat is the chat hot path) this exists for new callers only.
+ */
+async function* sseFrames(
+  res: Response
+): AsyncGenerator<[string, Record<string, unknown>]> {
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let sep: number
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const raw = buf.slice(0, sep)
+      buf = buf.slice(sep + 2)
+      let event = 'message'
+      const dataLines: string[] = []
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('event: ')) event = line.slice(7)
+        else if (line.startsWith('data: ')) dataLines.push(line.slice(6))
+      }
+      if (!dataLines.length) continue
+      yield [event, JSON.parse(dataLines.join('\n'))]
+    }
+  }
+}
+
+export interface CardGenStage {
+  stage: 'reading' | 'drafting' | 'dedup' | string
+  total?: number
+  model_id?: string
+}
+
+export interface CardGenDone {
+  ok: boolean
+  error?: string
+  cards?: unknown[]
+  dropped?: number
+  dedup?: 'ok' | 'skipped'
+  source?: string
+  source_label?: string
+  model_id?: string
+}
+
+/** AI card generation with live progress. Resolves with the terminal done event. */
+export async function streamCardsGenerate(
+  body: { source_path?: string; text?: string; count?: number; kinds?: string[] },
+  onStage: (s: CardGenStage) => void,
+  signal?: AbortSignal
+): Promise<CardGenDone> {
+  const res = await fetch('/api/cards/generate/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = `出卡失败: ${res.status}`
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(detail)
+  }
+
+  let done: CardGenDone = { ok: false, error: '流提前结束' }
+  for await (const [event, data] of sseFrames(res)) {
+    if (event === 'stage') onStage(data as unknown as CardGenStage)
+    else if (event === 'done') done = data as unknown as CardGenDone
+  }
+  return done
+}

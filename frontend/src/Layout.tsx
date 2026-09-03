@@ -37,8 +37,10 @@ function Logo() {
   )
 }
 
+// 「复习」排第二位：每天要做的事压在一周看一次的仪表盘之上
 const NAV = [
   { href: '/', label: '对话', icon: '💬', key: 'chat' },
+  { href: '/review.html', label: '复习', icon: '🎴', key: 'review' },
   { href: '/dashboard.html', label: '仪表盘', icon: '📊', key: 'dashboard' },
   { href: '/notes.html', label: '笔记', icon: '📝', key: 'notes' },
   { href: '/kb.html', label: '知识库', icon: '📚', key: 'kb' },
@@ -49,7 +51,7 @@ export default function Layout({
   page,
   children,
 }: {
-  page: 'chat' | 'kb' | 'settings' | 'dashboard' | 'notes'
+  page: 'chat' | 'kb' | 'settings' | 'dashboard' | 'notes' | 'review'
   children: React.ReactNode
 }) {
   const [conversations, setConversations] = useState<{ id: number; title: string }[]>([])
@@ -71,12 +73,17 @@ export default function Layout({
         </div>
 
         <div className="px-3 pb-3 pt-2">
-          <a
-            href="/"
+          <button
+            onClick={() => {
+              // on the chat page App already listens for this (tray menu uses it);
+              // elsewhere hand the intent over via URL so App creates it on load
+              if (page === 'chat') window.dispatchEvent(new Event('workbench:new-chat'))
+              else window.location.href = '/?new=1'
+            }}
             className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 hover:brightness-110 dark:shadow-violet-900/60 dark:hover:shadow-violet-700/60"
           >
             <span className="text-base leading-none">＋</span> 新对话
-          </a>
+          </button>
         </div>
 
         <nav className="flex flex-col gap-1 px-3">
@@ -105,7 +112,7 @@ export default function Layout({
               {conversations.map((c) => (
                 <a
                   key={c.id}
-                  href="/"
+                  href={'/?conv=' + c.id}
                   className="truncate rounded-lg px-3 py-1.5 text-sm text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200"
                 >
                   {c.title}

@@ -478,6 +478,88 @@ export interface FeedList {
   next_run: string | null
 }
 
+// ---------- 复习卡片 ----------
+
+export type CardKind = 'concept' | 'cloze' | 'scenario' | 'debug'
+export type CardGrade = 1 | 2 | 3 | 4
+
+/** A generated candidate, not yet in the deck. */
+export interface CardDraft {
+  kind: CardKind
+  front: string
+  back: string
+  hint: string
+  topic: string
+  excerpt: string
+  duplicate_of?: number | null // -1 = duplicate of another card in this same batch
+  similarity?: number | null
+}
+
+export interface CardItem {
+  id: number
+  kind: CardKind
+  front: string
+  back: string
+  hint: string
+  topic: string
+  source: string
+  source_label: string
+  source_excerpt: string
+  origin: string
+  suspended: boolean
+  due: string | null
+  interval_days: number
+  ease: number
+  reps: number
+  lapses: number
+  last_grade: number | null
+  last_review: string | null
+  created_at: string | null
+}
+
+export interface CardQueue {
+  due: CardItem[]
+  /** new cards; named `fresh` to dodge the reserved word */
+  fresh: CardItem[]
+  due_total: number
+  caps: { new_per_day: number; review_per_day: number }
+  today: { reviewed: number; new_done: number }
+}
+
+export interface CardReviewResult extends CardItem {
+  ok: boolean
+  due_seconds: number
+  /** true when the card comes due soon enough to re-show it this session */
+  requeue: boolean
+}
+
+export interface CardStats {
+  total: number
+  new: number
+  learning: number
+  mature: number
+  suspended: number
+  due_now: number
+  today_reviewed: number
+  today_new: number
+  remaining_today: number
+  accuracy_7d: number | null
+  daily: { date: string; count: number }[]
+  streak: number
+  next_due: string | null
+}
+
+export interface CardSourceStat {
+  source: string
+  source_label: string
+  cards: number
+  lapses: number
+  reviews: number
+  avg_grade: number | null
+  again_rate: number | null
+  weak: boolean
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -823,4 +905,42 @@ export const api = {
   queryKg: (q: string, topK: number) =>
     request<KgRetrieval>('/api/kg/query', { method: 'POST', body: JSON.stringify({ q, top_k: topK }) }),
   clearKg: () => request<{ ok: boolean; deleted_entities: number }>('/api/kg/clear', { method: 'POST' }),
+
+  // ---------- 复习卡片 ----------
+  cardQueue: () => request<CardQueue>('/api/cards/queue'),
+  cardStats: () => request<CardStats>('/api/cards/stats'),
+  listCards: (q: { source?: string; kind?: string; topic?: string; limit?: number } = {}) =>
+    request<{ total: number; cards: CardItem[] }>(
+      '/api/cards?' +
+        new URLSearchParams(
+          Object.entries(q)
+            .filter(([, v]) => v !== undefined && v !== '')
+            .map(([k, v]) => [k, String(v)])
+        ).toString()
+    ),
+  saveCards: (body: {
+    cards: CardDraft[]
+    source: string
+    source_label: string
+    model_id: string
+  }) =>
+    request<{ added: number; skipped: number; ids: number[] }>('/api/cards/batch', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  reviewCard: (id: number, grade: CardGrade, seconds: number) =>
+    request<CardReviewResult>(`/api/cards/${id}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ grade, seconds }),
+    }),
+  undoCardReview: (id: number) =>
+    request<{ ok: boolean; card: CardItem | null }>(`/api/cards/${id}/undo`, { method: 'POST' }),
+  updateCard: (
+    id: number,
+    patch: Partial<Pick<CardItem, 'front' | 'back' | 'hint' | 'topic' | 'kind' | 'suspended'>>
+  ) => request<CardItem>(`/api/cards/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
+  deleteCard: (id: number) =>
+    request<{ ok: boolean }>(`/api/cards/${id}`, { method: 'DELETE' }),
+  weakSources: (days = 30) =>
+    request<{ days: number; sources: CardSourceStat[] }>(`/api/cards/weak?days=${days}`),
 }
