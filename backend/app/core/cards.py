@@ -127,7 +127,10 @@ def fuzz_interval(days: float, rnd: random.Random | None = None) -> float:
 
 # ---------- 出卡 ----------
 
-MAX_INPUT_CHARS = 15000  # 与 podcast 输入上限一致
+MAX_INPUT_CHARS = 15000  # 与 podcast 输入上限一致：这是喂给模型的预算
+# 面板是给人读和划词的，不是 prompt，所以另设一个大得多的上限。实测 core/cards.py
+# 有 45k 字——按 15000 截会让一个源码文件三分之二的内容根本选不到。
+PANE_MAX_CHARS = 60000
 MIN_INPUT_CHARS = 80  # 太短的文本出不了有意义的卡
 MAX_CARDS = 20
 DEFAULT_CARDS = 8
@@ -195,7 +198,31 @@ def _external_root(scheme: str, name: str):
     return root
 
 
-def _collect_external(spec: str) -> tuple[str, str, str]:
+def spec_from_indexer_source(source: str) -> str:
+    """indexer source id -> carding spec. "" when it cannot be carded.
+
+    The indexer namespaces external material as "repos/<name>/<rel>" and
+    "dirs/<name>/<rel>" (indexer.py:35-36), while the carding entries use
+    "repo:" / "dir:" — see EXTERNAL_SCHEMES for why the two namings differ on
+    purpose. Vault-relative paths pass through unchanged. Both directions live
+    here because the source picker and the retrieval search both need them.
+    """
+    for prefix, scheme in (("repos/", "repo:"), ("dirs/", "dir:")):
+        if source.startswith(prefix):
+            rest = source[len(prefix) :]
+            return scheme + rest if "/" in rest else ""  # bare "repos/<name>" is not a file
+    return source
+
+
+def indexer_source_from_spec(spec: str) -> str:
+    """The reverse of `spec_from_indexer_source`."""
+    for scheme, prefix in (("repo:", "repos/"), ("dir:", "dirs/")):
+        if spec.startswith(scheme):
+            return prefix + spec[len(scheme) :]
+    return spec
+
+
+def _collect_external(spec: str, max_chars: int = MAX_INPUT_CHARS) -> tuple[str, str, str]:
     """"repo:<name>/<rel>" or "dir:<name>/<rel>" -> (source, label, material)."""
     from app.core import ingest
 
@@ -214,20 +241,25 @@ def _collect_external(spec: str) -> tuple[str, str, str]:
             raise ValueError(f"文件太大（超过 {MAX_MATERIAL_BYTES // 1000}KB）")
     except OSError as e:
         raise ValueError(f"读不了这个文件：{e}") from e
-    material = (ingest.parse_file(p) or "").strip()[:MAX_INPUT_CHARS]
+    material = (ingest.parse_file(p) or "").strip()[:max_chars]
     if len(material) < MIN_INPUT_CHARS:
         raise ValueError("这个文件内容太短，出不了卡")
     source = f"{scheme}{name}/{p.relative_to(root).as_posix()}"
     return source, source, material
 
 
-def collect_material(source_path: str = "", text: str = "") -> tuple[str, str, str]:
+def collect_material(
+    source_path: str = "", text: str = "", max_chars: int = MAX_INPUT_CHARS
+) -> tuple[str, str, str]:
     """-> (source_rel, source_label, material). Filesystem only, no DB.
 
     Exactly one of source_path / text must be given. Three kinds of source_path:
     a vault-relative path, or a `repo:`/`dir:` spec for indexed material outside
     the vault. The `text` entry exists for everything with no file at all —
     PLAN.md sits at the repo root and would never pass the containment check.
+
+    `max_chars` defaults to the model's input budget; the read-only pane passes
+    PANE_MAX_CHARS instead, because a human selecting a span is not a prompt.
     Raises ValueError.
     """
     has_path, has_text = bool((source_path or "").strip()), bool((text or "").strip())
@@ -235,14 +267,14 @@ def collect_material(source_path: str = "", text: str = "") -> tuple[str, str, s
         raise ValueError("source_path 与 text 必须给且只给一个")
 
     if has_text:
-        material = text.strip()[:MAX_INPUT_CHARS]
+        material = text.strip()[:max_chars]
         if len(material) < MIN_INPUT_CHARS:
             raise ValueError(f"文本太短（至少 {MIN_INPUT_CHARS} 字）")
         return "", "粘贴文本", material
 
     spec = source_path.strip()
     if spec.startswith(EXTERNAL_SCHEMES):
-        return _collect_external(spec)
+        return _collect_external(spec, max_chars)
 
     from app.config import VAULT_DIR
     from app.core import ingest
@@ -254,7 +286,7 @@ def collect_material(source_path: str = "", text: str = "") -> tuple[str, str, s
         raise ValueError("路径越出 vault 目录")
     if not p.is_file():
         raise ValueError(f"找不到文件：{rel}")
-    material = (ingest.parse_file(p) or "").strip()[:MAX_INPUT_CHARS]
+    material = (ingest.parse_file(p) or "").strip()[:max_chars]
     if len(material) < MIN_INPUT_CHARS:
         raise ValueError("这篇内容太短，出不了卡")
     return p.relative_to(root).as_posix(), p.relative_to(root).as_posix(), material
@@ -603,6 +635,25 @@ async def existing_fronts(source: str = "") -> list[tuple[int, str]]:
     others = [(r[0], r[2] or "") for r in rows if not source or r[1] != source]
     mine = [(r[0], r[2] or "") for r in rows if source and r[1] == source]
     return others + mine
+
+
+async def source_card_counts() -> dict[str, int]:
+    """{source: how many cards already came from it}.
+
+    Answers "have I carded this file already?" — after indexing a 200-file repo,
+    without this you re-read the same file over and over. Pasted-text cards land
+    under the "" key, which is correct: they have no re-openable source.
+    """
+    from sqlalchemy import func, select
+
+    from app.db import SessionLocal
+    from app.models import Card
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(select(Card.source, func.count(Card.id)).group_by(Card.source))
+        ).all()
+    return {(r[0] or ""): int(r[1]) for r in rows}
 
 
 async def save_cards(

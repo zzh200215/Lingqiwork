@@ -501,6 +501,22 @@ export interface CardSources {
   vault: string[]
   repos: string[]
   dirs: string[]
+  /** match counts before `limit` was applied, so the UI can say "showing 200 of 812" */
+  totals: { vault: number; repos: number; dirs: number }
+  /** source -> cards already made from it; "" holds the pasted-text cards */
+  card_counts: Record<string, number>
+}
+
+/** One retrieval hit, already carrying the spec the material endpoints accept. */
+export interface MaterialHit {
+  source: string
+  /** "" when the hit is a namespace entry rather than a file */
+  spec: string
+  title: string
+  chunk: number | null
+  score: number | null
+  text: string
+  cards: number
 }
 
 export interface CardItem {
@@ -1002,11 +1018,25 @@ export const api = {
   /** Blank out a selected span. Server-side so the rules are covered by pytest. */
   makeCloze: (body: { text: string; start: number; end: number; topic?: string }) =>
     request<CardDraft>('/api/cards/cloze', { method: 'POST', body: JSON.stringify(body) }),
-  cardSources: () => request<CardSources>('/api/cards/sources'),
-  cardMaterial: (source: string) =>
-    request<{ source: string; source_label: string; text: string }>(
-      '/api/cards/material?source=' + encodeURIComponent(source)
+  cardSources: (q = '', limit = 200) =>
+    request<CardSources>(
+      `/api/cards/sources?q=${encodeURIComponent(q)}&limit=${limit}`
     ),
+  /** Retrieval hits ready to card. First call after a cold start takes ~6s. */
+  searchMaterial: (q: string, topK = 6) =>
+    request<{ query: string; hits: MaterialHit[] }>(
+      `/api/cards/search?q=${encodeURIComponent(q)}&top_k=${topK}`
+    ),
+  cardMaterial: (source: string) =>
+    request<{
+      source: string
+      source_label: string
+      text: string
+      /** the file was longer than the pane cap */
+      truncated: boolean
+      /** how much of it 🤖 出卡 would actually send to the model */
+      gen_limit: number
+    }>('/api/cards/material?source=' + encodeURIComponent(source)),
 
   // ---------- 习惯打卡 ----------
   habitsToday: () => request<HabitToday>('/api/habits/today'),

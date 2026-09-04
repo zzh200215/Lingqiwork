@@ -40,13 +40,16 @@ from app.core.cards import (  # noqa: E402
     MAX_INPUT_CHARS,
     MAX_INTERVAL,
     MIN_EASE,
+    PANE_MAX_CHARS,
     SECOND_INTERVAL,
     collect_material,
     compose_gen_prompt,
     fuzz_interval,
+    indexer_source_from_spec,
     make_cloze,
     parse_cards,
     schedule,
+    spec_from_indexer_source,
 )
 
 # ---------- SM-2 ----------
@@ -186,6 +189,24 @@ def test_prompt_kind_filter_appends_restriction():
 def test_material_is_truncated_to_the_input_cap():
     _, user = compose_gen_prompt("A" * (MAX_INPUT_CHARS + 500), "x", 3)
     assert user.count("A") == MAX_INPUT_CHARS
+
+
+def test_pane_cap_is_much_larger_than_the_model_budget(monkeypatch):
+    # a real source file is routinely longer than a prompt: core/cards.py is 45k
+    # chars, so serving the pane at the 15000-char model budget left two thirds of
+    # it unselectable — found by actually carding an indexed source file
+    from app.core import repos
+
+    root = _scratch("repos-long")
+    monkeypatch.setattr(repos, "REPOS_DIR", root)
+    (root / "big").mkdir()
+    (root / "big" / "long.py").write_text("行" * 40_000, encoding="utf-8")
+
+    _, _, default = collect_material(source_path="repo:big/long.py")
+    assert len(default) == MAX_INPUT_CHARS  # generation keeps the prompt budget
+    _, _, pane = collect_material(source_path="repo:big/long.py", max_chars=PANE_MAX_CHARS)
+    assert len(pane) == 40_000
+    assert PANE_MAX_CHARS > MAX_INPUT_CHARS
 
 
 # ---------- JSON parsing robustness ----------
@@ -339,6 +360,36 @@ def test_oversized_external_file_is_rejected(monkeypatch):
     (root / "big" / "huge.txt").write_text("x" * (cards_mod.MAX_MATERIAL_BYTES + 10))
     with pytest.raises(ValueError, match="太大"):
         collect_material(source_path="repo:big/huge.txt")
+
+
+# ---------- indexer source id <-> carding spec ----------
+
+
+@pytest.mark.parametrize(
+    "source,spec",
+    [
+        ("repos/mylib/pkg/a.py", "repo:mylib/pkg/a.py"),
+        ("dirs/docs/guide/intro.md", "dir:docs/guide/intro.md"),
+        ("notes/项目笔记.md", "notes/项目笔记.md"),  # vault paths pass through
+        ("说明文档.pdf", "说明文档.pdf"),
+    ],
+)
+def test_spec_round_trips_with_the_indexer_source_id(source, spec):
+    assert spec_from_indexer_source(source) == spec
+    assert indexer_source_from_spec(spec) == source
+
+
+@pytest.mark.parametrize("bare", ["repos/mylib", "dirs/docs"])
+def test_a_bare_namespace_entry_is_not_cardable(bare):
+    # "repos/<name>" with no file part is a namespace, not something to card
+    assert spec_from_indexer_source(bare) == ""
+
+
+def test_spec_conversion_is_the_inverse_of_collect_materials_scheme():
+    # the two namings must stay in sync: whatever the converter emits has to be
+    # something collect_material() recognises as external
+    for source in ("repos/x/y.py", "dirs/x/y.md"):
+        assert spec_from_indexer_source(source).startswith(cards_mod.EXTERNAL_SCHEMES)
 
 
 # ---------- 划词挖空（纯字符串，零 LLM） ----------

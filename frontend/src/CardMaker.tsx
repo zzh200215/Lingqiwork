@@ -1,23 +1,27 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
-import { api, type CardDraft, type CardKind, type CardSources } from './api'
+import { api, type CardDraft, type CardKind, type CardSources, type MaterialHit } from './api'
 import { streamCardsGenerate, type CardGenStage } from './stream'
 
-// Shared card maker — used by the review page and by the notes sidebar. Three
-// ways in, and two of them never touch a model:
+// Shared card maker — used by the review page and by the notes sidebar. Four
+// ways in, and three of them never touch a model:
 //
 //   🤖 AI    模型出卡。Candidates ALWAYS go through the tick-and-edit list below
 //            before they enter the deck: one bad auto-inserted card is enough to
 //            stop trusting the queue, and that trust does not come back.
 //   ✍️ 手写  type the card yourself. Zero LLM, zero cost, instant.
 //   📄 取材  load an indexed file (vault path, or `repo:`/`dir:` for material
-//            outside the vault), select a span in the read-only pane, blank it
+//            outside the vault) into a read-only pane, select a span, blank it
 //            into a cloze card. Also zero LLM.
+//   🔍 检索  ask a question, pick from the retrieval hits, and the hit's text
+//            lands in that same pane. This is what keeps the deck growing once
+//            the obvious material is mined out.
 //
-// The two manual paths are the whole point of this revision: a feature meant to
+// The pane is the common card factory; the modes are just different ways to fill
+// it. The two manual paths are the point of this design: a feature meant to
 // become a daily habit must not single-point-depend on a model quota.
 
-type Mode = 'ai' | 'write' | 'clip'
+type Mode = 'ai' | 'write' | 'clip' | 'search'
 
 const KIND_LABEL: Record<CardKind, string> = {
   scenario: '情境',
@@ -45,6 +49,7 @@ const MODES: { key: Mode; label: string }[] = [
   { key: 'ai', label: '🤖 AI' },
   { key: 'write', label: '✍️ 手写' },
   { key: 'clip', label: '📄 取材' },
+  { key: 'search', label: '🔍 检索' },
 ]
 
 export default function CardMaker({
@@ -72,10 +77,15 @@ export default function CardMaker({
   const [meta, setMeta] = useState({ source: '', source_label: '', model_id: '' })
   // AI mode can also read an indexed file instead of pasted text
   const [aiSource, setAiSource] = useState('')
-  // 取材 pane
+  // 取材 pane — also fed by 检索 mode; the pane is the shared card factory
   const [sources, setSources] = useState<CardSources | null>(null)
+  const [srcQuery, setSrcQuery] = useState('')
   const [clipSource, setClipSource] = useState('')
   const [clipText, setClipText] = useState('')
+  const [genLimit, setGenLimit] = useState(0)
+  // 检索
+  const [question, setQuestion] = useState('')
+  const [hits, setHits] = useState<MaterialHit[] | null>(null)
   // 手写 form
   const [written, setWritten] = useState(BLANK_WRITE)
   const paneRef = useRef<HTMLPreElement>(null)
@@ -83,9 +93,25 @@ export default function CardMaker({
   const inputCls =
     'w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900'
 
+  // server-side filtering: a monorepo has ~1500 indexed files and shipping them
+  // all on every keystroke (or every panel open) is megabytes
   useEffect(() => {
-    api.cardSources().then(setSources).catch(() => setSources({ vault: [], repos: [], dirs: [] }))
-  }, [])
+    const t = setTimeout(() => {
+      api
+        .cardSources(srcQuery)
+        .then(setSources)
+        .catch(() =>
+          setSources({
+            vault: [],
+            repos: [],
+            dirs: [],
+            totals: { vault: 0, repos: 0, dirs: 0 },
+            card_counts: {},
+          })
+        )
+    }, srcQuery ? 250 : 0)
+    return () => clearTimeout(t)
+  }, [srcQuery])
 
   /** Guard against silently mislabelling a batch's source. */
   function addDraft(card: CardDraft, src: { source: string; source_label: string }): boolean {
@@ -101,9 +127,13 @@ export default function CardMaker({
     return true
   }
 
-  async function generate() {
+  async function generate(fromPane = false) {
     if (busy) return
-    if (pasteMode && !aiSource && text.trim().length < MIN_TEXT) {
+    if (fromPane && !clipText.trim()) {
+      setError('面板里还没有材料')
+      return
+    }
+    if (!fromPane && pasteMode && !aiSource && text.trim().length < MIN_TEXT) {
       setError(`文本至少 ${MIN_TEXT} 字才能出卡`)
       return
     }
@@ -114,11 +144,13 @@ export default function CardMaker({
     setPicked(new Set())
     setStage('reading')
     try {
-      const input = sourcePath
-        ? { source_path: sourcePath, count }
-        : aiSource
-          ? { source_path: aiSource, count }
-          : { text: text.trim(), count }
+      const input = fromPane
+        ? { text: clipText.trim(), count }
+        : sourcePath
+          ? { source_path: sourcePath, count }
+          : aiSource
+            ? { source_path: aiSource, count }
+            : { text: text.trim(), count }
       const done = await streamCardsGenerate(input, (s: CardGenStage) => setStage(s.stage))
       if (!done.ok) {
         setError(done.error || '出卡失败')
@@ -128,11 +160,17 @@ export default function CardMaker({
       setDrafts(cards)
       // duplicates start UNTICKED but stay visible — you decide, not the model
       setPicked(new Set(cards.map((_, i) => i).filter((i) => !cards[i].duplicate_of)))
-      setMeta({
-        source: done.source ?? '',
-        source_label: done.source_label ?? sourceLabel,
-        model_id: done.model_id ?? '',
-      })
+      setMeta(
+        // pane material is passed as raw text, so the server cannot know where it
+        // came from; keep the real source we loaded it from
+        fromPane
+          ? { source: clipSource, source_label: clipSource, model_id: done.model_id ?? '' }
+          : {
+              source: done.source ?? '',
+              source_label: done.source_label ?? sourceLabel,
+              model_id: done.model_id ?? '',
+            }
+      )
       const bits: string[] = [`出了 ${cards.length} 张`]
       if (done.dropped) bits.push(`${done.dropped} 张超长已丢弃`)
       if (done.dedup === 'skipped') bits.push('本次未做语义查重')
@@ -143,6 +181,33 @@ export default function CardMaker({
       setBusy(false)
       setStage('')
     }
+  }
+
+  async function runSearch() {
+    if (busy || !question.trim()) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    setHits(null)
+    try {
+      const r = await api.searchMaterial(question.trim())
+      setHits(r.hits)
+      if (!r.hits.length) setNotice('没命中。知识库里可能还没有相关材料')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function loadHit(hit: MaterialHit, whole: boolean) {
+    if (!whole) {
+      setClipSource(hit.spec || hit.source)
+      setClipText(hit.text)
+      setNotice(`已载入片段 ${hit.text.length} 字，选中要挖掉的部分`)
+      return
+    }
+    await loadClip(hit.spec)
   }
 
   function addWritten() {
@@ -176,7 +241,10 @@ export default function CardMaker({
     try {
       const r = await api.cardMaterial(source)
       setClipText(r.text)
-      setNotice(`已载入 ${r.text.length} 字，选中要挖掉的部分`)
+      setGenLimit(r.gen_limit)
+      setNotice(
+        `已载入 ${r.text.length} 字${r.truncated ? '（文件更长，已截断）' : ''}，选中要挖掉的部分`
+      )
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -263,42 +331,56 @@ export default function CardMaker({
     }
   }
 
-  const picker = (value: string, onChange: (v: string) => void, pasteOption: boolean) => (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={`${inputCls} min-w-0 flex-1`}
-    >
-      <option value="">{pasteOption ? '粘贴文本' : '选择文件…'}</option>
-      {sources?.vault.length ? (
-        <optgroup label="vault 笔记">
-          {sources.vault.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </optgroup>
-      ) : null}
-      {sources?.repos.length ? (
-        <optgroup label="代码仓库">
-          {sources.repos.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </optgroup>
-      ) : null}
-      {sources?.dirs.length ? (
-        <optgroup label="本地目录">
-          {sources.dirs.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </optgroup>
-      ) : null}
-    </select>
-  )
+  const countLabel = (s: string) => {
+    const n = sources?.card_counts?.[s] ?? 0
+    return n > 0 ? `${s}  · 已有 ${n} 张` : s
+  }
+
+  const picker = (value: string, onChange: (v: string) => void, pasteOption: boolean) => {
+    const t = sources?.totals
+    const shown = (sources?.vault.length ?? 0) + (sources?.repos.length ?? 0) + (sources?.dirs.length ?? 0)
+    const all = (t?.vault ?? 0) + (t?.repos ?? 0) + (t?.dirs ?? 0)
+    return (
+      <div className="space-y-1">
+        <input
+          value={srcQuery}
+          onChange={(e) => setSrcQuery(e.target.value)}
+          placeholder="筛选文件名…"
+          className={inputCls}
+        />
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={inputCls}
+          size={pasteOption ? undefined : 6}
+        >
+          <option value="">{pasteOption ? '粘贴文本' : '选择文件…'}</option>
+          {(
+            [
+              ['vault 笔记', sources?.vault],
+              ['代码仓库', sources?.repos],
+              ['本地目录', sources?.dirs],
+            ] as const
+          ).map(([label, items]) =>
+            items?.length ? (
+              <optgroup key={label} label={label}>
+                {items.map((p) => (
+                  <option key={p} value={p}>
+                    {countLabel(p)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null
+          )}
+        </select>
+        {all > shown && (
+          <p className="text-[10px] text-neutral-400">
+            显示 {shown} / 共 {all}，继续输入以缩小范围
+          </p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="flex min-h-0 flex-col gap-2.5">
@@ -320,12 +402,8 @@ export default function CardMaker({
       {mode === 'ai' &&
         (pasteMode ? (
           <>
-            <div className="flex items-center gap-2">
-              <label className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
-                来源
-              </label>
-              {picker(aiSource, setAiSource, true)}
-            </div>
+            <label className="text-xs text-neutral-500 dark:text-neutral-400">来源</label>
+            {picker(aiSource, setAiSource, true)}
             {!aiSource && (
               <textarea
                 value={text}
@@ -423,26 +501,107 @@ export default function CardMaker({
 
       {mode === 'clip' && (
         <>
-          <div className="flex items-center gap-2">
-            <label className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400">文件</label>
-            {picker(clipSource, (v) => void loadClip(v), false)}
+          <label className="text-xs text-neutral-500 dark:text-neutral-400">文件</label>
+          {picker(clipSource, (v) => void loadClip(v), false)}
+        </>
+      )}
+
+      {mode === 'search' && (
+        <>
+          <div className="flex gap-2">
+            <input
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void runSearch()
+              }}
+              placeholder="问一个你想弄清楚的问题…"
+              className={inputCls}
+            />
+            <button
+              onClick={() => void runSearch()}
+              disabled={busy || !question.trim()}
+              className="shrink-0 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-50"
+            >
+              {busy ? '检索中…' : '🔍 检索'}
+            </button>
           </div>
-          {clipText && (
-            <>
-              <pre
-                ref={paneRef}
-                className="max-h-64 min-h-0 overflow-auto whitespace-pre-wrap rounded-md border border-neutral-200 bg-neutral-50/60 p-2 font-mono text-[12px] leading-relaxed selection:bg-violet-200 dark:border-neutral-800 dark:bg-neutral-900/40 dark:selection:bg-violet-500/40"
-              >
-                {clipText}
-              </pre>
-              <button
-                onClick={() => void clipCloze()}
-                className="rounded-lg border border-violet-300 px-3 py-1.5 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
-              >
-                🎴 把选中的挖成填空卡
-              </button>
-            </>
+          {busy && (
+            <p className="text-[10px] text-neutral-400">
+              首次检索要拉起向量与精排模型，约 6 秒
+            </p>
           )}
+          {hits?.map((h, i) => (
+            <div
+              key={`${h.source}#${h.chunk}#${i}`}
+              className="rounded-lg border border-neutral-200 p-2 text-xs dark:border-neutral-800"
+            >
+              <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                <span className="min-w-0 flex-1 truncate font-medium" title={h.source}>
+                  {h.title}
+                </span>
+                {h.cards > 0 && (
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                    已有 {h.cards} 张
+                  </span>
+                )}
+                {h.score != null && <span className="text-[10px] text-neutral-400">{h.score}</span>}
+              </div>
+              <p className="line-clamp-3 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                {h.text.slice(0, 160)}
+              </p>
+              <div className="mt-1.5 flex gap-2">
+                <button
+                  onClick={() => void loadHit(h, false)}
+                  className="text-[11px] text-violet-600 hover:underline dark:text-violet-300"
+                >
+                  载入片段
+                </button>
+                {h.spec && (
+                  <button
+                    onClick={() => void loadHit(h, true)}
+                    className="text-[11px] text-violet-600 hover:underline dark:text-violet-300"
+                  >
+                    载入整篇
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      {(mode === 'clip' || mode === 'search') && clipText && (
+        <>
+          <p className="truncate text-[10px] text-neutral-400" title={clipSource}>
+            面板材料：{clipSource || '（无来源）'}
+          </p>
+          <pre
+            ref={paneRef}
+            className="max-h-64 min-h-0 overflow-auto whitespace-pre-wrap rounded-md border border-neutral-200 bg-neutral-50/60 p-2 font-mono text-[12px] leading-relaxed selection:bg-violet-200 dark:border-neutral-800 dark:bg-neutral-900/40 dark:selection:bg-violet-500/40"
+          >
+            {clipText}
+          </pre>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => void clipCloze()}
+              className="rounded-lg border border-violet-300 px-3 py-1.5 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
+            >
+              🎴 把选中的挖成填空卡
+            </button>
+            <button
+              onClick={() => void generate(true)}
+              disabled={busy}
+              className="rounded-lg border border-neutral-300 px-3 py-1.5 text-sm text-neutral-600 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300"
+            >
+              {busy ? STAGE_TEXT[stage] || '处理中…' : '🤖 就这段出卡'}
+            </button>
+            {genLimit > 0 && clipText.length > genLimit && (
+              <span className="self-center text-[10px] text-amber-600 dark:text-amber-400">
+                出卡只会用前 {genLimit} 字（挖空不受限）
+              </span>
+            )}
+          </div>
         </>
       )}
 

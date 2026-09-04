@@ -161,40 +161,111 @@ async def make_cloze(body: ClozeIn):
 
 
 @router.get("/sources")
-async def list_sources():
-    """Everything that can be carded: vault files + indexed repo/dir files."""
+async def list_sources(q: str = "", limit: int = 200):
+    """Everything that can be carded: vault files + indexed repo/dir files.
+
+    Filtering happens here rather than in the page on purpose: a monorepo can
+    have 1500 indexed files, and shipping all of them every time the panel opens
+    is megabytes. `totals` lets the UI say "showing 200 of 812".
+    """
     from app.config import VAULT_DIR
     from app.core import indexer, ingest
 
-    vault = sorted(
-        p.relative_to(VAULT_DIR).as_posix()
-        for p in VAULT_DIR.rglob("*")
-        if p.is_file() and ingest.is_supported(p)
-    )
+    limit = max(1, min(int(limit), 1000))
+    needle = q.strip().lower()
 
-    def _scheme(prefix: str, scheme: str) -> list[str]:
+    def _cut(items: list[str]) -> tuple[list[str], int]:
+        hit = sorted({s for s in items if s and (not needle or needle in s.lower())})
+        return hit[:limit], len(hit)
+
+    def _external(prefix: str) -> list[str]:
         try:  # a chroma hiccup must not 500 the picker
-            names = indexer.list_sources(prefix)
+            return [core.spec_from_indexer_source(s) for s in indexer.list_sources(prefix)]
         except Exception:  # noqa: BLE001
             log.debug("list_sources(%s) failed", prefix, exc_info=True)
             return []
-        return sorted({scheme + s[len(prefix) :] for s in names if "/" in s[len(prefix) :]})
 
+    vault, vault_n = _cut(
+        [
+            p.relative_to(VAULT_DIR).as_posix()
+            for p in VAULT_DIR.rglob("*")
+            if p.is_file() and ingest.is_supported(p)
+        ]
+    )
+    repos, repos_n = _cut(_external(indexer.REPO_SOURCE_PREFIX))
+    dirs_, dirs_n = _cut(_external(indexer.DIR_SOURCE_PREFIX))
     return {
         "vault": vault,
-        "repos": _scheme(indexer.REPO_SOURCE_PREFIX, "repo:"),
-        "dirs": _scheme(indexer.DIR_SOURCE_PREFIX, "dir:"),
+        "repos": repos,
+        "dirs": dirs_,
+        "totals": {"vault": vault_n, "repos": repos_n, "dirs": dirs_n},
+        "card_counts": await core.source_card_counts(),
     }
+
+
+@router.get("/search")
+async def search_material(q: str, top_k: int = 6):
+    """Retrieval hits, ready to card.
+
+    Wraps the same `indexer.search_auto` the KB page uses, but each hit arrives
+    with the `spec` that `collect_material` accepts and with how many cards
+    already came from that source — so the panel needs no mapping logic of its
+    own and `kb.py` stays untouched.
+
+    First call after a cold start pulls in the embedder and reranker (~6s per
+    PLAN.md v0.10), so the caller must show a waiting state.
+    """
+    import asyncio
+
+    from app.core import indexer
+
+    if not q.strip():
+        raise HTTPException(400, "先输入一个问题")
+    top_k = max(1, min(int(top_k), 20))
+    hits = await asyncio.to_thread(indexer.search_auto, q.strip(), top_k)
+    counts = await core.source_card_counts()
+    out = []
+    for h in hits:
+        src = h.get("source") or ""
+        spec = core.spec_from_indexer_source(src)
+        out.append(
+            {
+                "source": src,
+                "spec": spec,
+                "title": h.get("title") or src,
+                "chunk": h.get("chunk"),
+                "score": h.get("score"),
+                "text": h.get("text") or "",
+                "cards": counts.get(spec or src, 0),
+            }
+        )
+    return {"query": q.strip(), "hits": out}
 
 
 @router.get("/material")
 async def get_material(source: str):
-    """Parsed text of one source, for the manual cloze pane."""
+    """Parsed text of one source, for the manual cloze pane.
+
+    Reads up to PANE_MAX_CHARS rather than the model's 15000-char budget: the pane
+    is for reading and selecting, and a real source file is routinely longer than
+    a prompt (core/cards.py alone is 45k chars, so the tighter cap made two thirds
+    of it unselectable).
+    """
     try:
-        src, label, text = core.collect_material(source_path=source)
+        src, label, text = core.collect_material(
+            source_path=source, max_chars=core.PANE_MAX_CHARS
+        )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    return {"source": src, "source_label": label, "text": text}
+    return {
+        "source": src,
+        "source_label": label,
+        "text": text,
+        # exact length equal to the cap means it almost certainly got cut; a false
+        # positive here costs one extra hint line, so the heuristic is fine
+        "truncated": len(text) >= core.PANE_MAX_CHARS,
+        "gen_limit": core.MAX_INPUT_CHARS,
+    }
 
 
 @router.get("/queue")

@@ -123,12 +123,27 @@ def main() -> None:
 
         # ---- 取材来源（vault + repo: / dir:）----
         srcs = req("GET", "/api/cards/sources")
-        assert set(srcs) == {"vault", "repos", "dirs"}, srcs
-        assert all(isinstance(v, list) for v in srcs.values()), srcs
+        assert set(srcs) == {"vault", "repos", "dirs", "totals", "card_counts"}, srcs
+        assert all(isinstance(srcs[k], list) for k in ("vault", "repos", "dirs")), srcs
+        full = srcs["totals"]["vault"]
+        assert full == len(srcs["vault"]), srcs["totals"]
+
+        # filtering is server-side on purpose: a monorepo would otherwise ship
+        # ~1500 paths on every panel open
+        one = req("GET", "/api/cards/sources?limit=1")
+        assert len(one["vault"]) == 1 and one["totals"]["vault"] == full, one["totals"]
+        none = req("GET", "/api/cards/sources?q=zzz-no-such-file")
+        assert none["vault"] == [] and none["totals"]["vault"] == 0, none
+
+        # /search only gets its guard exercised here: a real retrieval would load
+        # the embedder + reranker and open the live chroma dir from a second
+        # process. The happy path is covered by the end-to-end pass instead.
+        expect_error("GET", "/api/cards/search?q=", None, 400, "问题")
+
         expect_error("GET", "/api/cards/material?source=repo:nope/x.py", None, 400, "仓库")
         expect_error("GET", "/api/cards/material?source=dir:nope/x.md", None, 400, "目录")
         expect_error("GET", "/api/cards/material?source=../secrets.md", None, 400, "越出")
-        print("sources + material guards ok")
+        print("sources 筛选 + material/search 守卫 ok")
 
         # save cards, then exact-duplicate resubmission is skipped
         cards = [
@@ -211,6 +226,11 @@ def main() -> None:
         saved = req("GET", f"/api/cards/{r['ids'][0]}")["card"]
         assert saved["origin"] == "manual" and saved["kind"] == "cloze", saved
         print("manual cloze card stored with origin=manual ok")
+
+        # the picker's "already carded" badge reads from this rollup
+        counts = req("GET", "/api/cards/sources")["card_counts"]
+        assert counts.get("notes/项目笔记.md") == 3, counts  # 2 batch survivors + the cloze
+        print("card_counts rollup ok")
 
         # prefs round-trip (the two-gate trap: key must survive _DEFAULTS + PrefsIn)
         req("PUT", "/api/settings/prefs", {"cards_review_per_day": 5})
