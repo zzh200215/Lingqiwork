@@ -412,6 +412,38 @@ async def update_provider(
     return _mask(row)
 
 
+@router.post("/providers/{provider_id}/probe")
+async def probe_provider(provider_id: int, db: AsyncSession = Depends(get_db)):
+    """Fire one minimal request per configured model and cache the outcome.
+
+    This is the button that would have saved an hour on 2026-09-04: the account's
+    free quota was gone for `qwen3.7-plus` only, and because that model sat first in
+    the list every background feature used it while a working `qwen-turbo` waited
+    second. `default_model` in the response is what the automated features will
+    reach after this probe.
+    """
+    from app.core import providers as prov
+
+    row = await db.get(ProviderConfig, provider_id)
+    if not row:
+        raise HTTPException(404, "provider not found")
+    if not row.models:
+        raise HTTPException(400, "这个 provider 还没配置任何模型")
+    if not row.api_key:
+        raise HTTPException(400, "这个 provider 还没填 api_key")
+
+    results = {
+        f"{row.name}/{m}": await prov.probe_model(row.kind, row.base_url, row.api_key, m)
+        for m in row.models
+    }
+    prov.record_health(results)
+    return {
+        "provider": row.name,
+        "results": [{"model_id": k, **v} for k, v in results.items()],
+        "default_model": prov.default_model_id(),
+    }
+
+
 @router.delete("/providers/{provider_id}")
 async def delete_provider(provider_id: int, db: AsyncSession = Depends(get_db)):
     row = await db.get(ProviderConfig, provider_id)

@@ -41,14 +41,25 @@ class AskRequest(BaseModel):
 
 
 async def _default_model() -> tuple[ProviderConfig, str]:
+    """The default model as a (provider, model) pair.
+
+    Third and last of the old copies of this rule; it now asks
+    `core.providers.default_model_id()` so a model with a recent failed probe is
+    skipped here too, then resolves the provider row it needs.
+    """
+    from app.core.providers import default_model_id
+
+    mid = default_model_id()
+    if not mid or "/" not in mid:
+        raise HTTPException(400, "no enabled provider with models configured")
+    pname, model = mid.split("/", 1)
     async with SessionLocal() as db:
-        providers = (
-            await db.execute(select(ProviderConfig).where(ProviderConfig.enabled.is_(True)))
-        ).scalars().all()
-    for p in providers:
-        if p.models:
-            return p, p.models[0]
-    raise HTTPException(400, "no enabled provider with models configured")
+        provider = (
+            await db.execute(select(ProviderConfig).where(ProviderConfig.name == pname))
+        ).scalar_one_or_none()
+    if provider is None:
+        raise HTTPException(400, f"provider '{pname}' not configured")
+    return provider, model
 
 
 @router.post("")

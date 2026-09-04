@@ -75,6 +75,9 @@ _DEFAULTS: dict[str, Any] = {
     "cards_remind_enabled": True,  # daily "N cards due" nudge via 零柒
     "cards_remind_time": "20:00",
     "cards_remedy_enabled": True,  # weekly follow-up explainer for weak sources
+    # 后台可信：逐模型探测结果 {"provider/model": {ok, code, message, at, ms}}。
+    # 不是开关，是缓存——default_model_id() 用它跳过已知打不通的模型。
+    "provider_health": {},
 }
 
 

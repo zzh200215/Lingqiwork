@@ -796,6 +796,10 @@ async def queue() -> dict:
 
 
 def as_dict(c) -> dict:
+    # one shared UTC serialiser: SQLite drops the tz, and a bare isoformat makes
+    # the page read 09:41 UTC as 09:41 local (see models.iso_utc)
+    from app.models import iso_utc
+
     return {
         "id": c.id,
         "kind": c.kind,
@@ -808,14 +812,14 @@ def as_dict(c) -> dict:
         "source_excerpt": c.source_excerpt,
         "origin": c.origin,
         "suspended": c.suspended,
-        "due": c.due.isoformat() if c.due else None,
+        "due": iso_utc(c.due),
         "interval_days": c.interval_days,
         "ease": c.ease,
         "reps": c.reps,
         "lapses": c.lapses,
         "last_grade": c.last_grade,
-        "last_review": c.last_review.isoformat() if c.last_review else None,
-        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "last_review": iso_utc(c.last_review),
+        "created_at": iso_utc(c.created_at),
     }
 
 
@@ -917,6 +921,8 @@ async def stats() -> dict:
     """Dashboard/review-page numbers. Best-effort: any failure returns zeros."""
     from sqlalchemy import func, select, text as sql
 
+    from app.models import iso_utc
+
     from app.db import SessionLocal
     from app.models import Card
 
@@ -976,7 +982,7 @@ async def stats() -> dict:
                     .limit(1)
                 )
             ).scalar()
-            out["next_due"] = nxt.isoformat() if nxt else None
+            out["next_due"] = iso_utc(nxt)
 
             done, new_done = await _today_counts(db)
             out["today_reviewed"], out["today_new"] = done, new_done

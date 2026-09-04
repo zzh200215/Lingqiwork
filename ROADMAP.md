@@ -249,20 +249,18 @@ V1–V16 的对标项全部完成，观察池也清空了——按竞品清单�
 
 **风险**：检索走 `indexer.search_auto`，会拉起 embedder + reranker，冷启动首次约 6s（`PLAN.md` v0.10 实测），检索按钮必须有等待态。`CardMaker.tsx` 会从 ~420 行涨到约 550——超过 600 就该把 mode 面板拆出去，但这一期先不拆。
 
-**V20 让后台可信（起因：2026-09-04 的一次静默失效）**
+**V20 让后台可信** ✅ 2026-09-04（起因：当天的一次静默失效）
 
-动机不是设想出来的。这天发现 `qwen3.7-plus` 的免费额度早已耗尽，而 `_default_model_id()`（`pet.py:60`）取的是 `models[0]`——于是**每一个自动化功能都在往一个死模型上打**：每日到期提醒、每周薄弱来源补讲、每日摘要、零柒早晚问候、自动记忆、图谱抽取。它们全都是 best-effort：`except` 里记一行 stderr 然后咽下去。没有任何地方会告诉你「昨晚那个补讲没写成」。
+动机不是设想出来的。这天发现 `qwen3.7-plus` 的免费额度早已耗尽，而 `_default_model_id()` 取的是 `models[0]`——于是**每一个自动化功能都在往一个死模型上打**：每日到期提醒、每周薄弱来源补讲、每日摘要、零柒早晚问候、自动记忆、图谱抽取。它们全都是 best-effort：`except` 里记一行 stderr 然后咽下去。没有任何地方会告诉你「昨晚那个补讲没写成」。
 
 对一个主张「会自己长大」的系统，自增长机器静默坏掉是致命失败模式。而且这正是「完成度与启用度断崖」的一部分——有些功能不是没做，是做完之后从来没成功跑过一次，而没人知道。
 
-- [ ] **a. 模型健康探测**（约 1 小时，单独就能防住这天的问题）
-  `POST /api/settings/providers/{id}/probe`：对该 provider 的每个模型各打一次 1-token 请求，返回逐模型状态（可用 / 403 额度耗尽 / 404 不存在 / 连不上）。设置页每个 provider 一个「测一下」按钮 + 逐模型徽标。结果带时间戳缓存进 `config.json` 的 `provider_health`
-- [ ] **b. `job_runs` 表 + 调度器自动记录**（约半天，防住这一类问题）
-  `job_runs(job_id, started_at, seconds, ok, message)`。关键设计：在 `core/scheduler.py` 的 `set_daily` / `set_cron` 里包一层 wrapper，**现有 8 个 job 一行不改**就全部被记录（照 V18 的纯追加纪律）。每个 job_id 滚动保留 20 条（照 `tasks.py` 的 per-task 保留）。`GET /api/health/jobs` 返回每个 job 的 next_run、上次结果、连续失败次数
-- [ ] **c. 统一 `_default_model_id()`，并让它跳过已知坏模型**
-  这条债必须在这里还：「取第一个**健康**的模型」这个逻辑重复 7 遍（`chat.py:55`、`tasks.py:143`、`ask.py:43`、`notes.py:230`、`images.py:113`、`digest.py:23`、`pet.py:49`，后两个还绕过 ORM 用裸 sqlite3）必然漂移。收进 `core/models.py::default_model_id()` 一处，读 `provider_health` 跳过上次探测失败的模型。**这是唯一有真回归风险的一步**——它动的是 chat 主路径，没有健康数据时行为必须与现在完全一致
-- [ ] **d. 今日页一行自检**
-  复习行下面一行：`⚙️ 后台 7 正常 · 1 失败（每周补讲 · 模型 403）`，点开看详情。不新增开关、不需要配置——延续 V18 的口径
+- [x] **a. 模型健康探测** —— `POST /api/settings/providers/{id}/probe` 对每个模型各打一次 1-token 请求（走 `llm.stream_chat` 而不是手搓 HTTP，探测通过而聊天失败会比没有探测更糟）。设置页每个 provider 一个「测一下」+ 逐模型徽标，结果带时间戳缓存进 `config.json` 的 `provider_health`
+- [x] **b. `job_runs` 表 + 调度器自动记录** —— wrapper 加在 `set_daily` / `set_cron` 里，**现有 8 个 job 一行未改**。返回 `{"ok": False}` 的软失败也算失败（`remediate` 就是这么报错的）。每个 job_id 滚动保留 20 条
+- [x] **c. 统一默认模型解析** —— 实际是 **3 份实现**（`pet._default_model_id` 与 `digest._resolve_model_id` 逐字节相同，`ask._default_model` 是异步 ORM 版），收进 `core/providers.py::default_model_id()` 一处，三个旧入口变成 delegate 所以 10 个调用点零改动。新规则：跳过最近探测失败的模型；**未探测过 ≠ 坏**（否则全新装机会把每个模型都判死）；全坏时返回第一个而不是 None（None 会让调用方谎报「没有已启用的 provider」，把真正的 403 藏起来）
+- [x] **d. 今日页一行自检** —— `⚙️ 后台 7 个作业在跑 · 2 个已关 · 默认模型 qwen/qwen3.8-flash`。默认模型打不通或有作业「应跑未注册」时变红
+- [x] **顺带修好两个真 bug**：① `KNOWN_JOBS` —— 关掉或没注册的作业原来直接从报告里消失，和健康状态长得一模一样（这天 `cards_remind` / `cards_remediate` 就是被关掉了而没人知道），现在「已关」和「应跑未注册」分得开；② `iso_utc` —— SQLite 没有时区类型，`DateTime(timezone=True)` 读回来是 naive，裸 `isoformat()` 让页面把 09:41 UTC 当 09:41 本地读，**差 8 小时**；复习页那句「下一张 11:57 到期」其实是 19:57
+- [x] 28 个离线用例（共 303）+ `smoke_health.py`（把探测指向一个关闭的本地端口，离线跑通「探测失败 → 落缓存 → 默认模型判坏 → 有活模型时自动跳过」整条闭环）+ 真 provider 实测：5 个模型逐个探测，只有 `qwen3.7-plus` 报 `403 AllocationQuota.FreeTierOnly`；把 `cards_remind` 挪到一分钟后，作业真跑并在 `job_runs` 留下记录
 
 **V21 生活域其余两块（待办 / 日记）—— 先看一周数据再决定**
 

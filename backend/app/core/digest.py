@@ -21,23 +21,15 @@ _MAX_FILES = 30
 
 
 def _resolve_model_id() -> str | None:
-    """Pick the first enabled provider's first model as digest writer."""
-    import json
-    import sqlite3
+    """First enabled provider's first *working* model.
 
-    from app.config import settings
+    A delegate, same as `pet._default_model_id`: this was a byte-identical copy of
+    that function until the rule moved to `core/providers.py`. Its callers here and
+    in kg / memory_tidy / podcast are unchanged.
+    """
+    from app.core.providers import default_model_id
 
-    conn = sqlite3.connect(settings.db_path)
-    try:
-        row = conn.execute(
-            "SELECT name, models FROM provider_configs WHERE enabled = 1 ORDER BY id LIMIT 1"
-        ).fetchone()
-    finally:
-        conn.close()
-    if not row:
-        return None
-    models = json.loads(row[1] or "[]")
-    return f"{row[0]}/{models[0]}" if models else None
+    return default_model_id()
 
 
 def collect_recent_changes(days: int = _RECENT_DAYS) -> list[Path]:

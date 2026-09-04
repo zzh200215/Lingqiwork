@@ -364,7 +364,7 @@ async def get_card(card_id: int):
     from sqlalchemy import select
 
     from app.db import SessionLocal
-    from app.models import Card, CardReview
+    from app.models import Card, CardReview, iso_utc
 
     async with SessionLocal() as db:
         card = (await db.execute(select(Card).where(Card.id == card_id))).scalar_one_or_none()
@@ -387,7 +387,7 @@ async def get_card(card_id: int):
         "reviews": [
             {
                 "id": r.id,
-                "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+                "reviewed_at": iso_utc(r.reviewed_at),
                 "grade": r.grade,
                 "seconds": r.seconds,
                 "interval_before": r.interval_before,

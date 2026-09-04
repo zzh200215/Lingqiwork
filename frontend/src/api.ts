@@ -632,6 +632,46 @@ export interface HabitDef {
   archived: boolean
 }
 
+// ---------- 后台自检 ----------
+
+/** One model's probe outcome. `code` is like "403 AllocationQuota.FreeTierOnly". */
+export interface ModelProbe {
+  model_id: string
+  ok: boolean
+  code: string
+  message: string
+  ms: number
+}
+
+export interface JobHealth {
+  job_id: string
+  registered: boolean
+  /** the prefs flag that turns this job on ("" for task_<id> jobs) */
+  enabled_by: string
+  /** you turned it off — not a fault */
+  disabled: boolean
+  next_run: string | null
+  runs: number
+  consecutive_failures: number
+  last: { at: string | null; ok: boolean; seconds: number; message: string } | null
+}
+
+export interface SelfCheck {
+  jobs_total: number
+  jobs_live: number
+  /** switched off in settings */
+  jobs_off: string[]
+  /** should be running but is not registered — a bug, not a preference */
+  jobs_missing: string[]
+  jobs_failing: { job_id: string; fails: number; message: string }[]
+  models_total: number
+  models_broken: { model_id: string; code: string }[]
+  default_model: string | null
+  /** the model every automated feature would reach is the broken one */
+  default_model_broken: boolean
+  never_probed: boolean
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -1062,4 +1102,13 @@ export const api = {
     }),
   untickHabit: (id: number) =>
     request<{ ok: boolean; deleted: number }>(`/api/habits/${id}/tick`, { method: 'DELETE' }),
+
+  // ---------- 后台自检 ----------
+  probeProvider: (id: number) =>
+    request<{ provider: string; results: ModelProbe[]; default_model: string | null }>(
+      `/api/settings/providers/${id}/probe`,
+      { method: 'POST' }
+    ),
+  healthJobs: () => request<{ jobs: JobHealth[]; keep_runs: number }>('/api/health/jobs'),
+  selfCheck: () => request<SelfCheck>('/api/health/self'),
 }

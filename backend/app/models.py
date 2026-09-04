@@ -9,6 +9,21 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def iso_utc(dt: datetime | None) -> str | None:
+    """ISO string a browser will read as UTC.
+
+    SQLite has no timezone type, so a `DateTime(timezone=True)` column round-trips
+    to a NAIVE datetime. Serialising that bare makes `new Date(...)` in the page
+    treat 09:41 UTC as 09:41 local — eight hours off in this timezone, which is why
+    the review page used to say a card was due at 11:57 when it was really 19:57.
+    Every value in these columns is written by `utcnow()`, so stamping the offset
+    back on is safe and is the fix.
+    """
+    if dt is None:
+        return None
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat()
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -340,8 +355,34 @@ class HabitLog(Base):
     logged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class JobRun(Base):
+    """One execution of a scheduled background job.
+
+    Exists because of a concrete incident: on 2026-09-04 the default model's free
+    quota ran out, and since all eight background jobs swallow their exceptions by
+    design (a failing digest must not kill the scheduler), every automated feature
+    failed silently for days with nothing visible anywhere in the UI. For a system
+    whose whole claim is that it grows itself, the growth machinery breaking
+    invisibly is the fatal failure mode.
+
+    Rows are written by a wrapper in `core/scheduler.py`, so the existing jobs did
+    not have to change. Retention is `KEEP_RUNS` per job_id, matching the per-task
+    run log in `core/tasks.py`.
+    """
+
+    __tablename__ = "job_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(60), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    message: Mapped[str] = mapped_column(Text, default="")  # error, or a short result line
+
+
 # The uniqueness is load-bearing, not decoration: it is what makes a double tick
 # idempotent (the router upserts on it). Expressed as a unique Index rather than a
 # UniqueConstraint because a bare UniqueConstraint() at module level attaches to no
 # table and would silently do nothing.
 Index("ix_habit_logs_day", HabitLog.habit_id, HabitLog.day, unique=True)
+Index("ix_job_runs_recent", JobRun.job_id, JobRun.id)

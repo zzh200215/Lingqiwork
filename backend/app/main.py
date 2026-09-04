@@ -24,6 +24,7 @@ from app.routers import (
     evals,
     feeds,
     habits,
+    health as health_router,
     images,
     kb,
     kg,
@@ -151,6 +152,7 @@ app.include_router(feeds.router)
 app.include_router(feeds.mail_router)
 app.include_router(cards.router)
 app.include_router(habits.router)
+app.include_router(health_router.router)
 
 
 @app.get("/api/health")

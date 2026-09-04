@@ -59,28 +59,15 @@ def _pet_enabled() -> bool:
 
 
 def _default_model_id() -> str | None:
-    """First enabled provider's first model — same rule as the digest writer.
+    """First enabled provider's first *working* model.
 
-    Never raises: a missing/corrupt DB simply means no model, and every
-    caller has a template fallback for that.
+    Kept as a thin delegate so its six call sites did not have to change when the
+    rule moved into `core/providers.py`; that move is what made "skip a model whose
+    last probe failed" possible in one place instead of three.
     """
-    import json
-    import sqlite3
+    from app.core.providers import default_model_id
 
-    try:
-        conn = sqlite3.connect(settings.db_path)
-        try:
-            row = conn.execute(
-                "SELECT name, models FROM provider_configs WHERE enabled = 1 ORDER BY id LIMIT 1"
-            ).fetchone()
-        finally:
-            conn.close()
-    except Exception:  # noqa: BLE001
-        return None
-    if not row:
-        return None
-    models = json.loads(row[1] or "[]")
-    return f"{row[0]}/{models[0]}" if models else None
+    return default_model_id()
 
 
 def compose(kind: str, name: str = "", detail: str = "", count: int = 0) -> str:

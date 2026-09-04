@@ -7,6 +7,7 @@ import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
 import HabitStrip, { type HabitStripHandle } from './HabitStrip'
 import Layout from './Layout'
+import SelfCheckLine from './SelfCheckLine'
 import { api, type CardGrade, type CardItem, type CardStats } from './api'
 
 // Keyboard-first 今日 page: the review queue plus the habit grid. Every action
@@ -458,6 +459,8 @@ export default function ReviewPage() {
               ref={habits}
               onSummary={(done, total_) => setHabitSummary({ done, total: total_ })}
             />
+
+            <SelfCheckLine />
           </div>
         )}
 

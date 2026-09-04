@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import Layout from './Layout'
-import { api, type AgentPreset, type BackupList, type FeedItem, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool } from './api'
+import { api, type AgentPreset, type BackupList, type FeedItem, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool } from './api'
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -57,6 +57,9 @@ type SectionKey = (typeof SETTING_SECTIONS)[number]['key']
 
 export default function SettingsPage() {
   const [providers, setProviders] = useState<ProviderConfig[]>([])
+  const [probes, setProbes] = useState<Record<number, ModelProbe[]>>({})
+  const [probing, setProbing] = useState<number | null>(null)
+  const [defaultModel, setDefaultModel] = useState<string | null>(null)
   const [draft, setDraft] = useState({ ...EMPTY })
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -627,6 +630,22 @@ export default function SettingsPage() {
     if (!confirm('删除该 provider？')) return
     await api.deleteProvider(id)
     await refresh()
+  }
+
+  // 模型可用性探测：模型顺序决定所有自动化功能用哪一个，探测结果会让
+  // default_model_id() 自动跳过打不通的那些。名字避开已有的 MCP `probe` state
+  async function runProbe(id: number) {
+    setProbing(id)
+    setError('')
+    try {
+      const r = await api.probeProvider(id)
+      setProbes((p) => ({ ...p, [id]: r.results }))
+      setDefaultModel(r.default_model)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setProbing(null)
+    }
   }
 
   function startEdit(p: ProviderConfig) {
@@ -2106,31 +2125,79 @@ export default function SettingsPage() {
       {section === 'models' && (
       <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
         <h2 className="flex items-center gap-2 font-semibold"><span>🧠</span> 模型 Provider</h2>
+        <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
+          「测一下」会给这个 provider 的每个模型各打一次最小请求，逐个标出可用还是打不通。
+          <b>模型顺序有意义</b>：所有自动化功能（每日提醒、每周补讲、每日摘要、零柒问候、自动记忆、图谱抽取）
+          用的是第一个能打通的模型，探测失败的会被自动跳过。
+        </p>
         {providers.map((p) => (
           <div
             key={p.id}
-            className="flex items-center justify-between rounded-lg border border-neutral-200 px-4 py-3 dark:border-neutral-800"
+            className="rounded-lg border border-neutral-200 px-4 py-3 dark:border-neutral-800"
           >
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-medium">{p.name}</span>
-                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
-                  {p.kind}
-                </span>
-                {!p.enabled && <span className="text-xs text-red-500">已禁用</span>}
+            <div className="flex items-center justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{p.name}</span>
+                  <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
+                    {p.kind}
+                  </span>
+                  {!p.enabled && <span className="text-xs text-red-500">已禁用</span>}
+                </div>
+                <div className="truncate text-xs text-neutral-500">
+                  {p.models.join(', ') || '无模型'} {p.base_url && `· ${p.base_url}`}
+                </div>
               </div>
-              <div className="truncate text-xs text-neutral-500">
-                {p.models.join(', ') || '无模型'} {p.base_url && `· ${p.base_url}`}
+              <div className="flex shrink-0 gap-2 text-sm">
+                <button
+                  onClick={() => void runProbe(p.id)}
+                  disabled={probing === p.id}
+                  className="text-violet-600 hover:text-violet-800 disabled:opacity-50 dark:text-violet-300"
+                >
+                  {probing === p.id ? '测试中…' : '测一下'}
+                </button>
+                <button onClick={() => startEdit(p)} className="text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100">
+                  编辑
+                </button>
+                <button onClick={() => remove(p.id)} className="text-red-400 hover:text-red-600">
+                  删除
+                </button>
               </div>
             </div>
-            <div className="flex shrink-0 gap-2 text-sm">
-              <button onClick={() => startEdit(p)} className="text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100">
-                编辑
-              </button>
-              <button onClick={() => remove(p.id)} className="text-red-400 hover:text-red-600">
-                删除
-              </button>
-            </div>
+            {probes[p.id] && (
+              <div className="mt-2.5 space-y-1 border-t border-neutral-200/80 pt-2.5 dark:border-neutral-800/80">
+                {probes[p.id].map((r) => (
+                  <div key={r.model_id} className="flex items-center gap-2 text-xs">
+                    <span
+                      className={`rounded px-1.5 py-0.5 ${
+                        r.ok
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'
+                          : 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300'
+                      }`}
+                    >
+                      {r.ok ? '可用' : r.code || '打不通'}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
+                      {r.model_id.split('/').slice(1).join('/')}
+                    </span>
+                    {r.ok && <span className="text-neutral-400">{r.ms}ms</span>}
+                    {!r.ok && r.message && (
+                      <span className="min-w-0 max-w-[45%] truncate text-neutral-400" title={r.message}>
+                        {r.message}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {defaultModel && (
+                  <p className="pt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                    自动化功能将使用：
+                    <span className="font-mono text-neutral-700 dark:text-neutral-200">
+                      {defaultModel}
+                    </span>
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         ))}
         {!providers.length && <p className="text-sm text-neutral-400">尚未配置任何 provider</p>}
