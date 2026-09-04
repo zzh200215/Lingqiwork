@@ -483,7 +483,7 @@ export interface FeedList {
 export type CardKind = 'concept' | 'cloze' | 'scenario' | 'debug'
 export type CardGrade = 1 | 2 | 3 | 4
 
-/** A generated candidate, not yet in the deck. */
+/** A candidate, not yet in the deck — AI-generated or hand-written. */
 export interface CardDraft {
   kind: CardKind
   front: string
@@ -491,8 +491,16 @@ export interface CardDraft {
   hint: string
   topic: string
   excerpt: string
+  origin?: 'ai' | 'manual'
   duplicate_of?: number | null // -1 = duplicate of another card in this same batch
   similarity?: number | null
+}
+
+/** Everything that can be carded. Externals are prefixed `repo:` / `dir:`. */
+export interface CardSources {
+  vault: string[]
+  repos: string[]
+  dirs: string[]
 }
 
 export interface CardItem {
@@ -558,6 +566,54 @@ export interface CardSourceStat {
   avg_grade: number | null
   again_rate: number | null
   weak: boolean
+}
+
+// ---------- 习惯打卡 ----------
+
+export type HabitKind = 'check' | 'count'
+
+/** One habit as the 今日 page sees it: definition + today's value + streak. */
+export interface Habit {
+  id: number
+  name: string
+  icon: string
+  kind: HabitKind
+  target: number
+  unit: string
+  /** 7 chars of 0/1, Monday first */
+  weekdays: string
+  /** "" = ticked by hand; "cards" = derived from card_reviews, not tickable */
+  auto: string
+  sort: number
+  value: number
+  done: boolean
+  scheduled: boolean
+  streak: number
+  /** local date strings that count as done — the heatmap input */
+  history: string[]
+}
+
+export interface HabitToday {
+  day: string
+  habits: Habit[]
+  done: number
+  total: number
+  pending: string[]
+  heatmap_days: number
+}
+
+/** Shape returned by create/update — the definition only, no daily state. */
+export interface HabitDef {
+  id: number
+  name: string
+  icon: string
+  kind: HabitKind
+  target: number
+  unit: string
+  weekdays: string
+  auto: string
+  sort: number
+  archived: boolean
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -943,4 +999,37 @@ export const api = {
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: 'DELETE' }),
   weakSources: (days = 30) =>
     request<{ days: number; sources: CardSourceStat[] }>(`/api/cards/weak?days=${days}`),
+  /** Blank out a selected span. Server-side so the rules are covered by pytest. */
+  makeCloze: (body: { text: string; start: number; end: number; topic?: string }) =>
+    request<CardDraft>('/api/cards/cloze', { method: 'POST', body: JSON.stringify(body) }),
+  cardSources: () => request<CardSources>('/api/cards/sources'),
+  cardMaterial: (source: string) =>
+    request<{ source: string; source_label: string; text: string }>(
+      '/api/cards/material?source=' + encodeURIComponent(source)
+    ),
+
+  // ---------- 习惯打卡 ----------
+  habitsToday: () => request<HabitToday>('/api/habits/today'),
+  seedHabits: () =>
+    request<{ added: number; message?: string }>('/api/habits/seed', { method: 'POST' }),
+  createHabit: (body: {
+    name: string
+    icon?: string
+    kind?: HabitKind
+    target?: number
+    unit?: string
+    weekdays?: string
+  }) => request<HabitDef>('/api/habits', { method: 'POST', body: JSON.stringify(body) }),
+  updateHabit: (
+    id: number,
+    patch: Partial<Pick<HabitDef, 'name' | 'icon' | 'target' | 'unit' | 'weekdays' | 'sort' | 'archived'>>
+  ) => request<HabitDef>(`/api/habits/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
+  deleteHabit: (id: number) => request<{ ok: boolean }>(`/api/habits/${id}`, { method: 'DELETE' }),
+  tickHabit: (id: number, body: { value?: number; day?: string } = {}) =>
+    request<{ ok: boolean; value: number; done: boolean }>(`/api/habits/${id}/tick`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  untickHabit: (id: number) =>
+    request<{ ok: boolean; deleted: number }>(`/api/habits/${id}/tick`, { method: 'DELETE' }),
 }

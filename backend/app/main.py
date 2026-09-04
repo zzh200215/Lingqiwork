@@ -23,6 +23,7 @@ from app.routers import (
     dirs,
     evals,
     feeds,
+    habits,
     images,
     kb,
     kg,
@@ -149,6 +150,7 @@ app.include_router(kg.router)
 app.include_router(feeds.router)
 app.include_router(feeds.mail_router)
 app.include_router(cards.router)
+app.include_router(habits.router)
 
 
 @app.get("/api/health")

@@ -160,12 +160,75 @@ _GEN_SYSTEM = (
 )
 
 
+# `:` is illegal in Windows filenames, so these two schemes can never shadow a
+# real vault-relative path. Deliberately NOT reusing the indexer's "repos/" /
+# "dirs/" prefixes (indexer.py:35-36): with those, a vault subdirectory happening
+# to be named repos/ would be silently hijacked. `Card.source` does not need to
+# equal the indexer's source id — it is only used for the weak-source rollup,
+# `existing_fronts` grouping and the vault deep-link, none of which require it.
+EXTERNAL_SCHEMES = ("repo:", "dir:")
+MAX_MATERIAL_BYTES = 500_000  # same order as dirs.MAX_FILE_BYTES; bigger isn't human-readable
+
+
+def _external_root(scheme: str, name: str):
+    """-> Path of the git clone or the registered folder. Raises ValueError."""
+    from pathlib import Path
+
+    if scheme == "repo:":
+        from app.core import repos
+
+        if not repos.NAME_RE.match(name):
+            raise ValueError(f"非法仓库名：{name}")
+        root = (repos.REPOS_DIR / name).resolve()
+        if not root.is_dir():
+            raise ValueError(f"没有这个仓库：{name}（先在知识库页克隆）")
+        return root
+
+    from app.core import dirs
+
+    entry = next((d for d in dirs.list_dirs() if d.get("name") == name), None)
+    if entry is None:
+        raise ValueError(f"没有这个目录：{name}（先在知识库页注册）")
+    root = Path(entry.get("path") or "").expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"目录不在了：{root}")
+    return root
+
+
+def _collect_external(spec: str) -> tuple[str, str, str]:
+    """"repo:<name>/<rel>" or "dir:<name>/<rel>" -> (source, label, material)."""
+    from app.core import ingest
+
+    scheme = next(s for s in EXTERNAL_SCHEMES if spec.startswith(s))
+    name, _, rel = spec[len(scheme) :].strip().lstrip("/\\").partition("/")
+    if not name or not rel:
+        raise ValueError(f"来源格式应为 {scheme}名称/文件路径")
+    root = _external_root(scheme, name)
+    p = (root / rel).resolve()
+    if not p.is_relative_to(root):
+        raise ValueError("路径越出该来源的根目录")
+    if not p.is_file():
+        raise ValueError(f"找不到文件：{rel}")
+    try:
+        if p.stat().st_size > MAX_MATERIAL_BYTES:
+            raise ValueError(f"文件太大（超过 {MAX_MATERIAL_BYTES // 1000}KB）")
+    except OSError as e:
+        raise ValueError(f"读不了这个文件：{e}") from e
+    material = (ingest.parse_file(p) or "").strip()[:MAX_INPUT_CHARS]
+    if len(material) < MIN_INPUT_CHARS:
+        raise ValueError("这个文件内容太短，出不了卡")
+    source = f"{scheme}{name}/{p.relative_to(root).as_posix()}"
+    return source, source, material
+
+
 def collect_material(source_path: str = "", text: str = "") -> tuple[str, str, str]:
     """-> (source_rel, source_label, material). Filesystem only, no DB.
 
-    Exactly one of source_path / text must be given. The `text` entry exists so
-    material outside the vault can be carded — PLAN.md sits at the repo root and
-    would never pass the vault containment check. Raises ValueError.
+    Exactly one of source_path / text must be given. Three kinds of source_path:
+    a vault-relative path, or a `repo:`/`dir:` spec for indexed material outside
+    the vault. The `text` entry exists for everything with no file at all —
+    PLAN.md sits at the repo root and would never pass the containment check.
+    Raises ValueError.
     """
     has_path, has_text = bool((source_path or "").strip()), bool((text or "").strip())
     if has_path == has_text:
@@ -177,11 +240,15 @@ def collect_material(source_path: str = "", text: str = "") -> tuple[str, str, s
             raise ValueError(f"文本太短（至少 {MIN_INPUT_CHARS} 字）")
         return "", "粘贴文本", material
 
+    spec = source_path.strip()
+    if spec.startswith(EXTERNAL_SCHEMES):
+        return _collect_external(spec)
+
     from app.config import VAULT_DIR
     from app.core import ingest
 
     root = VAULT_DIR.resolve()
-    rel = source_path.strip().lstrip("/\\")
+    rel = spec.lstrip("/\\")
     p = (root / rel).resolve()
     if not p.is_relative_to(root):
         raise ValueError("路径越出 vault 目录")
@@ -191,6 +258,88 @@ def collect_material(source_path: str = "", text: str = "") -> tuple[str, str, s
     if len(material) < MIN_INPUT_CHARS:
         raise ValueError("这篇内容太短，出不了卡")
     return p.relative_to(root).as_posix(), p.relative_to(root).as_posix(), material
+
+
+# ---------- 划词挖空（手工建卡，零 LLM） ----------
+
+CLOZE_BLANK = "____"
+CLOZE_MAX_SELECTION = 200  # 选超过这么多字就不是填空了
+CLOZE_MIN_CONTEXT = 15  # 挖完剩下的线索少于这么多字，这张卡答不了
+_BLANK_LINE = re.compile(r"\n[ \t\r]*\n")  # 段落分隔，容忍 \r 和行内空白
+_FENCE = re.compile(r"^[ \t]*(?:`{3,}|~{3,})", re.M)
+
+
+def _fence_bounds(text: str, start: int, end: int) -> tuple[int, int] | None:
+    """If the span sits inside a ``` fenced block, the whole block's [lo, hi)."""
+    marks = list(_FENCE.finditer(text))
+    for i in range(0, len(marks) - 1, 2):  # markers pair up open/close in order
+        lo = marks[i].start()
+        nl = text.find("\n", marks[i + 1].end())
+        hi = len(text) if nl < 0 else nl
+        if lo <= start and end <= hi:
+            return lo, hi
+    return None
+
+
+def _block_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """The span's containing block: a whole fenced block, else the paragraph."""
+    fence = _fence_bounds(text, start, end)
+    if fence:
+        return fence
+    lo = 0
+    for m in _BLANK_LINE.finditer(text, 0, start):
+        lo = m.end()
+    m = _BLANK_LINE.search(text, end)
+    return lo, m.start() if m else len(text)
+
+
+def _line_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    nl = text.find("\n", end)
+    return text.rfind("\n", 0, start) + 1, len(text) if nl < 0 else nl
+
+
+def make_cloze(text: str, start: int, end: int) -> dict | None:
+    """Turn text[start:end] into a cloze draft. Pure — no model, no network.
+
+    `front` is the span's containing block (a fenced code block whole, otherwise
+    the paragraph) with the selection replaced by ____. Too long a block falls
+    back to the containing line, and then to a window sized so the result always
+    fits MAX_FRONT_CHARS.
+
+    Returns None rather than raising in the three cases where the card would be
+    worthless: nothing selected; more than CLOZE_MAX_SELECTION chars selected
+    (that is not a blank); or less than CLOZE_MIN_CONTEXT chars of cue left after
+    blanking, which is a card you cannot answer. Better no card than a bad one —
+    one unanswerable card is enough to stop trusting the queue.
+    """
+    if not text or start < 0 or end > len(text) or start >= end:
+        return None
+    answer = text[start:end].strip()
+    if not answer or len(answer) > CLOZE_MAX_SELECTION:
+        return None
+
+    block = _block_bounds(text, start, end)
+    half = max(0, MAX_FRONT_CHARS - len(CLOZE_BLANK)) // 2  # window budget fits by construction
+    front = ""
+    for lo, hi in (
+        block,
+        _line_bounds(text, start, end),
+        (max(0, start - half), min(len(text), end + half)),
+    ):
+        front = (text[lo:start] + CLOZE_BLANK + text[end:hi]).strip()
+        if len(front) <= MAX_FRONT_CHARS:
+            break
+    if len(front.replace(CLOZE_BLANK, "").strip()) < CLOZE_MIN_CONTEXT:
+        return None
+    return {
+        "kind": "cloze",
+        "front": front[:MAX_FRONT_CHARS],
+        "back": answer[:MAX_BACK_CHARS],
+        "hint": "",
+        "topic": "",
+        "excerpt": text[block[0] : block[1]].strip()[:2000],
+        "origin": "manual",
+    }
 
 
 def compose_gen_prompt(
@@ -930,16 +1079,36 @@ def reschedule() -> None:
 
 
 async def _remind() -> None:
-    """零柒 mentions today's queue — but only when there is actually something."""
+    """零柒 mentions today's queue and unticked habits — in ONE line, or none.
+
+    Both live on the same page and are the same daily ask, so a second job would
+    just be a second popup for the same thing. `pet.py:9` says frugal: nothing to
+    say, say nothing.
+    """
     try:
         q = await queue()
         n = len(q["due"]) + len(q["fresh"])
-        if n == 0:
-            return  # frugal by contract: nothing to say, say nothing
-        st = await stats()
+        try:  # a habits failure must not swallow the card reminder
+            from app.core import habits
+
+            pending, names = await habits.pending_today()
+        except Exception:  # noqa: BLE001
+            log.debug("habit pending lookup failed", exc_info=True)
+            pending, names = 0, []
+        if n == 0 and pending == 0:
+            return  # frugal by contract
         from app.core import pet
 
-        pet.emit("cards_due", count=n, detail=str(st.get("streak") or 0))
+        if n == 0:
+            pet.emit("habits_due", name="、".join(names), count=pending)
+            return
+        st = await stats()
+        streak = str(st.get("streak") or 0)
+        line = pet.compose("cards_due", detail=streak, count=n)
+        if pending:  # one sentence covering both, not compose() plus a dangling tail
+            since = f"，已经连着 {streak} 天了" if streak not in ("0", "") else ""
+            line = f"今天有 {n} 张卡到期、{pending} 个习惯没打勾{since}。"
+        pet.emit("cards_due", count=n, detail=streak, text=line)
     except Exception:  # noqa: BLE001 - the pet must never break the scheduler
         log.exception("cards remind failed")
 

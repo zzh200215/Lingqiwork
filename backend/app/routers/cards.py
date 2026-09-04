@@ -16,7 +16,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.core import cards as core
 
@@ -33,6 +33,21 @@ class CardDraft(BaseModel):
     hint: str = ""
     topic: str = ""
     excerpt: str = ""
+    origin: str = "ai"  # ai | manual — 手工/划词卡要能在统计里分出来
+
+    @field_validator("origin")
+    @classmethod
+    def check_origin(cls, v: str) -> str:
+        if v not in ("ai", "manual"):
+            raise ValueError("origin 只能是 ai 或 manual")
+        return v
+
+
+class ClozeIn(BaseModel):
+    text: str
+    start: int
+    end: int
+    topic: str = ""
 
 
 class GenerateIn(BaseModel):
@@ -123,6 +138,63 @@ async def add_cards(body: BatchIn):
         source_label=body.source_label,
         model_id=body.model_id,
     )
+
+
+@router.post("/cloze")
+async def make_cloze(body: ClozeIn):
+    """Turn a selected span into a cloze draft. Pure string work, no model call.
+
+    The rules live on the server rather than in the page because this project has
+    224 backend tests and no frontend test runner — logic in Python is logic that
+    is actually covered. One localhost round trip is <5ms.
+    """
+    draft = core.make_cloze(body.text, body.start, body.end)
+    if draft is None:
+        raise HTTPException(
+            400,
+            f"这段挖不成填空卡：选中 1-{core.CLOZE_MAX_SELECTION} 字，"
+            f"且挖空后要留下至少 {core.CLOZE_MIN_CONTEXT} 字线索",
+        )
+    if body.topic.strip():
+        draft["topic"] = body.topic.strip()[:100]
+    return draft
+
+
+@router.get("/sources")
+async def list_sources():
+    """Everything that can be carded: vault files + indexed repo/dir files."""
+    from app.config import VAULT_DIR
+    from app.core import indexer, ingest
+
+    vault = sorted(
+        p.relative_to(VAULT_DIR).as_posix()
+        for p in VAULT_DIR.rglob("*")
+        if p.is_file() and ingest.is_supported(p)
+    )
+
+    def _scheme(prefix: str, scheme: str) -> list[str]:
+        try:  # a chroma hiccup must not 500 the picker
+            names = indexer.list_sources(prefix)
+        except Exception:  # noqa: BLE001
+            log.debug("list_sources(%s) failed", prefix, exc_info=True)
+            return []
+        return sorted({scheme + s[len(prefix) :] for s in names if "/" in s[len(prefix) :]})
+
+    return {
+        "vault": vault,
+        "repos": _scheme(indexer.REPO_SOURCE_PREFIX, "repo:"),
+        "dirs": _scheme(indexer.DIR_SOURCE_PREFIX, "dir:"),
+    }
+
+
+@router.get("/material")
+async def get_material(source: str):
+    """Parsed text of one source, for the manual cloze pane."""
+    try:
+        src, label, text = core.collect_material(source_path=source)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"source": src, "source_label": label, "text": text}
 
 
 @router.get("/queue")

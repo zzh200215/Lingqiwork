@@ -33,6 +33,7 @@ KINDS = {
     "cards_due",
     "cards_done",
     "cards_remedy",
+    "habits_due",
 }
 
 CHAT_SYSTEM = (
@@ -104,6 +105,10 @@ def compose(kind: str, name: str = "", detail: str = "", count: int = 0) -> str:
         return f"今天 {count} 张过完了{tail}。"
     if kind == "cards_remedy":
         return f"你老错的那几个点我补了一段讲解（{count} 篇），在 notes 里。"
+    if kind == "habits_due":
+        # cards all cleared, only the habit grid left — `name` carries the names
+        tail = f"：{name}" if name else ""
+        return f"卡都清完了。还剩 {count} 个习惯没打勾{tail}。"
     if kind == "greeting":
         part = "早上" if now.hour < 11 else ("下午" if now.hour < 18 else "晚上")
         return f"{part}好。今天的事我盯着，有进展我叫你。"
@@ -145,9 +150,11 @@ def emit(
         finally:
             conn.close()
         # frugal: toast only for things that are useless unseen — failures,
-        # greetings, and the daily review nudge (a bubble in a page you never
-        # opened is worth nothing). At most one review toast per day.
-        if kind in ("task_failed", "greeting", "cards_due") and load_config().get("pet_notify", True):
+        # greetings, and the daily review/habit nudge (a bubble in a page you
+        # never opened is worth nothing). At most one such toast per day.
+        if kind in ("task_failed", "greeting", "cards_due", "habits_due") and load_config().get(
+            "pet_notify", True
+        ):
             try:
                 notify.desktop("零柒", line[:180])
             except Exception:  # noqa: BLE001

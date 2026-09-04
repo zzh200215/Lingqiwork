@@ -10,9 +10,7 @@ vault/
 
 # Runtime logs & temp
 *.log
-wb-tts-*/
-wb-pet-*/
-wb-v14-*/
+wb-*/
 .smoke*/
 .playwright-mcp/
 

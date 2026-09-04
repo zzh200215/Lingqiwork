@@ -293,3 +293,55 @@ class CardReview(Base):
 # the hot query is "not suspended and due <= now", ordered by due
 Index("ix_cards_queue", Card.suspended, Card.due)
 Index("ix_cards_source", Card.source)
+
+
+class Habit(Base):
+    """One thing you intend to do on a schedule — the definition, not the result.
+
+    Same shape as a review card at the day level ("due today, tick, streak"),
+    which is why both live on the 今日 page. `auto_source` is the interesting
+    field: a habit with `auto_source="cards"` is never ticked by hand, its daily
+    value is derived from `card_reviews`. That makes the habit grid non-empty on
+    day one without the user entering anything — the empty-list cold start is
+    what killed every other opt-in feature in this project.
+    """
+
+    __tablename__ = "habits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    icon: Mapped[str] = mapped_column(String(8), default="")
+    kind: Mapped[str] = mapped_column(String(10), default="check")  # check | count
+    target: Mapped[float] = mapped_column(Float, default=1.0)  # count 型的每日目标
+    unit: Mapped[str] = mapped_column(String(20), default="")  # 杯 / 步 / 分钟
+    weekdays: Mapped[str] = mapped_column(String(7), default="1111111")  # 周一→周日
+    auto_source: Mapped[str] = mapped_column(String(20), default="")  # "" | cards
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class HabitLog(Base):
+    """One habit's result on one day. At most one row per (habit, day).
+
+    `day` is a LOCAL calendar date string, not a datetime, on purpose: the only
+    question a habit answers is "did I do it that day", and every timezone-aware
+    comparison in this codebase has been a bug source. A date string also makes
+    the streak input a plain set[str].
+    """
+
+    __tablename__ = "habit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    habit_id: Mapped[int] = mapped_column(Integer, index=True)
+    day: Mapped[str] = mapped_column(String(10))  # "2026-09-04"
+    value: Mapped[float] = mapped_column(Float, default=1.0)
+    note: Mapped[str] = mapped_column(String(200), default="")
+    logged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# The uniqueness is load-bearing, not decoration: it is what makes a double tick
+# idempotent (the router upserts on it). Expressed as a unique Index rather than a
+# UniqueConstraint because a bare UniqueConstraint() at module level attaches to no
+# table and would silently do nothing.
+Index("ix_habit_logs_day", HabitLog.habit_id, HabitLog.day, unique=True)

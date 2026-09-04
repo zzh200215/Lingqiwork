@@ -11,6 +11,7 @@ import { api, type CardStats, type DashboardStats } from './api'
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [cards, setCards] = useState<CardStats | null>(null)
+  const [habits, setHabits] = useState<{ done: number; total: number } | null>(null)
   const [briefing, setBriefing] = useState<{ text: string; cached: boolean } | null>(null)
   const [briefingLoading, setBriefingLoading] = useState(true)
   const [error, setError] = useState('')
@@ -31,6 +32,10 @@ export default function DashboardPage() {
     api.dashboard().then(setStats).catch((e) => setError(String(e)))
     // swallowed on purpose: the dashboard must never blank out over one endpoint
     api.cardStats().then(setCards).catch(() => {})
+    api
+      .habitsToday()
+      .then((h) => setHabits({ done: h.done, total: h.total }))
+      .catch(() => {})
     void refreshBriefing()
   }, [refreshBriefing])
 
@@ -128,16 +133,19 @@ export default function DashboardPage() {
           />
           <NarrativeCard
             tone={(cards?.due_now ?? 0) > 0 ? 'rose' : 'sky'}
-            eyebrow="复习"
+            eyebrow="今日"
             headline={`${cards?.due_now ?? 0}`}
             label="今天到期"
-            sub={
+            sub={[
               cards && cards.streak > 0
                 ? `连续 ${cards.streak} 天`
                 : cards && cards.total > 0
                   ? '今天还没开始'
-                  : '还没有卡片'
-            }
+                  : '还没有卡片',
+              habits && habits.total > 0 ? `习惯 ${habits.done}/${habits.total}` : '',
+            ]
+              .filter(Boolean)
+              .join(' · ')}
             href="/review.html"
           />
           <NarrativeCard

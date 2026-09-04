@@ -37,10 +37,11 @@ function Logo() {
   )
 }
 
-// 「复习」排第二位：每天要做的事压在一周看一次的仪表盘之上
+// 「今日」排第二位：每天要做的事压在一周看一次的仪表盘之上。文件名仍是
+// review.html —— 改入口文件要动 vite.config.ts 和书签，换不来任何东西。
 const NAV = [
   { href: '/', label: '对话', icon: '💬', key: 'chat' },
-  { href: '/review.html', label: '复习', icon: '🎴', key: 'review' },
+  { href: '/review.html', label: '今日', icon: '☀️', key: 'review' },
   { href: '/dashboard.html', label: '仪表盘', icon: '📊', key: 'dashboard' },
   { href: '/notes.html', label: '笔记', icon: '📝', key: 'notes' },
   { href: '/kb.html', label: '知识库', icon: '📚', key: 'kb' },

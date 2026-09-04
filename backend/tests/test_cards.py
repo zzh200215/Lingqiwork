@@ -2,15 +2,35 @@
 
 No LLM, no DB, no clock. `schedule()` returns a seconds offset rather than a
 datetime precisely so these can be plain integer assertions.
+
+The external-source tests need real files on disk, so they use a project-local
+scratch dir — pytest's `tmp_path` lands under %TEMP%, which is not writable here.
+Same pattern as tests/test_dirs.py.
 """
+import atexit
+import shutil
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, ".")
 
+_TMP = Path(tempfile.mkdtemp(prefix="wb-cards-", dir=Path(__file__).parent))
+atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
+
+
+def _scratch(name: str) -> Path:
+    d = _TMP / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 from app.core import cards as cards_mod  # noqa: E402
 from app.core.cards import (  # noqa: E402
+    CLOZE_BLANK,
+    CLOZE_MAX_SELECTION,
     GRADUATE_INTERVAL,
     KINDS,
     LEARNING_AGAIN_SEC,
@@ -24,6 +44,7 @@ from app.core.cards import (  # noqa: E402
     collect_material,
     compose_gen_prompt,
     fuzz_interval,
+    make_cloze,
     parse_cards,
     schedule,
 )
@@ -264,6 +285,129 @@ def test_path_escaping_the_vault_is_rejected(bad):
 def test_missing_vault_file_is_rejected():
     with pytest.raises(ValueError):
         collect_material(source_path="definitely-not-here-9f3a.md")
+
+
+# ---------- external sources (repo: / dir:) ----------
+
+
+def test_unknown_repo_and_dir_are_rejected_as_such_not_as_vault_paths():
+    # the message proves the scheme was recognised rather than lstrip-ed into a
+    # vault-relative path, which is the whole point of using an illegal-on-Windows
+    # character as the scheme separator
+    with pytest.raises(ValueError, match="仓库"):
+        collect_material(source_path="repo:nope/x.py")
+    with pytest.raises(ValueError, match="目录"):
+        collect_material(source_path="dir:nope/x.md")
+
+
+@pytest.mark.parametrize("bad", ["repo:", "repo:onlyname", "dir:onlyname", "dir:/"])
+def test_malformed_external_spec_is_rejected(bad):
+    with pytest.raises(ValueError):
+        collect_material(source_path=bad)
+
+
+def test_repo_source_reads_the_file_and_echoes_a_stable_source_id(monkeypatch):
+    from app.core import repos
+
+    root = _scratch("repos-happy")
+    monkeypatch.setattr(repos, "REPOS_DIR", root)
+    (root / "myrepo" / "pkg").mkdir(parents=True)
+    (root / "myrepo" / "pkg" / "a.py").write_text("x = 1  # " + "料" * 200, encoding="utf-8")
+
+    source, label, material = collect_material(source_path="repo:myrepo/pkg/a.py")
+    assert source == label == "repo:myrepo/pkg/a.py"
+    assert material.startswith("x = 1")
+
+
+def test_repo_path_escaping_its_root_is_rejected(monkeypatch):
+    from app.core import repos
+
+    root = _scratch("repos-escape")
+    monkeypatch.setattr(repos, "REPOS_DIR", root)
+    (root / "myrepo").mkdir()
+    (root / "secret.md").write_text("料" * 200, encoding="utf-8")
+    with pytest.raises(ValueError):
+        collect_material(source_path="repo:myrepo/../secret.md")
+
+
+def test_oversized_external_file_is_rejected(monkeypatch):
+    from app.core import repos
+
+    root = _scratch("repos-big")
+    monkeypatch.setattr(repos, "REPOS_DIR", root)
+    (root / "big").mkdir()
+    (root / "big" / "huge.txt").write_text("x" * (cards_mod.MAX_MATERIAL_BYTES + 10))
+    with pytest.raises(ValueError, match="太大"):
+        collect_material(source_path="repo:big/huge.txt")
+
+
+# ---------- 划词挖空（纯字符串，零 LLM） ----------
+
+PARA = "RRF 融合的分数是 1/(k + rank + 1)，k 默认取 60。\n\n下一段无关内容。"
+
+
+def test_cloze_blanks_the_selection_and_keeps_the_paragraph_as_cue():
+    start = PARA.index("60")
+    card = make_cloze(PARA, start, start + 2)
+    assert card is not None
+    assert CLOZE_BLANK in card["front"]
+    assert "RRF" in card["front"] and "60" not in card["front"]
+    assert card["back"] == "60"
+    assert card["kind"] == "cloze" and card["origin"] == "manual"
+    # the excerpt keeps the block unblanked, so "where did this come from" is answerable
+    assert "60" in card["excerpt"]
+    # the next paragraph is a different block and must not leak in
+    assert "下一段" not in card["front"]
+
+
+def test_cloze_keeps_a_fenced_code_block_whole():
+    text = "说明文字。\n\n```python\nfor i in range(10):\n    print(i)\n```\n\n后面。"
+    start = text.index("range(10)")
+    card = make_cloze(text, start, start + len("range(10)"))
+    assert card is not None
+    assert card["front"].startswith("```python")
+    assert "print(i)" in card["front"]  # the rest of the block survived
+    assert "说明文字" not in card["front"] and "后面" not in card["front"]
+
+
+def test_cloze_falls_back_to_the_line_when_the_block_is_too_long():
+    line = "配置项 timeout 的默认值是 30 秒。\n"
+    text = "填充。" * 300 + "\n" + line + "尾巴。" * 300
+    start = text.index("30 秒")
+    card = make_cloze(text, start, start + 2)
+    assert card is not None
+    assert len(card["front"]) <= MAX_FRONT_CHARS
+    assert "timeout" in card["front"]
+    assert "填充。填充。" not in card["front"]
+
+
+def test_cloze_window_fallback_always_fits_the_front_cap():
+    text = "词" * 5000  # one enormous line, no blank lines anywhere
+    card = make_cloze(text, 2500, 2600)
+    assert card is not None
+    assert len(card["front"]) <= MAX_FRONT_CHARS
+
+
+def test_cloze_refuses_when_blanking_leaves_no_cue():
+    # selecting the entire paragraph leaves a front that is just "____"
+    text = "短短一句话。\n\n别的。"
+    assert make_cloze(text, 0, len("短短一句话。")) is None
+
+
+@pytest.mark.parametrize(
+    "start,end",
+    [(0, 0), (5, 3), (-1, 4), (0, 10_000)],
+)
+def test_cloze_rejects_degenerate_spans(start, end):
+    assert make_cloze("一二三四五六七八九十", start, end) is None
+
+
+def test_cloze_rejects_whitespace_only_and_overlong_selections():
+    text = "前面的内容够长够长够长。   后面的内容也够长够长够长。"
+    ws = text.index("   ")
+    assert make_cloze(text, ws, ws + 3) is None
+    long_text = "垫" * 50 + "答" * (CLOZE_MAX_SELECTION + 1) + "垫" * 50
+    assert make_cloze(long_text, 50, 50 + CLOZE_MAX_SELECTION + 1) is None
 
 
 # ---------- dedup (embedder seam monkeypatched) ----------

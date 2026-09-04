@@ -105,6 +105,31 @@ def main() -> None:
         expect_error("POST", "/api/cards/batch", {"cards": []}, 400, "没有要保存")
         print("fail-fast guards ok")
 
+        # ---- 划词挖空（纯字符串，零 LLM，不写库）----
+        para = "RRF 融合的分数是 1/(k + rank + 1)，k 默认取 60。\n\n下一段无关内容。"
+        at = para.index("60")
+        cloze = req(
+            "POST",
+            "/api/cards/cloze",
+            {"text": para, "start": at, "end": at + 2, "topic": "检索"},
+        )
+        assert cloze["kind"] == "cloze" and cloze["origin"] == "manual", cloze
+        assert "____" in cloze["front"] and "60" not in cloze["front"], cloze
+        assert cloze["back"] == "60" and cloze["topic"] == "检索", cloze
+        assert "下一段" not in cloze["front"], cloze  # the next paragraph is another block
+        expect_error("POST", "/api/cards/cloze", {"text": para, "start": 5, "end": 5}, 400)
+        expect_error("POST", "/api/cards/cloze", {"text": "短句。", "start": 0, "end": 3}, 400, "线索")
+        print("cloze ok")
+
+        # ---- 取材来源（vault + repo: / dir:）----
+        srcs = req("GET", "/api/cards/sources")
+        assert set(srcs) == {"vault", "repos", "dirs"}, srcs
+        assert all(isinstance(v, list) for v in srcs.values()), srcs
+        expect_error("GET", "/api/cards/material?source=repo:nope/x.py", None, 400, "仓库")
+        expect_error("GET", "/api/cards/material?source=dir:nope/x.md", None, 400, "目录")
+        expect_error("GET", "/api/cards/material?source=../secrets.md", None, 400, "越出")
+        print("sources + material guards ok")
+
         # save cards, then exact-duplicate resubmission is skipped
         cards = [
             {"kind": "cloze", "front": "RRF 融合 score = Σ 1/(____ + rank + 1)", "back": "60"},
@@ -175,6 +200,17 @@ def main() -> None:
         assert r["ok"]
         expect_error("GET", f"/api/cards/{ids[0]}", None, 404)
         print("delete cascade ok")
+
+        # the hand-made cloze card enters through the same batch path, tagged manual
+        r = req(
+            "POST",
+            "/api/cards/batch",
+            {"cards": [cloze], "source": "notes/项目笔记.md", "source_label": "项目笔记"},
+        )
+        assert r["added"] == 1, r
+        saved = req("GET", f"/api/cards/{r['ids'][0]}")["card"]
+        assert saved["origin"] == "manual" and saved["kind"] == "cloze", saved
+        print("manual cloze card stored with origin=manual ok")
 
         # prefs round-trip (the two-gate trap: key must survive _DEFAULTS + PrefsIn)
         req("PUT", "/api/settings/prefs", {"cards_review_per_day": 5})

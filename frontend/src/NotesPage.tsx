@@ -5,7 +5,7 @@ import rehypeHighlight from 'rehype-highlight'
 import Layout from './Layout'
 import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
-import { api, streamNotesAi, type NoteSearchHit, type NotesChatTurn, type PodcastEntry } from './api'
+import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry } from './api'
 import { streamPodcastGenerate } from './stream'
 
 type AiAction = 'continue' | 'polish' | 'summarize' | 'rewrite'
@@ -62,6 +62,9 @@ export default function NotesPage() {
   const [imgBusy, setImgBusy] = useState(false)
   const [selRange, setSelRange] = useState<SelRange | null>(null)
   const [rewrite, setRewrite] = useState<RewritePreview | null>(null)
+  const [cloze, setCloze] = useState<CardDraft | null>(null)
+  const [clozeBusy, setClozeBusy] = useState(false)
+  const [flash, setFlash] = useState('')
   const [chatOpen, setChatOpen] = useState(false)
   const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([])
   const [chatInput, setChatInput] = useState('')
@@ -404,6 +407,56 @@ export default function NotesPage() {
     if (instruction?.trim()) runRewrite(instruction.trim())
   }
 
+  // ---- selection → cloze card (zero LLM) ----
+
+  useEffect(() => {
+    if (!flash) return
+    const t = setTimeout(() => setFlash(''), 2500)
+    return () => clearTimeout(t)
+  }, [flash])
+
+  async function makeCloze() {
+    if (!selRange || !activePath || clozeBusy) return
+    setClozeBusy(true)
+    setError('')
+    try {
+      // the nearest heading above the selection is a free topic tag
+      const heading = outline.filter((h) => h.offset < selRange.start).pop()
+      setCloze(
+        await api.makeCloze({
+          text: draft,
+          start: selRange.start,
+          end: selRange.end,
+          topic: heading?.text.slice(0, 40) ?? '',
+        })
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setClozeBusy(false)
+    }
+  }
+
+  async function saveCloze() {
+    if (!cloze || !activePath) return
+    setClozeBusy(true)
+    try {
+      const r = await api.saveCards({
+        cards: [cloze],
+        source: activePath,
+        source_label: activePath,
+        model_id: '',
+      })
+      setCloze(null)
+      setSelRange(null)
+      setFlash(r.added ? '🎴 已存入 1 张复习卡' : '这张卡已经有了')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setClozeBusy(false)
+    }
+  }
+
   async function applyRewrite() {
     if (!rewrite) return
     const next = draft.slice(0, rewrite.start) + rewrite.text.trim() + draft.slice(rewrite.end)
@@ -680,17 +733,21 @@ export default function NotesPage() {
               ☰ 大纲
             </button>
             <span className="ml-auto shrink-0 text-[11px] text-neutral-400">
-              {aiBusy
-                ? `${ACTION_LABEL[aiBusy]} 中…`
-                : imgBusy
-                  ? '🖼️ 生成配图中…'
-                  : saving
-                    ? '保存中…'
-                    : dirty
-                      ? '未保存（自动保存中）'
-                      : savedAt
-                        ? `✓ 已保存 ${savedAt}`
-                        : ''}
+              {flash ? (
+                <span className="text-sky-600 dark:text-sky-300">{flash}</span>
+              ) : aiBusy ? (
+                `${ACTION_LABEL[aiBusy]} 中…`
+              ) : imgBusy ? (
+                '🖼️ 生成配图中…'
+              ) : saving ? (
+                '保存中…'
+              ) : dirty ? (
+                '未保存（自动保存中）'
+              ) : savedAt ? (
+                `✓ 已保存 ${savedAt}`
+              ) : (
+                ''
+              )}
             </span>
             {aiBusy ? (
               <button
@@ -760,7 +817,7 @@ export default function NotesPage() {
           </div>
 
           <div className="relative flex min-w-0 flex-1 flex-col">
-            {selRange && !aiBusy && !rewrite && (
+            {selRange && !aiBusy && !rewrite && !cloze && (
               <div className="absolute left-1/2 top-3 z-10 flex max-w-[95%] -translate-x-1/2 flex-wrap items-center justify-center gap-1.5 rounded-full border border-violet-200 bg-white/95 px-3 py-1.5 shadow-md backdrop-blur dark:border-violet-500/40 dark:bg-neutral-900/95">
                 <span className="text-[11px] text-neutral-500">已选 {selRange.text.length} 字</span>
                 {REWRITE_PRESETS.map((p) => (
@@ -779,12 +836,57 @@ export default function NotesPage() {
                   自定义…
                 </button>
                 <button
+                  onClick={() => void makeCloze()}
+                  disabled={clozeBusy}
+                  title="把选中的部分挖成填空卡（不调模型）"
+                  className="rounded-full border border-sky-300 px-2 py-0.5 text-[11px] text-sky-600 transition-colors hover:bg-sky-50 disabled:opacity-50 dark:border-sky-500/50 dark:text-sky-300 dark:hover:bg-sky-500/10"
+                >
+                  🎴 挖空
+                </button>
+                <button
                   onClick={() => setSelRange(null)}
                   className="text-[11px] text-neutral-400 hover:text-neutral-600"
                   title="取消选择"
                 >
                   ×
                 </button>
+              </div>
+            )}
+
+            {/* Deliberately NOT routed through CardMaker's tick-and-edit gate: that
+                gate exists because model output must be read before it is trusted.
+                Every character here is your own note text, and the blanked front is
+                shown in full below, so a second review step is pure friction. */}
+            {cloze && (
+              <div className="absolute left-1/2 top-3 z-10 w-[min(560px,95%)] -translate-x-1/2 rounded-xl border border-sky-200 bg-white/95 p-3 shadow-lg backdrop-blur dark:border-sky-500/40 dark:bg-neutral-900/95">
+                <div className="mb-1.5 flex items-center gap-2 text-[11px] text-neutral-500">
+                  <span className="rounded bg-sky-100 px-1.5 py-0.5 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300">
+                    填空
+                  </span>
+                  {cloze.topic && <span>#{cloze.topic}</span>}
+                  <span className="ml-auto">挖空后的题面</span>
+                </div>
+                <p className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-neutral-50 p-2 font-mono text-[12px] leading-relaxed dark:bg-neutral-800/60">
+                  {cloze.front}
+                </p>
+                <p className="mt-1.5 truncate text-[11px] text-neutral-500">
+                  答案：<span className="text-neutral-700 dark:text-neutral-200">{cloze.back}</span>
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={() => void saveCloze()}
+                    disabled={clozeBusy}
+                    className="rounded-lg bg-gradient-to-r from-sky-600 to-violet-600 px-3 py-1 text-xs font-medium text-white transition-all hover:brightness-110 disabled:opacity-50"
+                  >
+                    存入复习
+                  </button>
+                  <button
+                    onClick={() => setCloze(null)}
+                    className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
+                  >
+                    取消
+                  </button>
+                </div>
               </div>
             )}
 
