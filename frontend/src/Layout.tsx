@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import PetWidget from './PetWidget'
+import { api } from './api'
 
 // Theme + shared sidebar layout for all pages
 
@@ -56,6 +57,12 @@ export default function Layout({
   children: React.ReactNode
 }) {
   const [conversations, setConversations] = useState<{ id: number; title: string }[]>([])
+
+  // open-count baseline (PLAN 第0周). best-effort: a failing telemetry call must
+  // never delay or break the page it is reporting on
+  useEffect(() => {
+    api.visit(page).catch(() => {})
+  }, [page])
 
   useEffect(() => {
     if (page === 'chat') return

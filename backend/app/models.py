@@ -355,6 +355,25 @@ class HabitLog(Base):
     logged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class UsageVisit(Base):
+    """One day the user actually opened a page — the "打开次数" baseline (PLAN 第0周).
+
+    At most one row per (page, day), enforced by the unique index, so a reload
+    never inflates the count. `day` is a LOCAL calendar date string for the same
+    reason as `HabitLog.day`: the only question it answers is "did I open it that
+    day", and every timezone-aware comparison in this codebase has been a bug.
+    The table exists because PLAN needs a 7-day usage baseline and nothing else
+    recorded "did the user open the app today" before.
+    """
+
+    __tablename__ = "usage_visits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    page: Mapped[str] = mapped_column(String(30), default="")  # review | chat | notes | ...
+    day: Mapped[str] = mapped_column(String(10))  # "2026-09-04"
+    visited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class JobRun(Base):
     """One execution of a scheduled background job.
 
@@ -386,3 +405,4 @@ class JobRun(Base):
 # table and would silently do nothing.
 Index("ix_habit_logs_day", HabitLog.habit_id, HabitLog.day, unique=True)
 Index("ix_job_runs_recent", JobRun.job_id, JobRun.id)
+Index("ix_usage_page_day", UsageVisit.page, UsageVisit.day, unique=True)

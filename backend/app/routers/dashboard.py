@@ -37,6 +37,8 @@ _BRIEFING_DEFAULTS = {
 
 @router.get("")
 async def dashboard(db: AsyncSession = Depends(get_db)):
+    from app.core import usage as usage_core
+
     total_convs = (await db.execute(select(func.count(Conversation.id)))).scalar() or 0
     total_msgs = (await db.execute(select(func.count(Message.id)))).scalar() or 0
     total_memories = (await db.execute(select(func.count(Memory.id)))).scalar() or 0
@@ -145,6 +147,8 @@ async def dashboard(db: AsyncSession = Depends(get_db)):
         # last 7 days message counts (oldest first), missing days filled client-side or as 0
         "daily_messages": [{"date": str(d), "count": n} for d, n in daily],
         "top_models": [{"model_id": m or "?", "count": n} for m, n in model_rows[:5]],
+        # 第0周使用基线：本周实际打开过应用的天数（"打开次数"的真相源）
+        "open_days_7d": len(await usage_core.open_days(7)),
         # V14 叙事卡片所需：今日/本周/上周对比 + 今日任务 + 今日 vault 新增
         "narrative": _narrative_block(daily, daily_tokens, vault_files),
     }

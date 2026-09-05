@@ -8,7 +8,7 @@ import CodeBlock from './CodeBlock'
 import HabitStrip, { type HabitStripHandle } from './HabitStrip'
 import Layout from './Layout'
 import SelfCheckLine from './SelfCheckLine'
-import { api, type CardGrade, type CardItem, type CardStats } from './api'
+import { api, type CardGrade, type CardItem, type CardStats, type TodayNext } from './api'
 
 // Keyboard-first 今日 page: the review queue plus the habit grid. Every action
 // has a key because a 20-card session done with the mouse feels like a chore and
@@ -70,6 +70,7 @@ export default function ReviewPage() {
   const [makerOpen, setMakerOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [habitSummary, setHabitSummary] = useState({ done: 0, total: 0 })
+  const [next, setNext] = useState<TodayNext | null>(null)
 
   const shownAt = useRef(0)
   const requeued = useRef<Record<number, number>>({})
@@ -93,6 +94,7 @@ export default function ReviewPage() {
       setSession({ again: 0, hard: 0, good: 0, easy: 0, ms: 0 })
       setPhase('overview')
       shownAt.current = performance.now()
+      api.todayNext().then(setNext).catch(() => setNext(null))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setPhase('overview')
@@ -454,6 +456,45 @@ export default function ReviewPage() {
                 </div>
               )}
             </section>
+
+            {next && (
+              <section
+                className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border px-3 py-2.5 text-xs ${
+                  next.tone === 'bad'
+                    ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300'
+                    : next.tone === 'normal'
+                      ? 'border-violet-200 bg-violet-50/60 text-violet-700 dark:border-violet-700/50 dark:bg-violet-500/5 dark:text-violet-300'
+                      : 'border-neutral-200/80 text-neutral-500 dark:border-neutral-800/80 dark:text-neutral-400'
+                }`}
+              >
+                <span className="shrink-0">👋 今天</span>
+                <span>{next.text}</span>
+                {next.action.kind === 'review' && (
+                  <button
+                    onClick={start}
+                    className="ml-auto shrink-0 rounded-lg border border-violet-300 px-2.5 py-1 font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                  >
+                    {next.action.label} ⏎
+                  </button>
+                )}
+                {next.action.kind === 'make_card' && (
+                  <button
+                    onClick={() => setMakerOpen(true)}
+                    className="ml-auto shrink-0 rounded-lg border border-violet-300 px-2.5 py-1 font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                  >
+                    {next.action.label} <kbd className="text-[10px]">N</kbd>
+                  </button>
+                )}
+                {next.action.kind === 'settings' && (
+                  <a
+                    href="/settings.html"
+                    className="ml-auto shrink-0 rounded-lg border border-rose-300 px-2.5 py-1 font-medium text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                  >
+                    {next.action.label} →
+                  </a>
+                )}
+              </section>
+            )}
 
             <HabitStrip
               ref={habits}

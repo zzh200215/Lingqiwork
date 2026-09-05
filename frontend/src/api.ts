@@ -672,6 +672,13 @@ export interface SelfCheck {
   never_probed: boolean
 }
 
+/** 今日页「今天下一步」建议 (PLAN 第0周). */
+export interface TodayNext {
+  text: string
+  tone: 'bad' | 'normal' | 'idle'
+  action: { kind: 'settings' | 'review' | 'make_card' | 'none'; label: string }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -1111,4 +1118,13 @@ export const api = {
     ),
   healthJobs: () => request<{ jobs: JobHealth[]; keep_runs: number }>('/api/health/jobs'),
   selfCheck: () => request<SelfCheck>('/api/health/self'),
+
+  // ---------- 第0周：使用基线 + 今日建议 ----------
+  /** best-effort page-open count; fire from Layout on mount, ignore errors */
+  visit: (page: string) =>
+    request<{ recorded: boolean; page: string; day: string }>('/api/usage/visit', {
+      method: 'POST',
+      body: JSON.stringify({ page }),
+    }),
+  todayNext: () => request<TodayNext>('/api/today/next'),
 }

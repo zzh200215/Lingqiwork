@@ -38,6 +38,8 @@ from app.routers import (
     skills,
     tasks,
     tts,
+    today,
+    usage,
 )
 
 # surface app/core logs (watcher, indexer, embedder) — uvicorn sets root to WARNING
@@ -153,6 +155,8 @@ app.include_router(feeds.mail_router)
 app.include_router(cards.router)
 app.include_router(habits.router)
 app.include_router(health_router.router)
+app.include_router(today.router)
+app.include_router(usage.router)
 
 
 @app.get("/api/health")
