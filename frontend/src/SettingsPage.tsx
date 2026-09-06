@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import Layout from './Layout'
-import { api, type AgentPreset, type BackupList, type FeedItem, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile } from './api'
+import { api, type AgentPreset, type ArenaResult, type BackupList, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile } from './api'
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -865,6 +865,33 @@ export default function SettingsPage() {
   const activeToolCount = mcpView?.active_tools.length ?? 0
 
   const [section, setSection] = useState<SectionKey>('general')
+
+  // 体检报告 + 模型竞技场（agents 页签）：进入页签时才拉取，失败静默。
+  // 这两个状态必须放在 section 声明之后——useEffect 的依赖数组引用它。
+  const [health, setHealth] = useState<HealthReport | null>(null)
+  const [arenaPrompt, setArenaPrompt] = useState('用三句话解释什么是闭包')
+  const [arenaBusy, setArenaBusy] = useState(false)
+  const [arenaResults, setArenaResults] = useState<ArenaResult[] | null>(null)
+  const [arenaError, setArenaError] = useState('')
+
+  useEffect(() => {
+    if (section !== 'agents' || health) return
+    api.healthReport().then(setHealth).catch(() => {})
+  }, [section, health])
+
+  async function runArena() {
+    if (arenaBusy || !arenaPrompt.trim()) return
+    setArenaBusy(true)
+    setArenaError('')
+    try {
+      const r = await api.arenaRun(arenaPrompt)
+      setArenaResults(r.results)
+    } catch (e) {
+      setArenaError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setArenaBusy(false)
+    }
+  }
 
   const inputCls =
     'w-full rounded-md border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-700'
@@ -2171,6 +2198,97 @@ export default function SettingsPage() {
       {/* Persistent memory */}
       {section === 'agents' && (
       <>
+      {/* 体检报告：自检 + 备份 + 索引 + 任务失败 + 整理员，一页看全 */}
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>🩺</span> 体检报告</h2>
+        {!health ? (
+          <p className="text-xs text-neutral-400">正在体检…</p>
+        ) : (
+          <ul className="space-y-1.5 text-xs leading-relaxed">
+            <li>
+              {health.self.default_model_broken
+                ? <span className="text-rose-600 dark:text-rose-400">⚠️ 默认模型不可用：{health.self.default_model}</span>
+                : <span className="text-emerald-600 dark:text-emerald-400">✅ 默认模型 {health.self.default_model || '（未配置）'}</span>}
+              {health.self.models_broken.length > 0 && (
+                <span className="text-amber-600 dark:text-amber-400">
+                  {' '}· 另有 {health.self.models_broken.length} 个模型探测失败
+                </span>
+              )}
+            </li>
+            <li>
+              {health.self.jobs_failing.length > 0
+                ? <span className="text-amber-600 dark:text-amber-400">⚠️ 后台作业连续失败：{health.self.jobs_failing.map((j) => `${j.job_id}×${j.fails}`).join('、')}</span>
+                : <span className="text-emerald-600 dark:text-emerald-400">✅ 后台作业全部正常（{health.self.jobs_live}/{health.self.jobs_total} 在跑）</span>}
+            </li>
+            <li>
+              {health.backups.count > 0
+                ? <span className="text-emerald-600 dark:text-emerald-400">✅ 最近备份 {fmtTime(health.backups.latest_at)}（共 {health.backups.count} 份）</span>
+                : <span className="text-amber-600 dark:text-amber-400">⚠️ 还没有备份——备份是唯一不可重建资产的安全网</span>}
+            </li>
+            <li>
+              <span className="text-neutral-500">📚 索引：{health.kb.indexer?.chunks ?? 0} 块 / {health.kb.indexer?.files ?? 0} 个来源</span>
+            </li>
+            <li>
+              {health.tasks_failing.length > 0
+                ? <span className="text-amber-600 dark:text-amber-400">⚠️ 定时任务上次失败：{health.tasks_failing.map((t) => t.name).join('、')}</span>
+                : <span className="text-emerald-600 dark:text-emerald-400">✅ 定时任务没有失败记录</span>}
+            </li>
+            <li>
+              <span className="text-neutral-500">
+                🧹 记忆整理员：{health.tidy && (health.tidy as { ran_at?: string }).ran_at
+                  ? `上次整理 ${(health.tidy as { ran_at?: string }).ran_at?.slice(0, 16).replace('T', ' ')}`
+                  : '还没跑过（夜间自动或手动触发）'}
+              </span>
+            </li>
+          </ul>
+        )}
+      </section>
+
+      {/* 模型竞技场：同一段 prompt 打到所有已启用 provider 并排对比 */}
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>🏟️</span> 模型竞技场</h2>
+        <p className="text-xs text-neutral-500">
+          同一段话并行发给每个已启用的 provider，并排看回答、耗时和错误——也是降级链候选的检阅台。
+        </p>
+        <textarea
+          value={arenaPrompt}
+          onChange={(e) => setArenaPrompt(e.target.value)}
+          rows={2}
+          className="w-full resize-y rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+        />
+        <div>
+          <button
+            onClick={() => void runArena()}
+            disabled={arenaBusy || !arenaPrompt.trim()}
+            className="rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+          >
+            {arenaBusy ? '各家思考中…' : '开始对比'}
+          </button>
+        </div>
+        {arenaError && <p className="text-xs text-rose-600 dark:text-rose-400">{arenaError}</p>}
+        {arenaResults && arenaResults.length > 0 && (
+          <div className="grid gap-3 md:grid-cols-2">
+            {arenaResults.map((r) => (
+              <div key={r.label} className={`rounded-xl border p-3 text-xs leading-relaxed ${
+                r.ok
+                  ? 'border-neutral-200 dark:border-neutral-800'
+                  : 'border-rose-300 bg-rose-50 dark:border-rose-500/40 dark:bg-rose-500/10'
+              }`}>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <span className="font-mono font-medium text-neutral-700 dark:text-neutral-200">{r.label}</span>
+                  <span className={r.ok ? 'text-neutral-400' : 'text-rose-600 dark:text-rose-400'}>
+                    {r.ok ? `${r.seconds}s` : `失败 · ${r.seconds}s`}
+                  </span>
+                </div>
+                <p className={`whitespace-pre-wrap ${r.ok ? 'text-neutral-600 dark:text-neutral-300' : 'text-rose-600 dark:text-rose-300'}`}>
+                  {r.ok ? r.text : r.error}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {tutorProfile && (tutorProfile.known.length > 0 || tutorProfile.half.length > 0 || tutorProfile.preferences.length > 0) ? (
         <section className="mb-6 flex flex-col gap-2 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
           <h2 className="flex items-center gap-2 font-semibold"><span>🎓</span> 学习画像</h2>

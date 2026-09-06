@@ -67,3 +67,68 @@ async def self_check():
         "default_model_broken": bool(default and prov.is_unhealthy(default, cache)),
         "never_probed": not cache,
     }
+
+
+@router.get("/report")
+async def report():
+    """体检报告：自检 + 备份年龄 + 索引规模 + 用户任务失败 + 整理员状态。
+
+    self_check 只看定时作业和模型；这里把「系统还能不能信」剩下的几块拼齐。
+    每一块都 best-effort——体检本身坏掉比哪一项都糟。"""
+    base = await self_check()
+
+    backups: dict = {}
+    try:
+        from app.core import backup as backup_core
+
+        items = backup_core.list_backups().get("backups") or []
+        backups = {
+            "count": len(items),
+            "latest_at": items[0]["created_at"] if items else None,
+        }
+    except Exception:  # noqa: BLE001
+        log.debug("backup listing failed", exc_info=True)
+
+    kb: dict = {}
+    try:
+        from app.core import indexer
+        from app.core.watcher import watcher
+
+        kb = {"indexer": indexer.stats(), "watcher": watcher.status}
+    except Exception:  # noqa: BLE001
+        log.debug("kb stats failed", exc_info=True)
+
+    tasks_failing: list[dict] = []
+    try:
+        from sqlalchemy import select
+
+        from app.db import SessionLocal
+        from app.models import ScheduledTask
+
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(ScheduledTask).where(
+                        ScheduledTask.enabled.is_(True), ScheduledTask.last_status == "error"
+                    )
+                )
+            ).scalars().all()
+        tasks_failing = [{"id": t.id, "name": t.name} for t in rows[:5]]
+    except Exception:  # noqa: BLE001
+        log.debug("task status read failed", exc_info=True)
+
+    tidy: dict = {}
+    try:
+        from app.core import memory_tidy
+
+        tidy = memory_tidy.last_report()
+    except Exception:  # noqa: BLE001
+        log.debug("tidy report failed", exc_info=True)
+
+    return {
+        "self": base,
+        "backups": backups,
+        "kb": kb,
+        "tasks_failing": tasks_failing,
+        "tidy": tidy,
+    }

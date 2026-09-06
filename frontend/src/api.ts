@@ -685,6 +685,24 @@ export interface SelfCheck {
   never_probed: boolean
 }
 
+/** 体检报告：自检 + 备份 + 索引 + 用户任务失败 + 整理员，一页看全 */
+export interface HealthReport {
+  self: SelfCheck
+  backups: { count: number; latest_at: string | null }
+  kb: { indexer?: { files?: number; chunks?: number }; watcher?: unknown }
+  tasks_failing: { id: number; name: string }[]
+  tidy: Record<string, unknown>
+}
+
+/** 模型竞技场：同一段 prompt 各家并行的成绩单 */
+export interface ArenaResult {
+  label: string
+  ok: boolean
+  text?: string
+  error?: string
+  seconds: number
+}
+
 /** 今日页「今天下一步」建议 (PLAN 第0周). */
 export interface TodayNext {
   text: string
@@ -1221,6 +1239,16 @@ export const api = {
     ),
   healthJobs: () => request<{ jobs: JobHealth[]; keep_runs: number }>('/api/health/jobs'),
   selfCheck: () => request<SelfCheck>('/api/health/self'),
+
+  /** 体检报告：/api/health/report */
+  healthReport: () => request<HealthReport>('/api/health/report'),
+
+  /** 模型竞技场：同一段 prompt 打到所有已启用 provider */
+  arenaRun: (prompt: string) =>
+    request<{ results: ArenaResult[] }>('/api/arena', {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    }),
 
   // ---------- 第0周：使用基线 + 今日建议 ----------
   /** best-effort page-open count; fire from Layout on mount, ignore errors */

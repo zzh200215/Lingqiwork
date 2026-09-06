@@ -12,6 +12,7 @@ from app.db import engine
 from app.models import Base
 from app.routers import (
     agents,
+    arena,
     ask,
     artifacts,
     asr,
@@ -146,6 +147,7 @@ app.include_router(prompts.router)
 app.include_router(skills.router)
 app.include_router(search.router)
 app.include_router(beliefs.router)
+app.include_router(arena.router)
 app.include_router(backup.router)
 app.include_router(tasks.router)
 app.include_router(evals.router)
