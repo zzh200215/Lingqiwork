@@ -135,6 +135,9 @@ export default function TutorPage() {
   const [stuckRows, setStuckRows] = useState<TutorStuckRow[]>([])
   const [stats, setStats] = useState<TutorStats | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  // 正在流式回复的会话：再学一个 / 开新会话 / 离开页面时掐断它，
+  // 否则 fetch 会读完整段回复、上游也把 token 烧完（中断传播的前端一半）
+  const abortRef = useRef<AbortController | null>(null)
 
   const refreshRail = useCallback(() => {
     // best-effort: the rail is context, never a precondition for teaching
@@ -149,7 +152,13 @@ export default function TutorPage() {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [turns.length, streaming])
 
+  // 卸载（切到其他页面）时掐断还在流式的回复
+  useEffect(() => () => abortRef.current?.abort(), [])
+
   const send = useCallback(async (sessionId: number, text: string) => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     setErr('')
     setBusy(true)
     setTurns((t) => [...t, { role: 'user', content: text }])
@@ -167,12 +176,15 @@ export default function TutorPage() {
           onSources: (s) => {
             srcs = s
           },
-        }
+        },
+        controller.signal
       )
       if (!done.ok) setErr(done.error ?? '出错了')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      // 主动掐断不是错误：换会话/离开页面时的中断，安静收尾即可
+      if (!controller.signal.aborted) setErr(e instanceof Error ? e.message : String(e))
     } finally {
+      if (abortRef.current === controller) abortRef.current = null
       setStreaming('')
       // a partial reply is stored server-side too, so keeping it here matches
       if (acc) setTurns((t) => [...t, { role: 'assistant', content: acc, sources: srcs }])
@@ -240,6 +252,7 @@ export default function TutorPage() {
   }, [])
 
   const reset = useCallback(() => {
+    abortRef.current?.abort()
     setSid(null)
     setTopic('')
     setTurns([])

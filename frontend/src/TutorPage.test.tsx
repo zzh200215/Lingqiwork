@@ -101,4 +101,21 @@ describe('streamTutorSay', () => {
     expect(done.ok).toBe(false)
     expect(done.error).toBe('没有 provider')
   })
+
+  it('abort 信号转发给 fetch —— 中断传播的前端一半（PLAN.md 第 7 节）', async () => {
+    const frames = [
+      'event: delta\ndata: {"text":"讲"}\n\n',
+      'event: done\ndata: {}\n\n',
+    ]
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => { void init; return sseResponse(frames) })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    await streamTutorSay(
+      { session_id: 1, text: '问' },
+      { onDelta: () => {} },
+      controller.signal
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal)
+  })
 })

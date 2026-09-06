@@ -320,8 +320,14 @@ async def stream_chat(
                 stream = await client.chat.completions.create(**kwargs)
             else:
                 raise
-        async for chunk in stream:
-            _absorb_usage(usage, getattr(chunk, "usage", None))
-            delta = chunk.choices[0].delta.content if chunk.choices else None
-            if delta:
-                yield delta
+        # 显式关流：调用方（页面 abort / 断连 / 会话切换）取消本生成器时，
+        # 没有这一步底层 HTTP 响应要等 GC 兜底才释放，上游会继续烧完整个回复。
+        # anthropic 分支的 `async with` 已是确定性关闭，这里补齐对等行为。
+        try:
+            async for chunk in stream:
+                _absorb_usage(usage, getattr(chunk, "usage", None))
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield delta
+        finally:
+            await stream.close()
