@@ -50,6 +50,14 @@ def test_run_python_success(art_env):
     assert r["timeout"] is False
 
 
+def test_run_python_chinese_output_is_not_mojibake(art_env):
+    """中文 Windows 上子进程 stdout 默认 GBK，这里却按 UTF-8 解码——
+    必须钉死 PYTHONIOENCODING，中文才能原样往返。"""
+    r = artifacts.run("print('你好，教学会话')")
+    assert r["ok"]
+    assert "你好，教学会话" in r["stdout"]
+
+
 def test_run_python_failure(art_env):
     r = artifacts.run("1/0")
     assert not r["ok"] and r["exit_code"] == 1

@@ -9,6 +9,7 @@ with the workbench's own venv (so the model's code can use its deps), js
 runs with node when it is on PATH. HTML is never executed server-side — the
 frontend previews it in a sandboxed iframe instead.
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -83,28 +84,35 @@ def run(code: str, language: str = "python", timeout: int | None = None) -> dict
 
     t0 = time.monotonic()
     timed_out = False
+    # 中文 Windows 上子进程 stdout 默认 GBK，这里却按 UTF-8 解码——不钉死编码，
+    # 跑一个 `print("你好")` 到页面上就是乱码。node 本就输出 UTF-8，不受影响。
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
     try:
         proc = subprocess.run(
             cmd,
             cwd=str(run_dir),
             capture_output=True,
             timeout=t,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         exit_code = proc.returncode
         stdout, stderr = proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as e:
         timed_out = True
         exit_code = -1
-        stdout = e.stdout or b""
-        stderr = (e.stderr or b"") + f"\n[超过 {t} 秒被终止]".encode("utf-8")
+        stdout = e.stdout or ""
+        stderr = (e.stderr or "") + f"\n[超过 {t} 秒被终止]"
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     result = {
         "ok": exit_code == 0 and not timed_out,
         "exit_code": exit_code,
         "timeout": timed_out,
-        "stdout": _cap(stdout.decode("utf-8", "replace")),
-        "stderr": _cap(stderr.decode("utf-8", "replace")),
+        "stdout": _cap(_as_text(stdout)),
+        "stderr": _cap(_as_text(stderr)),
         "elapsed_ms": elapsed_ms,
     }
     # throwaway cwd: best-effort cleanup, keep it when the run failed so the
@@ -114,6 +122,14 @@ def run(code: str, language: str = "python", timeout: int | None = None) -> dict
     else:
         result["run_dir"] = str(run_dir)
     return result
+
+
+def _as_text(x) -> str:
+    """文本模式下 run() 和 TimeoutExpired 的输出都应是 str，个别路径仍可能
+    漏出 bytes——统一收口，别让解码散在两处。"""
+    if isinstance(x, str):
+        return x
+    return bytes(x or b"").decode("utf-8", "replace")
 
 
 def _cap(text: str) -> str:
