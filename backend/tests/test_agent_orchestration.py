@@ -403,3 +403,55 @@ async def test_agent_path_falls_back_before_any_action(monkeypatch):
     got = await core._execute(_agent_task(), [])
     assert got["answer"] == "最终答案" and got["model_id"] == "p2/p2-m"
     assert tried == ["p1", "p2"]
+
+
+# ---------- 失败教训沉淀（maple-os 参考项 3） ----------
+
+
+async def test_failure_lesson_is_injected_then_cleared_by_success(monkeypatch):
+    """上次失败的原因要在下次运行时进 prompt；成功一次后自然消失——
+    教训住在 task_runs 里，不需要任何清理逻辑。"""
+    await _clear()
+    await _add_providers("p1")
+    task_id = await _add_task("教训任务", tools_enabled=False)
+
+    async def failing(candidates, messages, usage=None, served=None):
+        raise ConnectionError("域名解析失败")
+        yield ""  # noqa: unreachable — 只是让函数成为 async generator
+
+    monkeypatch.setattr(core, "stream_chat_fallback", failing)
+    r1 = await core.run_task(task_id, manual=True)
+    assert r1["status"] == "error"
+
+    seen: list = []
+
+    async def recording(candidates, messages, usage=None, served=None):
+        seen.append(messages)
+        yield "好的"
+
+    monkeypatch.setattr(core, "stream_chat_fallback", recording)
+    r2 = await core.run_task(task_id, manual=True)
+    assert r2["status"] == "ok"
+    assert any(
+        "最近一次运行失败" in m["content"] and "域名解析失败" in m["content"] for m in seen[0]
+    )
+
+    seen.clear()
+    r3 = await core.run_task(task_id, manual=True)
+    assert r3["status"] == "ok"
+    assert not any("最近一次运行失败" in m["content"] for m in seen[0])
+
+
+async def test_first_run_has_no_lesson(monkeypatch):
+    await _clear()
+    await _add_providers("p1")
+    task_id = await _add_task("首跑任务", tools_enabled=False)
+    seen: list = []
+
+    async def recording(candidates, messages, usage=None, served=None):
+        seen.append(messages)
+        yield "好"
+
+    monkeypatch.setattr(core, "stream_chat_fallback", recording)
+    assert (await core.run_task(task_id, manual=True))["status"] == "ok"
+    assert not any("最近一次运行失败" in m["content"] for m in seen[0])

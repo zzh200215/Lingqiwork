@@ -243,6 +243,7 @@ async def run_task(
         if not task:
             return {"status": "error", "error": "task not found"}
         snapshot = {
+            "task_id": task_id,
             "name": task.name,
             "prompt": task.prompt,
             "model_id": task.model_id,
@@ -460,6 +461,24 @@ async def _notify_error(t: dict, trigger: str, error: str) -> None:
         log.warning("task failure notification mail could not be sent", exc_info=True)
 
 
+async def _last_failure(task_id: int) -> str:
+    """最近一次**已结束**的运行若是失败，返回原因，否则空串。教训住在
+    task_runs 里，不占新列：成功一次它自然就消失，不需要清理逻辑。
+    当前这次运行自己的 running 行要排除掉，否则每次都查到自己。"""
+    async with SessionLocal() as db:
+        row = (
+            await db.execute(
+                select(TaskRun)
+                .where(TaskRun.task_id == task_id, TaskRun.status != "running")
+                .order_by(TaskRun.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if row is None or row.status != "error":
+        return ""
+    return (row.error or "").strip()
+
+
 async def _execute(t: dict, log_entries: list[dict]) -> dict:
     candidates = await _candidates(t["model_id"])
     model_id = candidates[0][2]
@@ -506,6 +525,19 @@ async def _execute(t: dict, log_entries: list[dict]) -> dict:
             sources = []
         if sources:
             messages.append({"role": "system", "content": _build_rag_context(sources)})
+
+    lesson = await _last_failure(t.get("task_id") or 0)
+    if lesson:
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    f"注意：这个任务最近一次运行失败了：{lesson[:500]}。"
+                    "如果这次失败和要做的事有关，请换方法修正或规避；"
+                    "如果只是临时故障（网络、限流），按原计划执行。"
+                ),
+            }
+        )
 
     messages.append({"role": "user", "content": t["prompt"]})
 
