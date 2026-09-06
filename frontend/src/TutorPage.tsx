@@ -76,13 +76,19 @@ function RecallChip({ hits }: { hits: TutorRecallHit[] }) {
  * turn was streamed for, so 取材来源 stays attached to the bubble that used it. */
 type Turn = TutorTurn & { sources?: TutorMaterialSource[] }
 
+/** chroma 元数据里的 title 是文件名去后缀（「index」），没有信息量；路径尾部两段才认得出位置 */
+function shortSource(source: string): string {
+  const parts = source.split('/').filter(Boolean)
+  return parts.slice(-2).join('/')
+}
+
 function MaterialLine({ sources }: { sources: TutorMaterialSource[] }) {
   return (
     <p className="text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
       取材：
       {sources.map((s, i) => (
         <span key={i} className="ml-1.5 rounded bg-neutral-200/70 px-1.5 py-0.5 dark:bg-neutral-700/60">
-          {s.source}
+          {shortSource(s.source)}
         </span>
       ))}
     </p>
@@ -355,7 +361,7 @@ export default function TutorPage() {
                         材料里还有：
                         {ended.nearby.map((n) => (
                           <span key={n.source} className="ml-1 rounded bg-neutral-200/70 px-1.5 py-0.5 dark:bg-neutral-700/60">
-                            {n.title || n.source}
+                            {shortSource(n.source)}
                           </span>
                         ))}
                       </span>
