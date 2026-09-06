@@ -251,6 +251,13 @@ export default function TutorPage() {
     }
   }, [])
 
+  // 全局搜索深链：/tutor.html?session=ID 直接打开那次会话（教学命中从聊天页跳过来）
+  const deepLink = useRef(new URLSearchParams(window.location.search).get('session'))
+  useEffect(() => {
+    const s = Number(deepLink.current)
+    if (Number.isFinite(s) && s > 0) void open(s)
+  }, [open])
+
   const reset = useCallback(() => {
     abortRef.current?.abort()
     setSid(null)

@@ -1,12 +1,27 @@
-"""Global search across conversations (SQLite LIKE — fine at personal scale)."""
+"""Global search across conversations + tutor turns (SQLite LIKE — fine at
+personal scale; PLAN.md 实测过语义检索对「精确找回」不可靠，全文才是对的工具).
+
+教学轮次从 2026-09-06 起一并覆盖（EvoForge 参考项：每个过去的会话都可搜索）：
+聊天命中带 conversation_id，教学命中带 session_id，前端按 source 跳转。
+"""
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.models import Conversation, Message
+from app.models import Conversation, Message, TutorSession, TutorTurn, iso_utc
 
 router = APIRouter(prefix="/api/search", tags=["search"])
+
+
+def _excerpt(content: str, needle: str) -> str:
+    idx = content.find(needle)
+    if idx < 0:
+        return content[:120].replace("\n", " ")
+    start = max(0, idx - 40)
+    end = idx + len(needle) + 80
+    excerpt = content[start:end].replace("\n", " ")
+    return ("…" if start > 0 else "") + excerpt + ("…" if end < len(content) else "")
 
 
 @router.get("")
@@ -19,30 +34,53 @@ async def global_search(
     if not needle:
         return {"query": q, "results": []}
 
-    pattern = f"%{needle}%"
+    # % 和 _ 是 LIKE 的通配符：搜「100%」不该变成全表命中
+    safe = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{safe}%"
+
     msgs = (
         await db.execute(
             select(Message, Conversation.title)
             .join(Conversation, Message.conversation_id == Conversation.id)
-            .where(Message.content.like(pattern))
+            .where(Message.content.like(pattern, escape="\\"))
             .order_by(Message.id.desc())
             .limit(limit)
         )
     ).all()
+    turns = (
+        await db.execute(
+            select(TutorTurn, TutorSession.topic)
+            .join(TutorSession, TutorTurn.session_id == TutorSession.id)
+            .where(TutorTurn.content.like(pattern, escape="\\"))
+            .order_by(TutorTurn.id.desc())
+            .limit(limit)
+        )
+    ).all()
 
-    results = []
+    results: list[dict] = []
     for m, conv_title in msgs:
-        # small excerpt around the first hit
-        idx = m.content.find(needle)
-        start = max(0, idx - 40)
-        excerpt = m.content[start : idx + len(needle) + 80].replace("\n", " ")
         results.append(
             {
-                "message_id": m.id,
-                "conversation_id": m.conversation_id,
-                "conversation_title": conv_title,
+                "source": "chat",
+                "id": m.id,
+                "ref_id": m.conversation_id,
+                "title": conv_title,
                 "role": m.role,
-                "excerpt": ("…" if start > 0 else "") + excerpt + ("…" if idx + len(needle) + 80 < len(m.content) else ""),
+                "excerpt": _excerpt(m.content, needle),
+                "at": iso_utc(m.created_at),
             }
         )
-    return {"query": needle, "results": results}
+    for t, topic in turns:
+        results.append(
+            {
+                "source": "tutor",
+                "id": t.id,
+                "ref_id": t.session_id,
+                "title": topic,
+                "role": t.role,
+                "excerpt": _excerpt(t.content, needle),
+                "at": iso_utc(t.created_at),
+            }
+        )
+    results.sort(key=lambda r: r["at"] or "", reverse=True)
+    return {"query": needle, "results": results[:limit]}

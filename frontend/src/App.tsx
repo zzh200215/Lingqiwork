@@ -432,7 +432,12 @@ function ChatView() {
 
   async function jumpToHit(hit: SearchHit) {
     setSearchOpen(false)
-    await openConversation(hit.conversation_id)
+    // 教学命中跳「学」页深链打开那次会话；教学是独立入口页，不能只切状态
+    if (hit.source === 'tutor') {
+      window.location.href = `/tutor.html?session=${hit.ref_id}`
+      return
+    }
+    await openConversation(hit.ref_id)
   }
 
   const refreshProviders = useCallback(async () => {
@@ -1667,20 +1672,23 @@ function ChatView() {
               )}
               {searchHits.map((hit) => (
                 <button
-                  key={hit.message_id}
+                  key={`${hit.source}-${hit.id}`}
                   onClick={() => jumpToHit(hit)}
                   className="block w-full border-b border-neutral-50 px-4 py-3 text-left transition-colors last:border-0 hover:bg-violet-50 dark:border-neutral-800/60 dark:hover:bg-violet-500/10"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
-                      {hit.conversation_title}
+                      {hit.source === 'tutor' && <span className="mr-1 text-amber-600 dark:text-amber-400">🎓</span>}
+                      {hit.title}
                     </span>
                     <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
-                      hit.role === 'user'
-                        ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300'
-                        : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
+                      hit.source === 'tutor'
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
+                        : hit.role === 'user'
+                          ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300'
+                          : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
                     }`}>
-                      {hit.role === 'user' ? '我' : 'AI'}
+                      {hit.source === 'tutor' ? '教学' : hit.role === 'user' ? '我' : 'AI'}
                     </span>
                   </div>
                   <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-neutral-400">{hit.excerpt}</p>

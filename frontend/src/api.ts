@@ -254,11 +254,14 @@ export interface DashboardStats {
 }
 
 export interface SearchHit {
-  message_id: number
-  conversation_id: number
-  conversation_title: string
+  source: 'chat' | 'tutor'
+  id: number
+  // chat 命中 → conversation_id；tutor 命中 → session_id（教学页深链用）
+  ref_id: number
+  title: string
   role: string
   excerpt: string
+  at: string | null
 }
 
 export interface NoteSearchHit {
