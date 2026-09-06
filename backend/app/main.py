@@ -78,6 +78,7 @@ async def _migrate() -> None:
         # tutor history compression (maple-os 参考项：长会话中段压缩)
         ("tutor_sessions", "summary", "ALTER TABLE tutor_sessions ADD COLUMN summary TEXT DEFAULT ''"),
         ("tutor_sessions", "summary_upto", "ALTER TABLE tutor_sessions ADD COLUMN summary_upto INTEGER DEFAULT 0"),
+        ("tutor_sessions", "repo", "ALTER TABLE tutor_sessions ADD COLUMN repo VARCHAR(100) DEFAULT ''"),
     ]
     async with engine.begin() as conn:
         for table, col, ddl in stmts:

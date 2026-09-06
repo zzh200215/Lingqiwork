@@ -192,12 +192,13 @@ export default function TutorPage() {
     }
   }, [])
 
-  const begin = useCallback(async () => {
-    const t = topic.trim()
+  const beginWith = useCallback(async (topicText: string, repo = '') => {
+    const t = topicText.trim()
     if (!t || busy) return
+    setTopic(t)
     setErr('')
     try {
-      const s = await api.tutorStart(t)
+      const s = await api.tutorStart(t, repo)
       setSid(s.id)
       setModelOk(s.model_ok)
       setTurns([])
@@ -209,7 +210,9 @@ export default function TutorPage() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
-  }, [topic, busy, send, refreshRail])
+  }, [busy, send, refreshRail])
+
+  const begin = useCallback(() => beginWith(topic), [beginWith, topic])
 
   const submit = useCallback(async () => {
     const t = draft.trim()
@@ -255,8 +258,15 @@ export default function TutorPage() {
   const deepLink = useRef(new URLSearchParams(window.location.search).get('session'))
   useEffect(() => {
     const s = Number(deepLink.current)
-    if (Number.isFinite(s) && s > 0) void open(s)
-  }, [open])
+    if (Number.isFinite(s) && s > 0) {
+      void open(s)
+      return
+    }
+    // 知识库页「陪读」深链：?new=<话题>&repo=<仓库名> 直接开一场陪读会话
+    const params = new URLSearchParams(window.location.search)
+    const nt = params.get('new')
+    if (nt) void beginWith(nt, params.get('repo') || '')
+  }, [open, beginWith])
 
   const reset = useCallback(() => {
     abortRef.current?.abort()

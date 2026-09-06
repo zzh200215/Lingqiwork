@@ -1221,10 +1221,11 @@ export const api = {
   todayNext: () => request<TodayNext>('/api/today/next'),
 
   // ---------- 对话式教学 ----------
-  tutorStart: (topic: string) =>
+  /** repo 非空 = 代码库陪读：会话取材限定在该仓库 */
+  tutorStart: (topic: string, repo?: string) =>
     request<TutorSessionStart>('/api/tutor/start', {
       method: 'POST',
-      body: JSON.stringify({ topic }),
+      body: JSON.stringify({ topic, repo: repo || '' }),
     }),
   /** 懂了 / 半懂 / 没用 — the only manual input in the product (PLAN.md 第 4 节) */
   tutorEnd: (session_id: number, verdict: 'got' | 'half' | 'useless') =>

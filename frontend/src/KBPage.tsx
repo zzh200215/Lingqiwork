@@ -931,6 +931,17 @@ export default function KbPage() {
                       </div>
                       <div className="flex gap-1.5">
                         <button
+                          onClick={() => {
+                            // 代码库陪读：深链开一场教学会话，取材限定在这个仓库里
+                            window.location.href = `/tutor.html?new=${encodeURIComponent(
+                              `跟我读 ${r.name} 这个仓库的代码结构`
+                            )}&repo=${encodeURIComponent(r.name)}`
+                          }}
+                          className="rounded-md border border-violet-400 px-2.5 py-1 text-xs text-violet-600 dark:border-violet-500 dark:text-violet-300"
+                        >
+                          🎓 陪读
+                        </button>
+                        <button
                           onClick={() => syncRepo(r.name)}
                           disabled={!!repoBusy}
                           className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs disabled:opacity-40 dark:border-neutral-700"

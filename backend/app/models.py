@@ -442,6 +442,8 @@ class TutorSession(Base):
     # 一批才重新压缩。原文永远在 tutor_turns 里，压缩的只是 prompt。
     summary: Mapped[str] = mapped_column(Text, default="")
     summary_upto: Mapped[int] = mapped_column(Integer, default=0)
+    # 代码库陪读（全局唤起脑暴清单）：非空 = 这场会话的取材只在 repos/<repo>/ 里找
+    repo: Mapped[str] = mapped_column(String(100), default="")
     model_id: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(

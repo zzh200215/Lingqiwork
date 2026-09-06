@@ -1050,6 +1050,64 @@ async def test_say_survives_a_failed_compression(monkeypatch):
     assert older and "t1" in older[0]
 
 
+# ---------- 代码库陪读：取材限定在一个仓库里（全局唤起脑暴清单） ----------
+
+
+async def test_start_repo_session_validates_and_stores(monkeypatch):
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    monkeypatch.setattr(providers, "is_unhealthy", lambda mid, cache=None: False)
+    monkeypatch.setattr("app.core.prefs.load_config", lambda: {"repos": [{"name": "demo"}]})
+
+    got = await core.start("跟我读 demo", repo="demo")
+    assert got["repo"] == "demo"
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    async with SessionLocal() as db:
+        row = await db.get(TutorSession, got["id"])
+        assert row.repo == "demo"
+
+    # 未索引的仓库拒绝
+    with pytest.raises(ValueError, match="索引"):
+        await core.start("跟我读别的", repo="nope")
+
+
+async def test_repo_session_scopes_material_to_that_repo(monkeypatch):
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    monkeypatch.setattr(providers, "is_unhealthy", lambda mid, cache=None: False)
+    monkeypatch.setattr("app.core.prefs.load_config", lambda: {"repos": [{"name": "demo"}]})
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    sid = (await core.start("跟我读 demo", repo="demo"))["id"]
+
+    queries: list = []
+
+    async def fake_retrieve(query, top_k):
+        queries.append((query, top_k))
+        return [
+            {"source": "repos/demo/main.py", "title": "main.py", "text": "def main(): ...", "score": 0.9},
+            {"source": "vault/notes/x.md", "title": "x", "text": "无关 vault 笔记", "score": 0.8},
+            {"source": "repos/demo/util.py", "title": "util.py", "text": "def util(): ...", "score": 0.7},
+        ]
+
+    monkeypatch.setattr(core, "_retrieve", fake_retrieve)
+    seen: list = []
+    monkeypatch.setattr(core, "_stream", _fake_stream(["讲"], seen))
+    events = [e async for e in core.say(sid, "入口在哪")]
+    assert [k for k, _ in events][-1] == "done"
+    # 超取 4 倍（3*4=12）再过滤
+    assert queries[0][1] == 12
+    _model_id, messages = seen[0]
+    material = [m["content"] for m in messages if m["role"] == "system" and "来源 1" in m["content"]]
+    assert material and "repos/demo/main.py" in material[0]
+    assert "vault/notes" not in material[0]
+
+
 
 
 

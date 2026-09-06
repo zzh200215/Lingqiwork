@@ -124,13 +124,23 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # ---------- session lifecycle ----------
 
 
-async def start(topic: str) -> dict:
+async def start(topic: str, repo: str = "") -> dict:
     """Open a session on `topic`. Pins the model so the teaching voice can't
     change mid-session; reports whether that model is known-broken so the page
-    can say so instead of failing on the first turn (PLAN.md 第 9 节)."""
+    can say so instead of failing on the first turn (PLAN.md 第 9 节).
+
+    `repo` 非空 = 代码库陪读：这场会话的取材只在 repos/<repo>/ 的 chunk 里找，
+    仓库必须已在 prefs 的 repos 里索引过。"""
     topic = (topic or "").strip()[:200]
     if not topic:
         raise ValueError("topic is empty")
+    repo = (repo or "").strip()[:100]
+    if repo:
+        from app.core.prefs import load_config
+
+        names = {r.get("name") for r in load_config().get("repos", []) if isinstance(r, dict)}
+        if repo not in names:
+            raise ValueError(f"仓库「{repo}」还没有被索引，先在知识库页同步它")
 
     from app.core import providers
     from app.db import SessionLocal
@@ -138,7 +148,7 @@ async def start(topic: str) -> dict:
 
     model_id = providers.default_model_id() or ""
     async with SessionLocal() as db:
-        row = TutorSession(topic=topic, model_id=model_id)
+        row = TutorSession(topic=topic, model_id=model_id, repo=repo)
         db.add(row)
         await db.commit()
         await db.refresh(row)
@@ -146,6 +156,7 @@ async def start(topic: str) -> dict:
     return {
         "id": sid,
         "topic": topic,
+        "repo": repo,
         "model_id": model_id,
         "model_ok": bool(model_id) and not providers.is_unhealthy(model_id),
     }
@@ -408,6 +419,16 @@ async def _retrieve(query: str, top_k: int) -> list[dict]:
     return await asyncio.to_thread(indexer.search_auto, query, top_k)
 
 
+async def _retrieve_scoped(query: str, top_k: int, source_prefix: str) -> list[dict]:
+    """限定来源前缀的取材（代码库陪读的边界）。
+
+    search_auto 没有过滤参数，超取 4 倍再客户端过滤；过滤后为空就返回空——
+    材料块本就是「有就讲，没有就不硬扯」。Test seam: monkeypatch me."""
+    hits = await _retrieve(query, top_k * 4)
+    scoped = [h for h in hits if str(h.get("source") or "").startswith(source_prefix)]
+    return scoped[:top_k]
+
+
 # ---------- one teaching reply ----------
 
 
@@ -615,6 +636,7 @@ async def say(session_id: int, text: str):
             yield "error", {"message": f"会话 {session_id} 不存在"}
             return
         topic = row.topic
+        repo = row.repo or ""
         model_id = row.model_id or (providers.default_model_id() or "")
         if model_id and not row.model_id:
             row.model_id = model_id  # pinned late: opened before any provider existed
@@ -644,9 +666,13 @@ async def say(session_id: int, text: str):
         yield "recall", {"hits": hits}  # once per session; the page shows one chip
 
     # 取材以这一轮的提问为准（第一轮就是 topic 本身）。空索引、检索挂了都静默跳过：
-    # 取材是增强，教学不能因为它停下来。
+    # 取材是增强，教学不能因为它停下来。仓库陪读会话的取材被限定在
+    # repos/<repo>/ 里——普通取材会把整个 vault 的东西都捞进来。
     try:
-        sources = await _retrieve(text, MATERIAL_TOP_K)
+        if repo:
+            sources = await _retrieve_scoped(text, MATERIAL_TOP_K, f"repos/{repo}/")
+        else:
+            sources = await _retrieve(text, MATERIAL_TOP_K)
     except Exception:  # noqa: BLE001
         log.warning("tutor material retrieval failed", exc_info=True)
         sources = []
