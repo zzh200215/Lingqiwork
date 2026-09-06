@@ -437,6 +437,11 @@ class TutorSession(Base):
     # feature: PLAN.md 第 5 节 kills recall if it never triggers, and that call
     # should not depend on remembering to hand-count it in LOG.md.
     recalled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 历史压缩缓存（maple-os 参考项）：超出 HISTORY_LIMIT 的中段不是丢掉，而是
+    # 压成 `summary` 注入；`summary_upto` 记录已覆盖到 dropped 列表的第几轮，攒够
+    # 一批才重新压缩。原文永远在 tutor_turns 里，压缩的只是 prompt。
+    summary: Mapped[str] = mapped_column(Text, default="")
+    summary_upto: Mapped[int] = mapped_column(Integer, default=0)
     model_id: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(

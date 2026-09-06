@@ -21,6 +21,9 @@ import re
 log = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 60  # turns sent back to the model; a session is one concept, not a day
+# 中段压缩（maple-os 参考项）：攒够这么多轮新掉出窗口才重新压缩一次摘要——
+# 一个额外的小模型调用摊在几十轮上，而不是每轮都付。
+SUMMARY_BATCH = 4
 RECALL_TOP_K = 3  # past sessions injected at most
 RECALL_MIN_SIM = 0.62  # cosine floor. 验收 asks that recall be *right*, not just
 # present, so a floor beats top-k alone: with 3 unrelated past sessions, top-k
@@ -408,16 +411,60 @@ async def _retrieve(query: str, top_k: int) -> list[dict]:
 # ---------- one teaching reply ----------
 
 
-def build_messages(history: list[dict], recall: str = "", material: str = "", profile: str = "") -> list[dict]:
-    """Prompt for one reply: teaching voice, then recall, then profile, then material,
-    then the transcript.
+def _speaker(role: str) -> str:
+    return "用户" if role == "user" else "老师"
+
+
+def split_history(history: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(window, dropped-middle) — the truncation rule in one place, so the
+    compression range and the actually-discarded range can never drift apart.
+    The window keeps the opening turn (the topic anchor) exactly as
+    build_messages has always truncated.
+    """
+    if len(history) <= HISTORY_LIMIT:
+        return history, []
+    recent = history[-HISTORY_LIMIT:]
+    # 60 turns on one concept is already unusual, but losing the opening line
+    # is what makes the model forget what it is teaching, so it survives.
+    recent = [history[0], *recent[1:]]
+    return recent, history[1 : len(history) - HISTORY_LIMIT + 1]
+
+
+def format_older(summary: str, uncovered: list[dict]) -> str:
+    """Compressed middle + turns not yet covered by it → one system block
+    ('' if neither exists). Pure, so it is testable.
+
+    `uncovered` is honest slack: between summary refreshes a few dropped turns
+    would otherwise exist nowhere (not in the window, not in the summary), so
+    they ride along verbatim until the next batch compresses them.
+    """
+    if not summary and not uncovered:
+        return ""
+    parts: list[str] = []
+    if summary:
+        parts.append(f"较早对话的摘要：\n{summary}")
+    if uncovered:
+        lines = [f"{_speaker(t['role'])}：{t['content']}" for t in uncovered]
+        parts.append("摘要之后、掉出窗口之前的几轮原文：\n" + "\n".join(lines))
+    return (
+        "以下是本次会话较早的部分（已不在最近的对话窗口里）：\n\n"
+        + "\n\n".join(parts)
+        + "\n\n把它当作你已经知道的背景接着教，不要重复问已经回答过的内容。"
+    )
+
+
+def build_messages(
+    history: list[dict], recall: str = "", material: str = "", profile: str = "", older: str = ""
+) -> list[dict]:
+    """Prompt for one reply: teaching voice, then recall, then profile, then
+    material, then the compressed older middle, then the transcript.
 
     Recall is a second system message rather than being glued onto
     SOCRATIC_PROMPT: with nothing to recall the voice is then byte-identical
     every turn, so when the teaching drifts it is clear which block moved.
     Profile sits after recall — it is the stable breadth picture; material sits
-    last of the three blocks — nearest the transcript, which is where the model
-    looks when deciding what to talk about.
+    after profile; `older` sits nearest the transcript — it *is* conversation,
+    and the model reads what is adjacent when picking up the thread.
     """
     msgs: list[dict] = [{"role": "system", "content": SOCRATIC_PROMPT}]
     if recall:
@@ -426,11 +473,9 @@ def build_messages(history: list[dict], recall: str = "", material: str = "", pr
         msgs.append({"role": "system", "content": profile})
     if material:
         msgs.append({"role": "system", "content": material})
-    recent = history[-HISTORY_LIMIT:]
-    if len(history) > HISTORY_LIMIT:
-        # 60 turns on one concept is already unusual, but losing the opening line
-        # is what makes the model forget what it is teaching, so it survives.
-        recent = [history[0], *recent[1:]]
+    if older:
+        msgs.append({"role": "system", "content": older})
+    recent, _dropped = split_history(history)
     msgs.extend({"role": t["role"], "content": t["content"]} for t in recent)
     return msgs
 
@@ -479,6 +524,73 @@ async def _stream(model_id: str, messages: list[dict]):
             )
     async for delta in stream_chat_fallback(candidates, messages):
         yield delta
+
+
+# ---------- 中段压缩：超出窗口的对话不丢弃，压成摘要跟着走 ----------
+
+
+_SUMMARY_SYSTEM = (
+    "你在压缩一段苏格拉底式教学会话的较早部分，摘要将替代原文放进后续对话上下文。"
+    "只输出摘要正文，不超过 300 字，必须保留：在讨论什么概念、已经讲通了什么、"
+    "用户卡在哪里、得出了什么结论或约定。不要评论，不要开头语和收尾语。"
+)
+
+
+async def _summarize(model_id: str, prior: str, dropped: list[dict]) -> str:
+    """One small model call compressing the dropped middle. Test seam: monkeypatch me."""
+    from app.core.llm import ProviderInfo, stream_chat
+    from app.routers.chat import resolve_model
+
+    resolved = await resolve_model(model_id)
+    p = resolved.provider
+    convo = "\n".join(f"{_speaker(t['role'])}：{t['content']}" for t in dropped)
+    user = (f"已有摘要（在此基础上合并重新压缩）：\n{prior}\n\n" if prior else "") + f"对话原文：\n{convo}"
+    parts = [
+        c
+        async for c in stream_chat(
+            ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key),
+            resolved.model,
+            [{"role": "system", "content": _SUMMARY_SYSTEM}, {"role": "user", "content": user}],
+        )
+    ]
+    return "".join(parts).strip()
+
+
+async def _older_block(session_id: int, history: list[dict], model_id: str) -> str:
+    """The system block for turns that fell out of HISTORY_LIMIT ('' when none).
+
+    The summary is cached on the session row (summary / summary_upto) and
+    re-compressed lazily once SUMMARY_BATCH new turns have dropped out of the
+    window: a long session pays one extra small call every few dozen turns,
+    not one per turn. Turn rows are never touched — this compresses the
+    *prompt*; end() still extracts from the full history. A compression failure
+    just degrades to injecting the uncovered turns verbatim; teaching never
+    stops for it.
+    """
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    _recent, dropped = split_history(history)
+    if not dropped:
+        return ""
+    async with SessionLocal() as db:
+        row = await db.get(TutorSession, session_id)
+        if row is None:
+            return ""
+        covered = int(row.summary_upto or 0)
+        summary = row.summary or ""
+        uncovered = dropped[covered:]
+        if len(uncovered) >= SUMMARY_BATCH:
+            try:
+                new = await _summarize(model_id, summary, dropped)
+            except Exception:  # noqa: BLE001 - compression is an enhancement, not a dependency
+                log.warning("tutor history compression failed", exc_info=True)
+            else:
+                if new:
+                    summary, uncovered = new, []
+                    row.summary, row.summary_upto = new, len(dropped)
+                    await db.commit()
+    return format_older(summary, uncovered)
 
 
 async def say(session_id: int, text: str):
@@ -550,11 +662,13 @@ async def say(session_id: int, text: str):
             ]
         }
 
+    profile_block = await _profile_block()
+    older = await _older_block(session_id, history, model_id)
     parts: list[str] = []
     try:
         async for delta in _stream(
             model_id,
-            build_messages(history, format_recall(hits), format_material(sources), await _profile_block()),
+            build_messages(history, format_recall(hits), format_material(sources), profile_block, older),
         ):
             parts.append(delta)
             yield "delta", {"text": delta}

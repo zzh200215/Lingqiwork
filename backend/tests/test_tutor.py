@@ -944,6 +944,112 @@ async def test_stream_falls_back_to_the_next_enabled_provider(monkeypatch):
     assert tried == ["dead", "live"]
 
 
+# ---------- 中段压缩：超出窗口的对话压成摘要跟着走（maple-os 参考项 1） ----------
+
+
+def _hist(n: int) -> list[dict]:
+    return [{"role": "user" if i % 2 == 0 else "assistant", "content": f"t{i}"} for i in range(n)]
+
+
+def test_split_history_matches_the_legacy_window():
+    """压缩范围必须和实际丢弃范围一致——它俩从来就该是同一个规则。"""
+    assert core.split_history(_hist(5)) == (_hist(5), [])
+    h = _hist(62)
+    recent, dropped = core.split_history(h)
+    assert recent == [h[0], *h[3:]]  # 锚点（首条）在，挤掉窗口里最旧的一条
+    assert dropped == [h[1], h[2]]
+
+
+def test_build_messages_puts_older_nearest_the_transcript():
+    msgs = core.build_messages(_hist(10), recall="R", material="M", profile="P", older="O")
+    kinds = [m["content"] for m in msgs if m["role"] == "system"]
+    assert kinds == [core.SOCRATIC_PROMPT, "R", "P", "M", "O"]
+    # 空 older 不产生空块
+    assert all(m["content"] for m in core.build_messages(_hist(10), older=""))
+
+
+def test_format_older_combinations():
+    assert core.format_older("", []) == ""
+    assert "摘" in core.format_older("摘", [])
+    only_raw = core.format_older("", [{"role": "user", "content": "hi"}])
+    assert "用户：hi" in only_raw
+    both = core.format_older("摘", [{"role": "assistant", "content": "yo"}])
+    assert "较早对话的摘要" in both and "老师：yo" in both
+
+
+async def _long_session(monkeypatch, turns: int = 66) -> int:
+    """开一个会话并直接铺 66 轮；say() 的新一轮会把中段推过 SUMMARY_BATCH。"""
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    monkeypatch.setattr(providers, "is_unhealthy", lambda mid, cache=None: False)
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    sid = (await core.start("asyncio 事件循环"))["id"]
+    from app.db import SessionLocal
+    from app.models import TutorTurn
+
+    async with SessionLocal() as db:
+        for i in range(turns):
+            db.add(
+                TutorTurn(session_id=sid, role="user" if i % 2 == 0 else "assistant", content=f"t{i}")
+            )
+        await db.commit()
+    return sid
+
+
+async def test_say_compresses_dropped_middle_once_and_serves_it_from_cache(monkeypatch):
+    await _reset()
+    sid = await _long_session(monkeypatch)
+
+    summarize_calls: list = []
+
+    async def fake_summarize(model_id, prior, dropped):
+        summarize_calls.append((model_id, prior, len(dropped)))
+        return "这是中段摘要"
+
+    monkeypatch.setattr(core, "_summarize", fake_summarize)
+    seen: list = []
+    monkeypatch.setattr(core, "_stream", _fake_stream(["答"], seen))
+
+    events = [e async for e in core.say(sid, "继续")]
+    assert [k for k, _ in events][-1] == "done"
+    # 66 铺底 + 1 新轮 → 中段 7 轮，超过 SUMMARY_BATCH=4 → 压缩并落缓存
+    assert summarize_calls and summarize_calls[0][2] == 7
+    first = seen[0][1]
+    assert any("这是中段摘要" in m["content"] for m in first)
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    async with SessionLocal() as db:
+        row = await db.get(TutorSession, sid)
+        assert row.summary == "这是中段摘要" and row.summary_upto == 7
+
+    # 第二轮只多掉出 1 轮（< 4）：不再调压缩，缓存摘要 + 未覆盖那轮原文一起注入
+    seen.clear()
+    await _collect(core.say(sid, "再继续"))
+    assert len(summarize_calls) == 1
+    older = [m["content"] for m in seen[0][1] if "较早对话的摘要" in m["content"]]
+    assert older and "这是中段摘要" in older[0] and "t8" in older[0]
+
+
+async def test_say_survives_a_failed_compression(monkeypatch):
+    await _reset()
+    sid = await _long_session(monkeypatch)
+
+    async def boom(model_id, prior, dropped):
+        raise RuntimeError("压缩挂了")
+
+    monkeypatch.setattr(core, "_summarize", boom)
+    seen: list = []
+    monkeypatch.setattr(core, "_stream", _fake_stream(["答"], seen))
+
+    events = [e async for e in core.say(sid, "继续")]
+    assert [k for k, _ in events][-1] == "done"
+    # 摘要失败不挡教学：未覆盖的中段以原文进块
+    older = [m["content"] for m in seen[0][1] if "掉出窗口之前" in m["content"]]
+    assert older and "t1" in older[0]
+
+
 
 
 
