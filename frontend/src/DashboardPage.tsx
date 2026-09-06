@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import Layout from './Layout'
-import { api, type BeliefThread, type DashboardStats, type TutorStats } from './api'
+import { api, type BeliefThread, type DashboardStats, type JournalRecent, type TutorStats } from './api'
 
 // 仪表盘 — 零柒视角
 // 顶部 banner 用零柒 sprite + LLM 生成的今日一句话；
@@ -34,13 +34,83 @@ export default function DashboardPage() {
   // 信念演化时间线（记忆时间轴主题）：纯拉取式的自我观察，没有就整块不渲染
   const [beliefs, setBeliefs] = useState<BeliefThread[] | null>(null)
 
+  // 语音日记：麦克风→转写→可编辑→落盘 vault/journal（复用聊天页的录制链路）
+  const [journalView, setJournalView] = useState<JournalRecent | null>(null)
+  const [journalText, setJournalText] = useState('')
+  const [recording, setRecording] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [journalMsg, setJournalMsg] = useState('')
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const micChunksRef = useRef<Blob[]>([])
+
+  const refreshJournal = useCallback(() => {
+    api.journalRecent().then(setJournalView).catch(() => {})
+  }, [])
+
   useEffect(() => {
     api.dashboard().then(setStats).catch((e) => setError(String(e)))
     // swallowed on purpose: the dashboard must never blank out over one endpoint
     api.tutorStats().then(setTutor).catch(() => {})
     api.beliefThreads().then((r) => setBeliefs(r.threads)).catch(() => {})
+    refreshJournal()
     void refreshBriefing()
-  }, [refreshBriefing])
+  }, [refreshBriefing, refreshJournal])
+
+  function toggleJournalMic() {
+    if (recording) {
+      recorderRef.current?.stop()
+      return
+    }
+    if (transcribing) return
+    setJournalMsg('')
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        const rec = new MediaRecorder(stream)
+        micChunksRef.current = []
+        rec.ondataavailable = (e) => {
+          if (e.data.size > 0) micChunksRef.current.push(e.data)
+        }
+        rec.onstop = async () => {
+          stream.getTracks().forEach((t) => t.stop())
+          setRecording(false)
+          const blob = new Blob(micChunksRef.current, { type: rec.mimeType || 'audio/webm' })
+          if (blob.size < 800) return // accidental tap — nothing audible
+          setTranscribing(true)
+          try {
+            const r = await api.transcribeAudio(blob)
+            if (r.text) setJournalText((prev) => (prev ? `${prev} ${r.text}` : r.text))
+            else setJournalMsg('没有识别到语音内容')
+          } catch (e) {
+            setJournalMsg(`语音识别失败：${String(e)}`)
+          } finally {
+            setTranscribing(false)
+          }
+        }
+        rec.start()
+        recorderRef.current = rec
+        setRecording(true)
+      })
+      .catch(() => setJournalMsg('无法访问麦克风 — 请检查系统/浏览器权限'))
+  }
+
+  async function saveJournal() {
+    const text = journalText.trim()
+    if (!text || saving) return
+    setSaving(true)
+    setJournalMsg('')
+    try {
+      const r = await api.journalAdd(text)
+      setJournalText('')
+      setJournalMsg(`已记下 · 今天第 ${r.count} 条`)
+      refreshJournal()
+    } catch (e) {
+      setJournalMsg(`保存失败：${String(e)}`)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const nar = stats?.narrative
   const thisWeek = nar?.this_week_messages ?? 0
@@ -272,6 +342,59 @@ export default function DashboardPage() {
             </ul>
           </section>
         )}
+
+        <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">语音日记</h2>
+            <span className="text-xs text-neutral-400">
+              说给未来的自己 · 落在 vault/journal · 今天 {journalView?.today ?? 0} 条
+            </span>
+          </div>
+          <textarea
+            value={journalText}
+            onChange={(e) => setJournalText(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') void saveJournal()
+            }}
+            placeholder='点麦克风说话，或直接打字。Ctrl+Enter 保存。'
+            rows={3}
+            className="mt-3 w-full resize-y rounded-xl border border-neutral-200 bg-transparent px-3 py-2 text-sm leading-relaxed text-neutral-800 placeholder:text-neutral-400 focus:border-violet-400 focus:outline-none dark:border-neutral-700 dark:text-neutral-100"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={toggleJournalMic}
+              disabled={transcribing}
+              title={recording ? '停止录音' : '按下说话'}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-base transition-colors disabled:opacity-50 ${
+                recording
+                  ? 'animate-pulse border-rose-300 bg-rose-50 text-rose-600 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
+                  : 'border-neutral-200 text-neutral-500 hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300'
+              }`}
+            >
+              {transcribing ? '…' : recording ? '⏹' : '🎤'}
+            </button>
+            <button
+              onClick={() => void saveJournal()}
+              disabled={saving || !journalText.trim()}
+              className="rounded-full bg-violet-600 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-40"
+            >
+              {saving ? '保存中…' : '记下来'}
+            </button>
+            {journalMsg && <span className="text-xs text-neutral-500">{journalMsg}</span>}
+          </div>
+          {journalView && journalView.entries.length > 0 && (
+            <ul className="mt-3 space-y-1.5 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+              {journalView.entries.slice(0, 5).map((e, i) => (
+                <li key={`${e.date}-${e.time}-${i}`} className="flex items-baseline gap-2 text-xs">
+                  <span className="shrink-0 font-mono text-[11px] text-neutral-400">
+                    {e.date.slice(5)} {e.time}
+                  </span>
+                  <span className="min-w-0 truncate text-neutral-600 dark:text-neutral-300">{e.excerpt}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
         <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
           <div className="flex items-center justify-between">

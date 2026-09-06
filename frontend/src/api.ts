@@ -106,6 +106,19 @@ export interface AsrResult {
   duration: number
 }
 
+/** 语音日记：vault/journal 按天落盘的一条（POST 响应） */
+export interface JournalSaved {
+  path: string
+  date: string
+  time: string
+  count: number
+}
+
+export interface JournalRecent {
+  entries: { date: string; time: string; text: string; excerpt: string }[]
+  today: number
+}
+
 export interface TtsResult {
   url: string
   cached: boolean
@@ -982,6 +995,11 @@ export const api = {
 
   /** 信念演化时间线：automemory 事实按语义聚成的「信念线」 */
   beliefThreads: () => request<{ threads: BeliefThread[] }>('/api/beliefs'),
+
+  /** 语音日记：转写文本按天落盘 vault/journal/（automemory 后台提取，best-effort） */
+  journalAdd: (text: string) =>
+    request<JournalSaved>('/api/journal', { method: 'POST', body: JSON.stringify({ text }) }),
+  journalRecent: () => request<JournalRecent>('/api/journal/recent'),
 
   /** 卡点讨论播客（对话播客 2.0）：最近的卡点 → 双人讨论音频 */
   podcastFromStuck: (days = 90) =>

@@ -28,6 +28,7 @@ from app.routers import (
     habits,
     health as health_router,
     images,
+    journal,
     kb,
     kg,
     notes,
@@ -152,6 +153,7 @@ app.include_router(backup.router)
 app.include_router(tasks.router)
 app.include_router(evals.router)
 app.include_router(images.router)
+app.include_router(journal.router)
 app.include_router(ask.router)
 app.include_router(repos.router)
 app.include_router(dirs.router)
