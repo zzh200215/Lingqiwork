@@ -118,12 +118,18 @@ def test_status_fields_are_real():
 
 
 def test_status_survives_missing_tables(monkeypatch):
+    import sqlite3
+
     import app.core.pet as pet_mod
 
-    def _boom():
+    def _boom(*a, **kw):
         raise RuntimeError("db gone")
 
     monkeypatch.setattr(pet_mod, "_conn", _boom)
+    # status() 统计 task_runs/messages 走的是直接 sqlite3.connect(settings.db_path)，
+    # 不经过 _conn——把它也掐掉，测试才真正密封；否则它数到的是同进程里
+    # 第一个测试库今天的运行行，日期一变结论就变。
+    monkeypatch.setattr(sqlite3, "connect", _boom)
     st = pet.status()  # must not raise
     assert st["tasks_done"] == 0
 
