@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
 
 sys.path.insert(0, ".")
 
@@ -258,3 +259,50 @@ def test_watch_to_rel():
     assert w._to_rel("D:\\TP\\A\\vault\\feeds\\08.md") == "feeds/08.md"
     assert w._to_rel(str(Path("D:/TP/A/vault").resolve() / "a.md")) == "a.md"
     assert w._to_rel("D:\\TP\\A\\backend\\x.md") is None  # outside the vault
+
+# ---------- 自然语言 -> cron（parse_schedule） ----------
+
+
+def _fake_llm(reply: str):
+    provider = SimpleNamespace(kind="openai", base_url="", api_key="k")
+
+    async def _resolve(_model_id):
+        return provider, "m"
+
+    async def _stream(_info, _model, _messages):
+        yield reply
+
+    return _resolve, _stream
+
+
+async def test_parse_schedule_turns_nl_into_validated_draft(monkeypatch):
+    resolve, stream = _fake_llm(
+        '{"cron": "0 20 * * 3", "name": "每周复盘", "prompt": "复盘本周的学习记录"}'
+    )
+    monkeypatch.setattr(core, "_resolve", resolve)
+    monkeypatch.setattr(core, "stream_chat", stream)
+    d = await core.parse_schedule("每周三晚上八点复盘本周的学习记录")
+    assert d == {"cron": "0 20 * * 3", "name": "每周复盘", "prompt": "复盘本周的学习记录"}
+
+
+async def test_parse_schedule_rejects_non_schedule_intent(monkeypatch):
+    """出口必须有：模型判定不是周期性需求时返回空 cron，落成一句人话，而不是硬编一个时间表。"""
+    resolve, stream = _fake_llm('{"cron": "", "name": "", "prompt": ""}')
+    monkeypatch.setattr(core, "_resolve", resolve)
+    monkeypatch.setattr(core, "stream_chat", stream)
+    with pytest.raises(ValueError, match="周期"):
+        await core.parse_schedule("今天天气怎么样")
+
+
+async def test_parse_schedule_rejects_broken_cron_and_garbage(monkeypatch):
+    resolve, stream = _fake_llm('{"cron": "8点", "name": "x", "prompt": "y"}')
+    monkeypatch.setattr(core, "_resolve", resolve)
+    monkeypatch.setattr(core, "stream_chat", stream)
+    with pytest.raises(ValueError):
+        await core.parse_schedule("每天八点")
+
+    resolve, stream = _fake_llm("模型没按格式回答")
+    monkeypatch.setattr(core, "_resolve", resolve)
+    monkeypatch.setattr(core, "stream_chat", stream)
+    with pytest.raises(ValueError, match="JSON"):
+        await core.parse_schedule("每天八点")

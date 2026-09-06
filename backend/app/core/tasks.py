@@ -613,6 +613,8 @@ _PARSE_SYSTEM = (
     "把用户的中文定时需求转成 JSON，只输出 JSON，不要解释、不要代码块。字段：\n"
     '{"cron": "5 段标准 crontab（分 时 日 月 周，本地时区）", '
     '"name": "不超过 12 字的任务名", "prompt": "要交给模型执行的完整指令"}\n'
+    "如果用户说的不是周期性任务需求（只是问问题、要一次性提醒、聊天），"
+    '就输出 {"cron": "", "name": "", "prompt": ""}，不要硬编一个 cron。\n'
     "示例：每天早上8点总结知识库新增内容 → "
     '{"cron": "0 8 * * *", "name": "知识库日报", "prompt": "总结我知识库里最近新增或修改的内容，按主题归纳要点。"}'
 )
@@ -638,7 +640,10 @@ async def parse_schedule(text: str) -> dict:
     if not m:
         raise ValueError(f"模型未返回 JSON：{raw[:120]}")
     data = json.loads(m.group(0))
-    cron = validate_cron(str(data.get("cron", "")))
+    cron = str(data.get("cron") or "").strip()
+    if not cron:  # 模型判定这不是周期性任务需求——照实说，别硬编
+        raise ValueError("这听起来不是一个周期性的任务需求；定时任务需要能落到一个重复时间表上")
+    cron = validate_cron(cron)
     return {
         "cron": cron,
         "name": str(data.get("name") or "").strip()[:100] or "新任务",
