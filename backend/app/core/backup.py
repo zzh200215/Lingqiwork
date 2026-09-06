@@ -3,6 +3,10 @@
 Restore stays manual on purpose (stop server → unzip over the project root →
 restart), so a bug here can never overwrite live data. The vector index is not
 archived: it is fully rebuildable from vault via the KB rebuild endpoint.
+
+What is *not* in the archive is listed in the manifest rather than left to be
+discovered during a restore — see `NOT_INCLUDED`. `smoke_restore.py` rehearses
+the whole path (PLAN.md 第 8 节) and will tell you if any of this drifts.
 """
 import json
 import logging
@@ -21,6 +25,16 @@ DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP = 7
 _PREFIX = "workbench-backup-"
 _SUFFIX = ".zip"
+
+# Everything else under data/ and why it is acceptable to lose. Written into the
+# manifest so a restore three months from now does not have to guess which dead
+# links are expected. 生成物那一行是真正的缺口，不是设计选择。
+NOT_INCLUDED = {
+    "data/chroma": "向量库，可由 vault 重建（KB 页「重建索引」）",
+    "data/repos": "克隆的仓库，可重新克隆",
+    "data/feeds_seen.json": "订阅去重状态，丢了最多重复推一次旧条目",
+    "data/artifacts + images + podcasts + tts": "生成物，不可重建；DB 里的引用会变死链",
+}
 
 
 def backup_dir() -> Path:
@@ -111,6 +125,7 @@ def create_backup(reason: str = "manual") -> dict:
                         "db": bool(db_copy),
                         "config": cfg.exists(),
                         "index_included": False,
+                        "not_included": NOT_INCLUDED,
                         "restore": "停止服务 → 解压覆盖项目根目录的 vault/ 与 data/ → 重启 → KB 页重建索引",
                     },
                     ensure_ascii=False,

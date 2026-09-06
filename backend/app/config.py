@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     app_name: str = "AI Workbench"
     db_path: Path = DATA_DIR / "workbench.db"
     config_path: Path = DATA_DIR / "config.json"
+    # Overridable for the same reason db_path is: the restore drill (PLAN.md 第 8 节)
+    # has to rebuild an index from a restored vault, and a hard-coded path would
+    # make the rehearsal overwrite the live one. Not a user-facing setting.
+    chroma_path: Path = DATA_DIR / "chroma"
 
 
 settings = Settings()

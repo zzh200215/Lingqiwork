@@ -13,7 +13,7 @@ from pathlib import Path
 import chromadb
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from app.config import DATA_DIR, VAULT_DIR
+from app.config import VAULT_DIR, settings
 from app.core import embedder, ingest
 
 log = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ def get_client() -> chromadb.ClientAPI:
     if _client is None:
         with _client_lock:
             if _client is None:
-                _client = chromadb.PersistentClient(path=str(DATA_DIR / "chroma"))
+                _client = chromadb.PersistentClient(path=str(settings.chroma_path))
     return _client
 
 
