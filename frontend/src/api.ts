@@ -943,6 +943,13 @@ export const api = {
       body: JSON.stringify({ url, title }),
     }),
 
+  /** 划词助手的「剪藏」：直接落盘所选文本（/api/kb/clip_text） */
+  clipText: (text: string, title?: string) =>
+    request<{ filename: string; title: string; chars: number; chunks: number }>('/api/kb/clip_text', {
+      method: 'POST',
+      body: JSON.stringify({ text, title }),
+    }),
+
   listRepos: () => request<RepoList>('/api/repos'),
   cloneRepo: (url: string, name?: string) =>
     request<RepoItem>('/api/repos', { method: 'POST', body: JSON.stringify({ url, name }) }),

@@ -149,6 +149,15 @@ class SelectionApi:
             selection_window.hide()
             selection_shown.clear()
 
+    def open_tutor(self, session_id: int) -> None:
+        """划词助手的「教学」动作：前端先用 /api/tutor/start 建好会话，
+        这里收尾——收起弹窗，主窗口深链直接打开那次会话。"""
+        self.hide_selection()
+        if main_window:
+            main_window.load_url(f"{URL}/tutor.html?session={session_id}")
+            main_window.show()
+            main_window.restore()
+
 
 # --- tray --------------------------------------------------------------------
 

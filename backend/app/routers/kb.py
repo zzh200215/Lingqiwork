@@ -143,3 +143,36 @@ async def kb_clip(body: ClipIn):
         "chars": len(text),
         "chunks": chunks,
     }
+
+
+class TextClipIn(BaseModel):
+    text: str
+    title: str | None = None
+
+
+@router.post("/clip_text")
+async def kb_clip_text(body: TextClipIn):
+    """剪藏一段选中的文本（划词助手「剪藏」动作）。
+
+    与 /clip 的分工：/clip 抓网页正文，这里直接落盘所选文本。剪藏是「保存」
+    而不是「提问」——落盘 + 索引即结束，watcher 随后让它进 RAG。"""
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "text 不能为空")
+    if len(text) > _CLIP_MAX:
+        text = text[:_CLIP_MAX] + "\n\n...[已截断]"
+    title = (body.title or "").strip() or text[:40].split("\n")[0]
+    safe_title = _SAFE_NAME.sub("_", title).strip("_")[:60] or "clip"
+    dest = _CLIP_DIR / f"{safe_title}-{uuid.uuid4().hex[:6]}.md"
+    _CLIP_DIR.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        f"# {title}\n\n> 剪藏自划词 · {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{text}\n",
+        encoding="utf-8",
+    )
+    chunks = await asyncio.to_thread(indexer.index_file, dest)
+    return {
+        "filename": dest.relative_to(VAULT_DIR).as_posix(),
+        "title": title,
+        "chars": len(text),
+        "chunks": chunks,
+    }

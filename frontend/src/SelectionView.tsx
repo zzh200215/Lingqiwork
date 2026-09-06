@@ -1,13 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { api } from './api'
+
 // Selection assistant popup (Cherry Studio 选中助手 style, ROADMAP V4.2).
 // desktop.py grabs the selected text via simulated Ctrl+C, then navigates this
-// window to selection.html#t=<urlencoded text>. Actions stream from /api/ask.
+// window to selection.html#t=<urlencoded text>. 翻译/解释/总结/自定义 stream
+// from /api/ask；教学 / 剪藏 是两个跳转动作——进教学会话、落盘进知识库。
 
 declare global {
   interface Window {
     pywebview?: {
-      api?: { hide_quick?: () => void; open_main?: () => void; hide_selection?: () => void; hide_pet?: () => void }
+      api?: {
+        hide_quick?: () => void
+        open_main?: () => void
+        hide_selection?: () => void
+        hide_pet?: () => void
+        open_tutor?: (sessionId: number) => void
+      }
     }
   }
 }
@@ -16,6 +25,8 @@ const ACTIONS = [
   { key: 'translate', label: '翻译' },
   { key: 'explain', label: '解释' },
   { key: 'summarize', label: '总结' },
+  { key: 'tutor', label: '🎓 教学' },
+  { key: 'clip', label: '剪藏' },
 ] as const
 
 type ActionKey = (typeof ACTIONS)[number]['key'] | 'custom'
@@ -56,6 +67,30 @@ export default function SelectionView() {
 
   async function run(action: ActionKey, prompt?: string) {
     if (busy || !text.current) return
+    // 教学：开一场教学会话并让主窗口深链打开；剪藏：落盘进知识库。
+    // 两个都是「处置」动作，不走 /api/ask 的流式回答。
+    if (action === 'tutor' || action === 'clip') {
+      setError(null)
+      setBusy(true)
+      try {
+        if (action === 'tutor') {
+          const s = await api.tutorStart(text.current)
+          setBusy(false)
+          hideWindow()
+          window.pywebview?.api?.open_tutor?.(s.id)
+        } else {
+          const r = await api.clipText(text.current, text.current.slice(0, 30))
+          setAnswered(true)
+          setAnswer(`已剪藏进知识库：${r.filename}（${r.chunks} 块）`)
+          setBusy(false)
+          setTimeout(() => hideWindow(), 1500)
+        }
+      } catch (e) {
+        setBusy(false)
+        setError(e instanceof Error ? e.message : String(e))
+      }
+      return
+    }
     setAnswered(true)
     setAnswer('')
     setError(null)

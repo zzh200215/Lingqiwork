@@ -8,7 +8,13 @@ import { streamChat } from './stream'
 declare global {
   interface Window {
     pywebview?: {
-      api?: { hide_quick?: () => void; open_main?: () => void; hide_selection?: () => void; hide_pet?: () => void }
+      api?: {
+        hide_quick?: () => void
+        open_main?: () => void
+        hide_selection?: () => void
+        hide_pet?: () => void
+        open_tutor?: (sessionId: number) => void
+      }
     }
   }
 }
