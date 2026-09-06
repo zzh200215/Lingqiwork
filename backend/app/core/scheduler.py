@@ -31,6 +31,11 @@ KEEP_RUNS = 20  # per job_id, matching the per-task run log in core/tasks.py
 # silently is not there is exactly the failure this module exists to surface: on
 # 2026-09-04 `cards_remind` and `cards_remediate` were off and nothing said so —
 # they simply did not appear anywhere.
+#
+# Those two are now deliberately absent from this table: PLAN.md 第 3 节 封存了
+# 复习提醒，`cards.reschedule()` 永远不再注册它们。留在表里的话 `self_check` 会一直把
+# 它们算进 `jobs_missing`（「应该在跑但没注册」），而那正是第 9 节唯一在乎的信号 ——
+# 一个永远亮着的假警报会把真故障淹掉。
 KNOWN_JOBS = {
     "daily_digest": "digest_enabled",
     "auto_backup": "backup_enabled",
@@ -38,8 +43,6 @@ KNOWN_JOBS = {
     "memory_tidy": "memory_tidy_enabled",
     "pet_morning": "pet_greet_enabled",
     "pet_evening": "pet_greet_enabled",
-    "cards_remind": "cards_remind_enabled",
-    "cards_remediate": "cards_remedy_enabled",
 }
 
 

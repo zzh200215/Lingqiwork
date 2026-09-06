@@ -38,11 +38,12 @@ function Logo() {
   )
 }
 
-// 「今日」排第二位：每天要做的事压在一周看一次的仪表盘之上。文件名仍是
-// review.html —— 改入口文件要动 vite.config.ts 和书签，换不来任何东西。
+// 「学」排第二位：PLAN.md 第 1 节的主线就是它。/review.html（今日队列 + 习惯）
+// 按第 3 节封存 —— 页面还在，只从导航移走，因为「到期了要还债」的感觉正是被否
+// 掉的那一版。文件名仍是 review.html，改入口要动 vite.config.ts 和书签。
 const NAV = [
   { href: '/', label: '对话', icon: '💬', key: 'chat' },
-  { href: '/review.html', label: '今日', icon: '☀️', key: 'review' },
+  { href: '/tutor.html', label: '学', icon: '🎓', key: 'tutor' },
   { href: '/dashboard.html', label: '仪表盘', icon: '📊', key: 'dashboard' },
   { href: '/notes.html', label: '笔记', icon: '📝', key: 'notes' },
   { href: '/kb.html', label: '知识库', icon: '📚', key: 'kb' },
@@ -53,7 +54,7 @@ export default function Layout({
   page,
   children,
 }: {
-  page: 'chat' | 'kb' | 'settings' | 'dashboard' | 'notes' | 'review'
+  page: 'chat' | 'kb' | 'settings' | 'dashboard' | 'notes' | 'review' | 'tutor'
   children: React.ReactNode
 }) {
   const [conversations, setConversations] = useState<{ id: number; title: string }[]>([])
@@ -143,7 +144,13 @@ export default function Layout({
           </div>
         </div>
       </aside>
-      {page === 'chat' ? children : <main className="flex-1 overflow-y-auto">{children}</main>}
+      {/* chat and 学 own their scrolling: both keep a composer pinned at the
+          bottom, which a page-level overflow container would scroll away */}
+      {page === 'chat' || page === 'tutor' ? (
+        children
+      ) : (
+        <main className="flex-1 overflow-y-auto">{children}</main>
+      )}
       <PetWidget />
     </div>
   )

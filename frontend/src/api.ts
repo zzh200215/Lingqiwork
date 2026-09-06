@@ -735,6 +735,59 @@ export async function streamNotesAi(
   }
 }
 
+// ---------- 对话式教学 (PLAN.md 第 6 节) ----------
+
+/** end() 的返回：概念/别名/卡点之外，`material_nearby` 是「材料里还有」，
+ * 只在自评总结里出现一次（PLAN.md 第 7 节，第 2 节护栏版——不是队列）。 */
+export interface TutorEndResult {
+  id: number
+  verdict: string
+  concept: string
+  aliases: string
+  stuck: string
+  material_nearby: { source: string; title: string; score: number }[]
+}
+
+export interface TutorSessionStart {
+  id: number
+  topic: string
+  model_id: string
+  /** false = no provider, or a recent probe failed. Say so before the first turn. */
+  model_ok: boolean
+}
+
+export interface TutorTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/** A row in the history rail. `turn_count` is a number here; `TutorDetail.turns`
+ * is the message list — two names because one key with two types gets misread. */
+export interface TutorSessionRow {
+  id: number
+  topic: string
+  concept: string
+  verdict: '' | 'got' | 'half' | 'useless'
+  stuck: string
+  recalled: boolean
+  turn_count: number
+  created_at: string
+  ended_at: string | null
+}
+
+export interface TutorDetail extends Omit<TutorSessionRow, 'turn_count'> {
+  model_id: string
+  turns: TutorTurn[]
+}
+
+export interface TutorStats {
+  days: number
+  sessions: number
+  got: number
+  got_with_recall: number
+  concepts: number
+}
+
 export const api = {
   listProviders: () => request<ProviderConfig[]>('/api/settings/providers'),
   createProvider: (p: Partial<ProviderConfig>) =>
@@ -1127,4 +1180,21 @@ export const api = {
       body: JSON.stringify({ page }),
     }),
   todayNext: () => request<TodayNext>('/api/today/next'),
+
+  // ---------- 对话式教学 ----------
+  tutorStart: (topic: string) =>
+    request<TutorSessionStart>('/api/tutor/start', {
+      method: 'POST',
+      body: JSON.stringify({ topic }),
+    }),
+  /** 懂了 / 半懂 / 没用 — the only manual input in the product (PLAN.md 第 4 节) */
+  tutorEnd: (session_id: number, verdict: 'got' | 'half' | 'useless') =>
+    request<TutorEndResult>('/api/tutor/end', {
+      method: 'POST',
+      body: JSON.stringify({ session_id, verdict }),
+    }),
+  tutorSessions: (limit = 50) =>
+    request<{ sessions: TutorSessionRow[] }>(`/api/tutor/sessions?limit=${limit}`),
+  tutorSession: (id: number) => request<TutorDetail>(`/api/tutor/sessions/${id}`),
+  tutorStats: (days = 14) => request<TutorStats>(`/api/tutor/stats?days=${days}`),
 }

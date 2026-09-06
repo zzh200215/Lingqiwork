@@ -399,6 +399,67 @@ class JobRun(Base):
     message: Mapped[str] = mapped_column(Text, default="")  # error, or a short result line
 
 
+class TutorSession(Base):
+    """One 教学会话: you name something to understand, and it asks until you get it.
+
+    Deliberately NOT a Conversation row. The tutor is the one thing PLAN.md says
+    must be removable in one piece if its failure signals fire, and a `kind`
+    column on `conversations` would instead leak into every existing chat query.
+
+    `concept` / `verdict` / `stuck` / `aliases` are filled when the session ends,
+    so they default to "" rather than being nullable: a session with no verdict is
+    a real state (you closed the tab), not a broken row.
+
+    The 「理解状态」PLAN.md asks for is this table grouped by concept — not a
+    second table. A separate one would mean keeping two copies of the same fact
+    in sync, and every write already passes through here.
+    """
+
+    __tablename__ = "tutor_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic: Mapped[str] = mapped_column(String(200))  # the user's own words
+    concept: Mapped[str] = mapped_column(String(120), default="")  # normalized at end
+    verdict: Mapped[str] = mapped_column(String(10), default="")  # got | half | useless
+    stuck: Mapped[str] = mapped_column(Text, default="")  # one line: where it broke down
+    # 同一个概念的其他说法，结束时和 concept 一起提取。存在的唯一理由是召回：
+    # bge-small-zh 接不住同义改写（「协程什么时候切换」对「asyncio 事件循环」实测
+    # 0.44-0.49），而几个月后重逢时用的词往往正好不是上次那个词。`tutor.ALIAS_SEP`
+    # （" | "）分隔的一行而不是 JSON —— 它只有一个消费者（`tutor.recall_hits`，把每
+    # 个别名各算一条向量），存成结构化数据就得多一层解析而换不到任何东西。分隔符
+    # 不能是空格：别名自己会带空格（「event loop 调度」），切碎了就成噪声。
+    aliases: Mapped[str] = mapped_column(Text, default="")
+    # Whether 「你上次卡过」 actually fired here. This is instrumentation, not a
+    # feature: PLAN.md 第 5 节 kills recall if it never triggers, and that call
+    # should not depend on remembering to hand-count it in LOG.md.
+    recalled: Mapped[bool] = mapped_column(Boolean, default=False)
+    model_id: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class TutorTurn(Base):
+    """One message inside a 教学会话.
+
+    Separate from `messages` for the same reason TutorSession is separate from
+    `conversations`: dropping two tables must be enough to remove the feature.
+    No sources/tokens/feedback columns — the tutor does no RAG and no tools in
+    this step, and a column added "for later" is a column nobody fills.
+    """
+
+    __tablename__ = "tutor_turns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("tutor_sessions.id", ondelete="CASCADE")
+    )
+    role: Mapped[str] = mapped_column(String(20))  # user | assistant
+    content: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # The uniqueness is load-bearing, not decoration: it is what makes a double tick
 # idempotent (the router upserts on it). Expressed as a unique Index rather than a
 # UniqueConstraint because a bare UniqueConstraint() at module level attaches to no
@@ -406,3 +467,4 @@ class JobRun(Base):
 Index("ix_habit_logs_day", HabitLog.habit_id, HabitLog.day, unique=True)
 Index("ix_job_runs_recent", JobRun.job_id, JobRun.id)
 Index("ix_usage_page_day", UsageVisit.page, UsageVisit.day, unique=True)
+Index("ix_tutor_turns_session", TutorTurn.session_id, TutorTurn.id)

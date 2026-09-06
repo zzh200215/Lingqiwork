@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import Layout from './Layout'
-import { api, type CardStats, type DashboardStats } from './api'
+import { api, type DashboardStats, type TutorStats } from './api'
 
 // 仪表盘 — 零柒视角
 // 顶部 banner 用零柒 sprite + LLM 生成的今日一句话；
 // 5 张叙事卡片把裸数字包成"本周你聊了 N 次 / 比上周 +X"这种说法；
 // 其余图表与列表保留。
+//
+// 第二张卡原来是「今天到期 N 张 · 连续 N 天 · 习惯 x/y」，按 PLAN.md 第 3 节封存换掉了：
+// 到期数是那一版唯一还留在导航页上的债，第 2 节的判断标准就是它。换成「学」的记录 ——
+// 已经发生过的事，没有到期，也没有未完成计数。
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
-  const [cards, setCards] = useState<CardStats | null>(null)
-  const [habits, setHabits] = useState<{ done: number; total: number } | null>(null)
+  const [tutor, setTutor] = useState<TutorStats | null>(null)
   const [briefing, setBriefing] = useState<{ text: string; cached: boolean } | null>(null)
   const [briefingLoading, setBriefingLoading] = useState(true)
   const [error, setError] = useState('')
@@ -31,11 +34,7 @@ export default function DashboardPage() {
   useEffect(() => {
     api.dashboard().then(setStats).catch((e) => setError(String(e)))
     // swallowed on purpose: the dashboard must never blank out over one endpoint
-    api.cardStats().then(setCards).catch(() => {})
-    api
-      .habitsToday()
-      .then((h) => setHabits({ done: h.done, total: h.total }))
-      .catch(() => {})
+    api.tutorStats().then(setTutor).catch(() => {})
     void refreshBriefing()
   }, [refreshBriefing])
 
@@ -132,21 +131,21 @@ export default function DashboardPage() {
             href="/"
           />
           <NarrativeCard
-            tone={(cards?.due_now ?? 0) > 0 ? 'rose' : 'sky'}
-            eyebrow="今日"
-            headline={`${cards?.due_now ?? 0}`}
-            label="今天到期"
-            sub={[
-              cards && cards.streak > 0
-                ? `连续 ${cards.streak} 天`
-                : cards && cards.total > 0
-                  ? '今天还没开始'
-                  : '还没有卡片',
-              habits && habits.total > 0 ? `习惯 ${habits.done}/${habits.total}` : '',
-            ]
-              .filter(Boolean)
-              .join(' · ')}
-            href="/review.html"
+            tone="sky"
+            eyebrow="学"
+            headline={`${tutor?.sessions ?? 0}`}
+            label={`近 ${tutor?.days ?? 14} 天搞懂过`}
+            sub={
+              tutor && tutor.sessions > 0
+                ? [
+                    `${tutor.got} 次说通了`,
+                    tutor.got_with_recall > 0 ? `${tutor.got_with_recall} 次接上以前卡的点` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : '还没开过口'
+            }
+            href="/tutor.html"
           />
           <NarrativeCard
             tone="fuchsia"

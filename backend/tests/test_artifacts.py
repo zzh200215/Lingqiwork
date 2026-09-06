@@ -4,12 +4,15 @@ runs for real, offline.
 """
 import atexit
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from app.core import artifacts
+sys.path.insert(0, ".")
+
+from app.core import artifacts  # noqa: E402
 
 _SCRATCHES: list[Path] = []
 
@@ -120,3 +123,47 @@ def test_resolve_timeout_clamps():
     assert artifacts.resolve_timeout(0) == 1
     assert artifacts.resolve_timeout(None) == 30
     assert artifacts.resolve_timeout("garbage") == 30
+
+
+# ---------- router layer ----------
+
+
+async def test_router_run_offloads_the_blocking_subprocess(monkeypatch):
+    """`artifacts.run` blocks in subprocess.run for up to 120s; called bare inside
+    the async endpoint it froze the whole backend — every SSE stream included —
+    for the whole run. The offload is the fix, so this pins the thread it lands on."""
+    import threading
+
+    from app.routers import artifacts as art_router
+
+    seen: dict = {}
+    loop_thread = threading.current_thread().name
+
+    def fake_run(code, language="python", timeout=None):
+        seen["thread"] = threading.current_thread().name
+        seen["args"] = (code, language, timeout)
+        return {"ok": True, "exit_code": 0, "timeout": False, "stdout": "1", "stderr": "", "elapsed_ms": 1}
+
+    monkeypatch.setattr(artifacts, "run", fake_run)
+    r = await art_router.run(art_router.RunIn(code="print(1)", language="python", timeout=5))
+    assert r["ok"]
+    assert seen["args"] == ("print(1)", "python", 5)
+    assert seen["thread"] != loop_thread  # not on the event loop
+
+
+async def test_router_error_mapping(monkeypatch):
+    import fastapi
+
+    from app.routers import artifacts as art_router
+
+    async def raises(fn, *exc):
+        monkeypatch.setattr(artifacts, "run", lambda *a, **k: (_ for _ in ()).throw(*exc))
+        try:
+            await art_router.run(art_router.RunIn(code="x"))
+            return None
+        except fastapi.HTTPException as e:
+            return e.status_code
+
+    assert await raises(None, PermissionError("没开")) == 403
+    assert await raises(None, ValueError("代码为空")) == 400
+    assert await raises(None, RuntimeError("boom")) == 502

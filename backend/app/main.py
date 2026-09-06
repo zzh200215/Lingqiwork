@@ -39,6 +39,7 @@ from app.routers import (
     tasks,
     tts,
     today,
+    tutor,
     usage,
 )
 
@@ -156,6 +157,7 @@ app.include_router(cards.router)
 app.include_router(habits.router)
 app.include_router(health_router.router)
 app.include_router(today.router)
+app.include_router(tutor.router)
 app.include_router(usage.router)
 
 

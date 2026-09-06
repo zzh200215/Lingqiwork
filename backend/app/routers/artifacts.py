@@ -1,4 +1,6 @@
 """Artifacts light-execution endpoints (opt-in, see app.core.artifacts)."""
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
@@ -29,7 +31,10 @@ async def get_status():
 @router.post("/run")
 async def run(body: RunIn):
     try:
-        return artifacts.run(body.code, body.language, body.timeout)
+        # `artifacts.run` blocks in subprocess.run for up to MAX_TIMEOUT seconds;
+        # called bare here it froze the whole backend (every SSE stream included)
+        # for that duration. The thread offload is the fix, not an optimization.
+        return await asyncio.to_thread(artifacts.run, body.code, body.language, body.timeout)
     except PermissionError as e:
         raise HTTPException(403, str(e)) from e
     except ValueError as e:

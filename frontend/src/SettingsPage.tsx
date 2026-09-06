@@ -109,9 +109,6 @@ export default function SettingsPage() {
     email_on_feeds: boolean
     cards_new_per_day: number
     cards_review_per_day: number
-    cards_remind_enabled: boolean
-    cards_remind_time: string
-    cards_remedy_enabled: boolean
   } | null>(null)
   const [prefsSaved, setPrefsSaved] = useState(false)
 
@@ -223,9 +220,6 @@ export default function SettingsPage() {
         email_on_feeds: p.email_on_feeds ?? false,
         cards_new_per_day: p.cards_new_per_day ?? 20,
         cards_review_per_day: p.cards_review_per_day ?? 200,
-        cards_remind_enabled: p.cards_remind_enabled ?? true,
-        cards_remind_time: p.cards_remind_time || '20:00',
-        cards_remedy_enabled: p.cards_remedy_enabled ?? true,
       })
       setMcpView(await api.getMcp())
       api.listMemories().then(setMemories).catch(() => {})
@@ -310,11 +304,6 @@ export default function SettingsPage() {
         email_on_feeds: prefs.email_on_feeds,
         cards_new_per_day: Math.max(0, Math.min(500, Number(prefs.cards_new_per_day) || 0)),
         cards_review_per_day: Math.max(0, Math.min(500, Number(prefs.cards_review_per_day) || 0)),
-        cards_remind_enabled: prefs.cards_remind_enabled,
-        cards_remind_time: /^([01]?\d|2[0-3]):[0-5]\d$/.test(prefs.cards_remind_time.trim())
-          ? prefs.cards_remind_time.trim()
-          : '20:00',
-        cards_remedy_enabled: prefs.cards_remedy_enabled,
       }),
     })
     setPrefsSaved(true)
@@ -1458,37 +1447,10 @@ export default function SettingsPage() {
               />
             </label>
           </div>
-          <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={prefs.cards_remind_enabled}
-                onChange={(e) => setPrefs({ ...prefs, cards_remind_enabled: e.target.checked })}
-              />
-              每天提醒到期卡片（零柒说，只在真有到期时才吭声）
-            </label>
-            <input
-              value={prefs.cards_remind_time}
-              onChange={(e) => setPrefs({ ...prefs, cards_remind_time: e.target.value })}
-              placeholder="20:00"
-              className={`${inputCls} w-24`}
-            />
+          <div className="mb-3 rounded-xl bg-neutral-100 px-3 py-2 text-xs leading-relaxed text-neutral-500 dark:bg-neutral-800/60 dark:text-neutral-400">
+            复习已按 PLAN.md 第 3 节封存：不再有每日到期提醒，也不再有每周补讲。
+            页面还在 <code>/review.html</code>，你自己想开就开；它不会再主动找你。
           </div>
-          <label className="mb-3 flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={prefs.cards_remedy_enabled}
-              onChange={(e) => setPrefs({ ...prefs, cards_remedy_enabled: e.target.checked })}
-              className="mt-1"
-            />
-            <span>
-              每周针对答错最多的来源生成一篇补讲
-              <span className="block text-xs leading-relaxed text-neutral-400">
-                周日 21:00 跑。挑近两周平均分最低的 1-2 篇来源，就你答错的那几个点写补充讲解，
-                写进 vault/notes/，自动进 RAG——补讲本身又能再出卡。没有薄弱来源时什么都不做。
-              </span>
-            </span>
-          </label>
           <button
             onClick={savePrefs}
             className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white hover:bg-violet-700"

@@ -289,3 +289,76 @@ export async function streamCardsGenerate(
   }
   return done
 }
+
+export interface TutorRecallHit {
+  concept: string
+  verdict: string
+  stuck: string
+  /** already local 'MM-DD' — the backend owns the timezone conversion */
+  date: string
+  score: number
+  /** which text won: the concept line or one of the aliases */
+  via?: 'concept' | 'alias'
+}
+
+/** One KB chunk the teaching drew on this turn (PLAN.md 第 7 节 取材). */
+export interface TutorMaterialSource {
+  source: string
+  title: string
+  score: number
+}
+
+export interface TutorSayDone {
+  ok: boolean
+  error?: string
+  model_id?: string
+  /** whether 「你上次卡过」 fired in this session — 第 4 节's second number */
+  recalled?: boolean
+}
+
+/**
+ * One teaching exchange. `onRecall` fires at most once per session, before the
+ * first delta; `onDelta` gets the reply as it arrives. Resolves rather than
+ * throwing on a model failure: by then the page has already rendered part of the
+ * answer, and the backend has stored it, so an exception would throw that away.
+ */
+export async function streamTutorSay(
+  body: { session_id: number; text: string },
+  handlers: {
+    onDelta: (text: string) => void
+    onRecall?: (hits: TutorRecallHit[]) => void
+    onSources?: (sources: TutorMaterialSource[]) => void
+  },
+  signal?: AbortSignal
+): Promise<TutorSayDone> {
+  const res = await fetch('/api/tutor/say', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = `讲课失败: ${res.status}`
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(detail)
+  }
+
+  let done: TutorSayDone = { ok: false, error: '流提前结束' }
+  for await (const [event, data] of sseFrames(res)) {
+    if (event === 'delta') handlers.onDelta(String((data as { text?: string }).text ?? ''))
+    else if (event === 'recall')
+      handlers.onRecall?.(((data as { hits?: TutorRecallHit[] }).hits ?? []) as TutorRecallHit[])
+    else if (event === 'sources')
+      handlers.onSources?.(
+        ((data as { sources?: TutorMaterialSource[] }).sources ?? []) as TutorMaterialSource[]
+      )
+    else if (event === 'done') done = { ok: true, ...(data as object) }
+    else if (event === 'error')
+      done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
+  }
+  return done
+}

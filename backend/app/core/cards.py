@@ -1117,22 +1117,22 @@ REMEDY_CARDS = 3
 
 
 def reschedule() -> None:
-    """(Re)register the daily reminder and the weekly remediation job."""
-    from app.core import scheduler as sched
-    from app.core.prefs import load_config
+    """封存：不再注册每日提醒与每周补讲（PLAN.md 第 2、3、6 节）。
 
-    cfg = load_config()
-    sched.set_daily(
-        "cards_remind",
-        _remind,
-        bool(cfg.get("cards_remind_enabled", True)),
-        cfg.get("cards_remind_time") or "20:00",
-        default_hour=20,
-    )
-    if bool(cfg.get("cards_remedy_enabled", True)):
-        sched.set_cron("cards_remediate", _remediate_run, "0 21 * * 0")  # 周日 21:00
-    else:
-        sched.prune_jobs("cards_remediate", keep=set())
+    这两个作业就是上一版「到期了要还债」的主动层 —— 20:00 弹一句「今天有 N 张卡到期」，
+    周日 21:00 写一篇补讲。第 2 节的判断标准只有一条：任何机制一旦产生「欠着没做」的
+    感觉，就是滑回上一版。所以把导航入口撤掉还不够，会自己开口的部分必须停；第 6 节也
+    写死了「不做任何定时任务与提醒」。
+
+    代码一行不删（第 3 节：封存不删、不写迁移）。`_remind` / `_remediate_run` 仍可手动
+    调用，config 里的 `cards_remind_*` / `cards_remedy_enabled` 也留着，只是不再有人读。
+    prune 而不是「什么都不做」：同一个进程里可能还挂着改动之前注册上去的作业，
+    `reschedule_all()` 每次改设置都会调到这里，顺手把它们摘掉。
+    """
+    from app.core import scheduler as sched
+
+    sched.prune_jobs("cards_remind", keep=set())
+    sched.prune_jobs("cards_remediate", keep=set())
 
 
 async def _remind() -> None:

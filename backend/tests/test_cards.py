@@ -524,3 +524,46 @@ def test_streak_counts_back_from_today_and_survives_yesterday_only():
     assert cards_mod._streak({(today - timedelta(days=1)).isoformat()}) == 1
     assert cards_mod._streak({(today - timedelta(days=3)).isoformat()}) == 0
     assert cards_mod._streak(set()) == 0
+
+
+# ---------- 封存：主动层必须是哑的（PLAN.md 第 2、3、6 节）----------
+
+
+def test_reschedule_registers_nothing_even_with_the_flags_on(monkeypatch):
+    """复习提醒被封存了：20:00 那句「今天有 N 张卡到期」正是第 2 节判死的那种感觉。
+
+    config 里的开关留着不动（第 3 节：封存不删、不写迁移），所以默认值仍然是 True ——
+    这个测试的意义就在这里：开关为真也不许注册出作业来。
+    """
+    from app.core import scheduler as sched
+
+    monkeypatch.setattr(
+        "app.core.prefs.load_config",
+        lambda: {"cards_remind_enabled": True, "cards_remedy_enabled": True, "cards_remind_time": "20:00"},
+    )
+    cards_mod.reschedule()
+    assert not [j for j in sched.scheduler.get_jobs() if j.id.startswith("cards_")]
+
+
+def test_reschedule_removes_a_reminder_that_is_already_registered(monkeypatch):
+    """同一个进程里改过设置就会再调一次 reschedule_all，所以它得能摘掉旧作业，
+    而不只是「这次不注册」。"""
+    from app.core import scheduler as sched
+
+    async def noop() -> None:
+        return None
+
+    sched.set_daily("cards_remind", noop, True, "20:00", default_hour=20)
+    assert sched.scheduler.get_job("cards_remind") is not None
+
+    cards_mod.reschedule()
+    assert sched.scheduler.get_job("cards_remind") is None
+
+
+def test_cards_jobs_are_not_in_known_jobs_so_self_check_stays_quiet():
+    """留在 KNOWN_JOBS 里会让 self_check 永远把它们算进 jobs_missing
+    （「应该在跑但没注册」），一个常亮的假警报会淹掉真故障。"""
+    from app.core import scheduler as sched
+
+    assert "cards_remind" not in sched.KNOWN_JOBS
+    assert "cards_remediate" not in sched.KNOWN_JOBS

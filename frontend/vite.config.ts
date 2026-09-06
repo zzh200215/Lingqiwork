@@ -8,6 +8,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve(__dirname, 'index.html'),
+        tutor: resolve(__dirname, 'tutor.html'),
         dashboard: resolve(__dirname, 'dashboard.html'),
         notes: resolve(__dirname, 'notes.html'),
         review: resolve(__dirname, 'review.html'),
