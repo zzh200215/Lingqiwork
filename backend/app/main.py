@@ -96,6 +96,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     await _migrate()
     from app.core import indexer, retriever
+    from app.core import mcp_server
     from app.core.mcp import mcp_manager
     from app.core.watcher import watcher
 
@@ -115,7 +116,8 @@ async def lifespan(app: FastAPI):
 
     jobs.start()
     try:
-        yield
+        async with mcp_server.running():
+            yield
     finally:
         jobs.shutdown()
         from app.core import triggers
@@ -171,6 +173,9 @@ app.include_router(health_router.router)
 app.include_router(today.router)
 app.include_router(tutor.router)
 app.include_router(usage.router)
+
+# MCP server（streamable HTTP，只读工具）挂在 /mcp；session manager 由 lifespan 启动
+app.mount("/mcp", mcp_server.asgi_app())
 
 
 @app.get("/api/health")

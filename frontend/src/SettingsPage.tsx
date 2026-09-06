@@ -869,6 +869,7 @@ export default function SettingsPage() {
   // 体检报告 + 模型竞技场（agents 页签）：进入页签时才拉取，失败静默。
   // 这两个状态必须放在 section 声明之后——useEffect 的依赖数组引用它。
   const [health, setHealth] = useState<HealthReport | null>(null)
+  const [mcpSharedCopied, setMcpSharedCopied] = useState(false)
   const [arenaPrompt, setArenaPrompt] = useState('用三句话解释什么是闭包')
   const [arenaBusy, setArenaBusy] = useState(false)
   const [arenaResults, setArenaResults] = useState<ArenaResult[] | null>(null)
@@ -2242,6 +2243,37 @@ export default function SettingsPage() {
             </li>
           </ul>
         )}
+      </section>
+
+      {/* MCP server（能力开放）：把工作台的读状态开放给外部 MCP 客户端 */}
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>🔌</span> MCP 服务器（对外只读）</h2>
+        <p className="text-xs leading-relaxed text-neutral-500">
+          外部 MCP 客户端（Claude Desktop 等）可以连进来查你的知识库、对话/教学历史、长期记忆、学习画像和今日建议。
+          端点只绑本机（127.0.0.1），且全部是<strong>读</strong>操作——外部工具看工作台，改动仍走工作台自己的界面。
+        </p>
+        <div className="flex items-center gap-2 text-xs">
+          <code className="rounded bg-neutral-100 px-2 py-1 dark:bg-neutral-800">{window.location.origin}/mcp</code>
+          <button
+            onClick={() => {
+              const cfg = JSON.stringify(
+                { mcpServers: { 'ai-workbench': { type: 'http', url: `${window.location.origin}/mcp` } } },
+                null,
+                2,
+              )
+              void navigator.clipboard.writeText(cfg).then(() => {
+                setMcpSharedCopied(true)
+                setTimeout(() => setMcpSharedCopied(false), 2000)
+              })
+            }}
+            className="rounded-full border border-neutral-300 px-2.5 py-0.5 transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
+          >
+            {mcpSharedCopied ? '✓ 已复制' : '复制客户端配置'}
+          </button>
+        </div>
+        <p className="text-xs text-neutral-400">
+          工具：search_knowledge · search_history · get_user_memory · get_learning_profile · get_today_briefing
+        </p>
       </section>
 
       {/* 模型竞技场：同一段 prompt 打到所有已启用 provider 并排对比 */}
