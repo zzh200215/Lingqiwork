@@ -455,3 +455,92 @@ async def test_first_run_has_no_lesson(monkeypatch):
     monkeypatch.setattr(core, "stream_chat_fallback", recording)
     assert (await core.run_task(task_id, manual=True))["status"] == "ok"
     assert not any("最近一次运行失败" in m["content"] for m in seen[0])
+
+
+# ---------- 任务经验沉淀（EvoForge 参考项 4） ----------
+
+
+async def _run_ok_task(monkeypatch, task_name: str) -> None:
+    await _clear()
+    await _add_providers("p1")
+    task_id = await _add_task(task_name, tools_enabled=False)
+
+    async def recording(candidates, messages, usage=None, served=None):
+        yield "任务完成，产出要点。"
+
+    monkeypatch.setattr(core, "stream_chat_fallback", recording)
+    r = await core.run_task(task_id, manual=True)
+    assert r["status"] == "ok"
+
+
+async def test_distill_respects_automemory_switch(monkeypatch):
+    """和聊天页共用 automemory_enabled 开关：关着就一次调用都不该有。"""
+    from app.core import memory as mem
+    from app.core.prefs import save_config
+
+    save_config({"automemory_enabled": False})
+    calls: list = []
+
+    async def fake_extract(info, model, user_text, answer_text):
+        calls.append(user_text)
+        return []
+
+    monkeypatch.setattr(mem, "auto_extract", fake_extract)
+    await _run_ok_task(monkeypatch, "关闭沉淀")
+    assert calls == []
+
+    save_config({"automemory_enabled": True})
+    await _run_ok_task(monkeypatch, "开启沉淀")
+    assert len(calls) == 1 and "开启沉淀" in calls[0]
+    save_config({"automemory_enabled": False})
+
+
+async def test_distilled_fact_lands_in_memory(monkeypatch):
+    from sqlalchemy import select as _select
+
+    from app.core import memory as mem
+    from app.core.prefs import save_config
+    from app.models import Memory as _Memory
+
+    save_config({"automemory_enabled": True})
+    async with SessionLocal() as db:
+        await db.execute(delete(_Memory))
+        await db.commit()
+
+    async def fake_embed(texts):
+        return [[1.0, 0.0] for _ in texts]
+
+    async def fake_stream(info, model, messages, usage=None):
+        yield '[{"kind": "fact", "text": "XX 站点必须带 UA 头"}]'
+
+    monkeypatch.setattr(mem, "_embed_texts", fake_embed)
+    monkeypatch.setattr(mem, "stream_chat", fake_stream)
+    await _run_ok_task(monkeypatch, "落库验证")
+
+    async with SessionLocal() as db:
+        rows = (await db.execute(_select(_Memory))).scalars().all()
+    assert any("UA 头" in m.content and m.kind == "fact" and m.source == "auto" for m in rows)
+    save_config({"automemory_enabled": False})
+
+
+async def test_distill_failure_does_not_fail_the_task(monkeypatch):
+    from app.core import memory as mem
+    from app.core.prefs import save_config
+
+    save_config({"automemory_enabled": True})
+    await _clear()
+    await _add_providers("p1")
+    task_id = await _add_task("异常沉淀", tools_enabled=False)
+
+    async def boom(info, model, user_text, answer_text):
+        raise RuntimeError("抽取挂了")
+
+    monkeypatch.setattr(mem, "auto_extract", boom)
+
+    async def recording(candidates, messages, usage=None, served=None):
+        yield "正常完成"
+
+    monkeypatch.setattr(core, "stream_chat_fallback", recording)
+    r = await core.run_task(task_id, manual=True)
+    assert r["status"] == "ok"
+    save_config({"automemory_enabled": False})

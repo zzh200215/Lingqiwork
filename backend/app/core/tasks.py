@@ -309,6 +309,7 @@ async def run_task(
         await _fire_chain(task_id, snapshot, answer, chain_depth, manual)
         if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
             WATCH_HOOK(task_id)
+        await _distill(snapshot, answer)
     else:
         await _finish_run(
             run_id, "error", error=error, model_id=model_id,
@@ -366,6 +367,33 @@ async def run_task(
         "tokens_out": tokens_out,
         "log": log_entries,
     }
+
+
+async def _distill(t: dict, answer: str) -> None:
+    """任务成功后把可复用经验沉淀进 automemory（EvoForge 的 distill 迷你版）。
+
+    和聊天页的抽取共用同一个开关（automemory_enabled，默认关）与同一个
+    `auto_extract`，不加新设置。与 `_last_failure` 的失败教训互补：那是任务
+    自己的短期记忆（下次执行注入），这里沉淀的是跨任务的长期记忆。放在
+    _finish_run / _fire_chain 之后：产出已落库、链已点火，多出来的这步
+    不该拖慢谁。best-effort：抽取挂了绝不影响任务结果。
+    """
+    if not load_config().get("automemory_enabled"):
+        return
+    try:
+        from app.core import memory
+
+        provider, model = await _resolve("")
+        info = ProviderInfo(kind=provider.kind, base_url=provider.base_url, api_key=provider.api_key)
+        user_text = f"定时任务「{t['name']}」刚执行完。任务指令：{t['prompt']}"
+        facts = await asyncio.wait_for(
+            memory.auto_extract(info, model, user_text, answer),
+            timeout=60,
+        )
+        if facts:
+            log.info("task %s distilled %d memory fact(s)", t["name"], len(facts))
+    except Exception:  # noqa: BLE001 - distillation must never fail the task
+        log.warning("task memory distillation failed", exc_info=True)
 
 
 async def _fire_chain(
