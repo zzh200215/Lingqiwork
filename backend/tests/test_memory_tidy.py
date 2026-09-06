@@ -322,6 +322,82 @@ async def test_reflect_needs_min_facts(monkeypatch):
     assert calls == []
 
 
+# ---------- 记忆证据链（DeepTutor 参考项：可检视记忆） ----------
+
+
+def test_parse_evidence_tolerates_garbage():
+    assert memory.parse_evidence("") == []
+    assert memory.parse_evidence("not json") == []
+    assert memory.parse_evidence('{"a": 1}') == []
+    assert memory.parse_evidence('[{"text": "没 id"}]') == [{"id": -1, "text": "没 id"}]
+    assert memory.parse_evidence('[{"id": "3", "text": "  带空白  "}]') == [{"id": 3, "text": "带空白"}]
+
+
+def test_merge_evidence_dedups_and_caps():
+    existing = memory.merge_evidence(
+        "[]", [[{"id": 3, "text": "直接依据"}], [{"id": 3, "text": "重复的"}, {"id": 4, "text": "间接依据"}]]
+    )
+    assert [d["id"] for d in memory.parse_evidence(existing)] == [3, 4]  # 同 id 保留先出现的直接版
+    # cap 丢最旧：链是给人看的，新依据总是更接近现状
+    many = [[{"id": i, "text": f"t{i}"}] for i in range(12)]
+    data = memory.parse_evidence(memory.merge_evidence("[]", many))
+    assert len(data) == memory.EVIDENCE_CAP and data[-1]["id"] == 11
+    # 已有证据不丢：追加时直接依据排最前，原有证据跟在后面
+    merged = memory.merge_evidence(existing, [[{"id": 5, "text": "新依据"}]])
+    ids = [d["id"] for d in memory.parse_evidence(merged)]
+    assert ids == [5, 3, 4]
+
+
+async def test_merge_records_absorbed_sources(monkeypatch):
+    """合并行要能回答「这条是从哪来的」：被吸收的原行删掉了，文本快照留在证据里。"""
+    ids = await _insert(["用户偏好 Python", "用户主用 Python 写代码"])
+    monkeypatch.setattr(
+        memory_tidy, "stream_chat", _fake_llm('{"action": "merge", "content": "用户主用 Python 写代码"}', [])
+    )
+    await memory_tidy.run_tidy()
+    async with SessionLocal() as db:
+        kept = await db.get(Memory, ids[0])
+    evidence = memory.parse_evidence(kept.evidence_json)
+    assert [e["id"] for e in evidence] == [ids[1]]
+    assert evidence[0]["text"] == "用户主用 Python 写代码"
+
+
+async def test_reflect_insight_carries_based_on_evidence(monkeypatch):
+    """洞察的 based_on 编号映射回原句做快照：洞察不是模型的一句话，页面上要能
+    展开看它从哪几条记忆拼出来。流水里不存在的编号（模型幻觉）丢弃。"""
+    monkeypatch.setattr(memory_tidy, "load_config", lambda: {"automemory_enabled": True})
+    ids = await _insert(
+        [
+            "用户偏好 Python",
+            "用户主用 Python 写代码",
+            "用户喜欢喝咖啡",
+            "用户常在早上跑步",
+            "用户在学 asyncio",
+        ]
+    )
+
+    async def _insight_embed(texts: list[str]) -> list[list[float]]:
+        out = []
+        for t in texts:
+            out.append([0.1, 0.1, 1.0] if "重心" in t else (await _fake_embed([t]))[0])
+        return out
+
+    monkeypatch.setattr(memory, "_embed_texts", _insight_embed)
+    calls: list = []
+    monkeypatch.setattr(
+        memory_tidy,
+        "stream_chat",
+        _fake_llm(f'[{{"text": "用户的重心在 Python", "based_on": [{ids[0]}, 9999]}}]', calls),
+    )
+    report = await memory_tidy.reflect({"ok": True})
+    assert report["reflection"] == {"added": 1}
+    async with SessionLocal() as db:
+        row = (await db.execute(select(Memory).where(Memory.kind == "insight"))).scalars().one()
+    evidence = memory.parse_evidence(row.evidence_json)
+    assert [e["id"] for e in evidence] == [ids[0]]  # 9999 不在流水里，丢弃
+    assert evidence[0]["text"] == "用户偏好 Python"
+
+
 async def test_run_tidy_reports_reflection_when_automemory_off(monkeypatch):
     # 合并没得做（无相近簇路径）也要报告反思这一步——一个 job，一份报告
     await _insert(["孤立的记忆甲", "孤立的记忆乙", "孤立的记忆丙", "孤立的记忆丁", "孤立的记忆戊"])

@@ -29,6 +29,57 @@ RECALL_TOP_K = 5  # above the threshold, inject only the k most relevant
 DEDUP_SIMILARITY = 0.92  # cosine above this = near-duplicate, refuse to save
 AUTO_FACT_CAP = 2  # max facts saved per automemory pass
 AUTO_FACT_CHARS = 120
+# 证据链上限（DeepTutor 参考项：可检视记忆）。洞察/合并行的依据快照最多留 8 条：
+# 链是给人看的，不是数据恢复——超限时丢最旧的，新依据总是更接近现状。
+EVIDENCE_CAP = 8
+
+
+def parse_evidence(raw: str | None) -> list[dict]:
+    """evidence_json → [{"id","text"}]，坏 JSON / 形状不对一律返回 []。"""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            mid = int(item.get("id"))
+        except (TypeError, ValueError):
+            mid = -1
+        out.append({"id": mid, "text": text[:200]})
+    return out
+
+
+def merge_evidence(existing_json: str, extras: list[list[dict]]) -> str:
+    """已有证据 + 新依据 → 合并后的 evidence_json。按 id 去重、超限丢最旧。
+
+    extras 里靠前的组是更直接的依据（被吸收的原行），靠后的是间接的
+    （被吸收行自己的证据）——同 id 保留先出现的直接版。
+    """
+    seen: set[int] = set()
+    out: list[dict] = []
+    for group in extras:
+        for item in group:
+            mid = int(item.get("id", -1))
+            if mid >= 0 and mid in seen:
+                continue
+            seen.add(mid)
+            out.append({"id": mid, "text": str(item.get("text") or "")[:200]})
+    for item in parse_evidence(existing_json):
+        if item["id"] >= 0 and item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        out.append(item)
+    return json.dumps(out[-EVIDENCE_CAP:], ensure_ascii=False)
 
 # id -> (content, normalized vector); avoids re-embedding unchanged memories
 _vec_cache: dict[int, tuple[str, list[float]]] = {}
@@ -124,7 +175,9 @@ async def _similar_existing(content: str, contents: list[str]) -> str | None:
     return None
 
 
-async def add_memory(content: str, source: str = "manual", kind: str = "fact") -> str:
+async def add_memory(
+    content: str, source: str = "manual", kind: str = "fact", evidence: list[dict] | None = None
+) -> str:
     content = content.strip()
     if not content:
         return "[错误] 内容为空"
@@ -153,6 +206,10 @@ async def add_memory(content: str, source: str = "manual", kind: str = "fact") -
             content=content,
             source=source if source in ("manual", "auto") else "manual",
             kind=kind if kind in AUTO_KINDS else "fact",
+            evidence_json=json.dumps(
+                [e for e in (evidence or []) if str(e.get("text") or "").strip()][-EVIDENCE_CAP:],
+                ensure_ascii=False,
+            ),
         )
         db.add(row)
         await db.commit()

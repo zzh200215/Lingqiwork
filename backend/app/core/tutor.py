@@ -125,13 +125,15 @@ FUTURE_PROMPT = """你是用户一年后的自己，正在和今天的 TA 说话
 # 一个就少一条能接住重逢的文本。
 _EXTRACT_PROMPT = """你在读一段技术教学对话。只输出一个 JSON 对象，不要任何解释：
 
-{"concept": "这次谈的核心概念，10 字以内的名词短语", "aliases": ["同一个概念的另一种问法", "再一种"], "stuck": "他卡在哪，一句话，20 字以内；如果全程没卡住就给空字符串"}
+{"concept": "这次谈的核心概念，10 字以内的名词短语", "aliases": ["同一个概念的另一种问法", "再一种"], "stuck": "他卡在哪，一句话，20 字以内；如果全程没卡住就给空字符串", "transfer": "一句把概念放进新场景的检验问题，30 字以内；教得不好就给空字符串"}
 
 concept 用领域里的标准叫法（例如「asyncio 事件循环」而不是「那个循环的事」），并且必须带上领域限定词——框架、语言或库的名字。写「asyncio 事件循环」，不要只写「事件循环」；写「SQLite WAL 模式」，不要只写「WAL 模式」。没有这个名字，下次换个说法提起这个话题时就对不上。
 
 aliases 给 2-4 个，是同一个概念的**其他问法**：几个月后他又想起这个东西、但已经想不起标准术语时会怎么打字。所以要换词，不是换语序——用同义词、用大白话、用现象描述（写「协程什么时候切换」，不要写「事件循环的调度机制」）。每个都写成完整的一句问法、至少 4 个字：不要写「async」「GIL」「WAL」这种裸术语，也不要写纯英文短语，标准叫法已经在 concept 里了。不要把 concept 原样重复一遍，也不要写宽泛到能套任何概念的词（「并发」「性能」「原理」）。
 
-stuck 要写他的错误理解本身（例如「以为 await 把控制权交给了操作系统」），不要写「不理解事件循环」这种空话。"""
+stuck 要写他的错误理解本身（例如「以为 await 把控制权交给了操作系统」），不要写「不理解事件循环」这种空话。
+
+transfer 是「换个场景再试一次」的问题：把这次的概念放到一个**不同的情境**里让他应用，而不是换个说法重复刚讲过的内容（刚学了 asyncio 事件循环，就问别的运行时或别的语言里对应的调度会怎样）。学过就在原场景里答得对不算懂，换个场景还能用才算——问题要真的换场景。教得潦草或概念太薄撑不起这种问题，就给空字符串。"""
 
 
 # ---------- embedding: the same embedder core/memory.py ranks recall with ----------
@@ -867,15 +869,17 @@ def _clean_aliases(raw, concept: str = "") -> str:
     return ALIAS_SEP.join(out)
 
 
-async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str, str]:
-    """One non-streaming call → (concept, aliases, stuck), ('', '', '') on failure.
+async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str, str, str]:
+    """One non-streaming call → (concept, aliases, stuck, transfer), all '' on failure.
 
+    transfer（Bjork 可取难度的会话内版）：一句把概念放进新场景的检验问题，
+    只在 end() 的总结里出现一次——不是题库，不落库，没有第二次出现。
     Test seam: monkeypatch me.
     """
     try:
         rows = await turns(session_id)
         if not rows:
-            return "", "", ""
+            return "", "", "", ""
 
         from app.core.llm import ProviderInfo, stream_chat
         from app.routers.chat import resolve_model
@@ -901,19 +905,20 @@ async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str
         )
         m = re.search(r"\{.*\}", raw, re.S)
         if not m:
-            return "", "", ""
+            return "", "", "", ""
         data = json.loads(m.group(0))
         if not isinstance(data, dict):
-            return "", "", ""
+            return "", "", "", ""
         concept = str(data.get("concept") or "").strip()[:120]
         return (
             concept,
             _clean_aliases(data.get("aliases"), concept),
             str(data.get("stuck") or "").strip()[:200],
+            str(data.get("transfer") or "").strip()[:120],
         )
     except Exception:  # noqa: BLE001 - the verdict is already saved; this is the extra
         log.warning("tutor extraction failed", exc_info=True)
-        return "", "", ""
+        return "", "", "", ""
 
 
 async def _nearby_material(concept: str, exclude: set[str] | None = None) -> list[dict]:
@@ -944,8 +949,9 @@ async def _nearby_material(concept: str, exclude: set[str] | None = None) -> lis
 
 
 async def end(session_id: int, verdict: str) -> dict:
-    """Close a session: save your verdict, then extract 概念 / 别名 / 卡点 from the transcript,
-    and look up what else in your KB touches the same concept (`material_nearby`).
+    """Close a session: save your verdict, then extract 概念 / 别名 / 卡点 / 迁移问题
+    from the transcript, and look up what else in your KB touches the same
+    concept (`material_nearby`).
 
     The verdict is the only manual input in the whole product, so it is written
     first and unconditionally: with the model down, 第 4 节's count still works
@@ -971,12 +977,12 @@ async def end(session_id: int, verdict: str) -> dict:
         topic, model_id = row.topic, row.model_id
         mode = row.mode or "socratic"
 
-    concept, aliases, stuck = "", "", ""
+    concept, aliases, stuck, transfer = "", "", "", ""
     nearby: list[dict] = []
     # 未来会话不是教学：提取概念/卡点只会把「和未来的自己聊天」的内容污染进
     # 画像和召回——自评照存（记录是你的），提取跳过。
     if verdict != "useless" and model_id and mode != "future":
-        concept, aliases, stuck = await _extract(session_id, topic, model_id)
+        concept, aliases, stuck, transfer = await _extract(session_id, topic, model_id)
         if concept:  # a 卡点 with no concept is unrecallable, so both or neither
             async with SessionLocal() as db:
                 row = await db.get(TutorSession, session_id)
@@ -991,6 +997,7 @@ async def end(session_id: int, verdict: str) -> dict:
         "concept": concept,
         "aliases": aliases,
         "stuck": stuck,
+        "transfer": transfer,
         "material_nearby": nearby,
     }
 
@@ -1103,6 +1110,57 @@ async def stuck_blocks(days: int = 90, cap: int = 8) -> list[tuple[str, str]]:
         if len(blocks) >= cap:
             break
     return blocks
+
+
+# ---------- 开场建议：从你自己的记录里派生「也许你现在想搞这个」（DeepTutor 参考项） ----------
+
+STARTER_CAP = 3  # 开场屏一排看得完；是就近入口，不是推荐流
+JOURNAL_Q_WORDS = ("搞不懂", "不懂", "不明白", "搞懂", "疑问", "为什么", "怎么才能")
+
+
+async def starters() -> list[dict]:
+    """开场屏的建议话题（[{kind, topic, note}]），**纯派生、不落库、无模型参与**。
+
+    DeepTutor v1.5.13 的「home starter suggestions drawn from memory」的本地版：
+    来源只有两路——最近半懂的概念（每个概念取最近一次时间，新→旧最多 2 条）和
+    最近一条日记里带疑问词的句子（最多 1 条）。第 2 节的护栏照旧：这是你自己的
+    记录放在手边的就近入口，点它才开会话——没有计数、没有到期、没有「还没学」
+    的欠账感；query 挂了返回 []，绝不能挡住开场输入框。
+    """
+    out: list[dict] = []
+    try:
+        from sqlalchemy import func, select
+
+        from app.db import SessionLocal
+        from app.models import TutorSession
+
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TutorSession.concept, func.max(TutorSession.created_at).label("latest"))
+                    .where(TutorSession.concept != "", TutorSession.verdict == "half")
+                    .group_by(TutorSession.concept)
+                    .order_by(func.max(TutorSession.created_at).desc())
+                    .limit(2)
+                )
+            ).all()
+        for concept, _latest in rows:
+            out.append({"kind": "half", "topic": str(concept), "note": "上次半懂"})
+    except Exception:  # noqa: BLE001
+        log.warning("tutor starters: half concepts failed", exc_info=True)
+    try:
+        from app.core import journal
+
+        for e in journal.recent(30):
+            text = (e.get("text") or "").strip()
+            if len(text) >= 6 and any(w in text for w in JOURNAL_Q_WORDS):
+                out.append(
+                    {"kind": "journal", "topic": text[:60], "note": f"日记 {str(e.get('date') or '')[5:]}"}
+                )
+                break
+    except Exception:  # noqa: BLE001
+        log.warning("tutor starters: journal failed", exc_info=True)
+    return out[:STARTER_CAP]
 
 
 async def detail(session_id: int) -> dict | None:

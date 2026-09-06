@@ -10,6 +10,7 @@ import {
   type RoundtableResult,
   type TutorEndResult,
   type TutorSessionRow,
+  type TutorStarter,
   type TutorStats,
   type TutorStuckRow,
   type TutorTurn,
@@ -132,7 +133,7 @@ export default function TutorPage() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [verdict, setVerdict] = useState<'' | 'got' | 'half' | 'useless'>('')
-  const [ended, setEnded] = useState<{ concept: string; stuck: string; nearby: TutorEndResult['material_nearby'] } | null>(null)
+  const [ended, setEnded] = useState<{ concept: string; stuck: string; transfer: string; nearby: TutorEndResult['material_nearby'] } | null>(null)
   const [rows, setRows] = useState<TutorSessionRow[]>([])
   const [stuckRows, setStuckRows] = useState<TutorStuckRow[]>([])
   const [stuckBusy, setStuckBusy] = useState(false)
@@ -144,6 +145,8 @@ export default function TutorPage() {
   const [rtMsg, setRtMsg] = useState('')
   const [rtAudio, setRtAudio] = useState('')
   const [stats, setStats] = useState<TutorStats | null>(null)
+  // 开场建议（DeepTutor 参考项）：从记录里派生的就近入口，挂了就静默没有
+  const [starters, setStarters] = useState<TutorStarter[]>([])
   const bottom = useRef<HTMLDivElement>(null)
   // 正在流式回复的会话：再学一个 / 开新会话 / 离开页面时掐断它，
   // 否则 fetch 会读完整段回复、上游也把 token 烧完（中断传播的前端一半）
@@ -203,6 +206,11 @@ export default function TutorPage() {
   }, [rt, rtBusy])
 
   useEffect(() => refreshRail(), [refreshRail])
+
+  // 开场建议只在开场屏有意义：挂载时拉一次，点一个就开会话，不轮询不催
+  useEffect(() => {
+    api.tutorStarters().then((r) => setStarters(r.starters)).catch(() => {})
+  }, [])
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -286,7 +294,7 @@ export default function TutorPage() {
       try {
         const got = await api.tutorEnd(sid, v)
         setVerdict(v)
-        setEnded({ concept: got.concept, stuck: got.stuck, nearby: got.material_nearby ?? [] })
+        setEnded({ concept: got.concept, stuck: got.stuck, transfer: got.transfer ?? '', nearby: got.material_nearby ?? [] })
         refreshRail()
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e))
@@ -307,7 +315,7 @@ export default function TutorPage() {
       setTurns(d.turns)
       setHits([])
       setVerdict(d.verdict)
-      setEnded(d.verdict ? { concept: d.concept, stuck: d.stuck, nearby: [] } : null)
+      setEnded(d.verdict ? { concept: d.concept, stuck: d.stuck, transfer: '', nearby: [] } : null)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
@@ -406,6 +414,26 @@ export default function TutorPage() {
                   </button>
                 </div>
                 {err ? <p className="pt-3 text-sm text-rose-600 dark:text-rose-400">{err}</p> : null}
+                {/* 开场建议：你自己的记录放在手边（DeepTutor 参考项）。点了才开会话，
+                    不是队列——没有计数、没有到期，想不理就不理。 */}
+                {starters.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 pt-4">
+                    {starters.map((s) => (
+                      <button
+                        key={s.kind + s.topic}
+                        onClick={() => void beginWith(s.topic)}
+                        title={
+                          s.kind === 'half'
+                            ? '上次没完全搞懂，点它从上次的状态接着来'
+                            : '你日记里写下的困惑，点它开一场会话'
+                        }
+                        className="rounded-full border border-neutral-300 px-3 py-1 text-xs text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
+                      >
+                        {s.kind === 'half' ? '↳' : '📔'} {s.note}：{s.topic}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : (
@@ -502,6 +530,13 @@ export default function TutorPage() {
                             {shortSource(n.source)}
                           </span>
                         ))}
+                      </span>
+                    ) : null}
+                    {/* 迁移问题（Bjork 参考项）：原场景答对不算懂，换个场景还能用才算。
+                        和 material_nearby 一样只在总结里出现一次，不落库。 */}
+                    {ended?.transfer ? (
+                      <span className="text-[11px] text-violet-500 dark:text-violet-300">
+                        换个场景试试：{ended.transfer}
                       </span>
                     ) : null}
                   </div>

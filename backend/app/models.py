@@ -96,6 +96,10 @@ class Memory(Base):
     # 注入提示词时带上标签，模型才知道「这是他的稳定偏好」还是「这是长期项目背景」。
     # 刻意没有「状态」类：时效性信息会变成流水账，_AUTO_SYSTEM 里明确拒收。
     kind: Mapped[str] = mapped_column(String(10), default="fact")
+    # 记忆证据链（DeepTutor 参考项：可检视的三层记忆）：洞察（reflect 合成）与
+    # 合并行（tidy merge 吸收）各自记录它们由哪些原句而来，[{"id","text"}] 文本
+    # 快照——被合并掉的原行会删除，只存 id 引用会变成死链。普通抽取/手写行是空。
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

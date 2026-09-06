@@ -83,14 +83,25 @@ def _parse_merge(raw: str) -> str | None:
 
 
 async def _apply_merge(keep_id: int, merged: str, drop_ids: list[int]) -> None:
+    # 证据链（DeepTutor 参考项：可检视记忆）：被吸收的原行会从表里删掉，把它们的
+    # 文本快照连同各自的证据一起记进 keep 行——否则「合并后的这条是从哪来的」
+    # 从此无处可查。间接依据（被吸收行自己的证据）跟在直接依据后面。
     async with SessionLocal() as db:
         row = await db.get(Memory, keep_id)
         if row:
             row.content = merged
+        direct: list[dict] = []
+        inherited: list[list[dict]] = []
         for did in drop_ids:
             obj = await db.get(Memory, did)
             if obj:
+                direct.append({"id": did, "text": obj.content})
+                inherited.append(memory.parse_evidence(obj.evidence_json))
                 await db.delete(obj)
+        if row:
+            row.evidence_json = memory.merge_evidence(
+                row.evidence_json, [direct, *inherited]
+            )
         await db.commit()
     memory._vec_cache.pop(keep_id, None)
     for did in drop_ids:
@@ -243,7 +254,16 @@ async def reflect(report: dict) -> dict:
                 text = str((item or {}).get("text") or "").strip()[:120]
                 if not text:
                     continue
-                result = await memory.add_memory(text, source="auto", kind="insight")
+                # 证据链：based_on 编号映射回流水里的原句做文本快照——洞察不能
+                # 只是模型的一句话，页面上要能展开看它是从哪几条记忆拼出来的。
+                # 流水里不存在的编号（模型幻觉）直接丢弃。
+                by_id = {r.id: r.content for r in facts}
+                evidence = [
+                    {"id": int(n), "text": by_id[int(n)]}
+                    for n in ((item or {}).get("based_on") or [])
+                    if str(n).strip().lstrip("-").isdigit() and int(n) in by_id
+                ]
+                result = await memory.add_memory(text, source="auto", kind="insight", evidence=evidence)
                 if result.startswith("已记住"):
                     added += 1
         report["reflection"] = {"added": added}

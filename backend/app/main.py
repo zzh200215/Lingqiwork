@@ -74,6 +74,8 @@ async def _migrate() -> None:
         # V1.4 memory upgrade
         ("memories", "source", "ALTER TABLE memories ADD COLUMN source VARCHAR(10) DEFAULT 'manual'"),
         ("memories", "kind", "ALTER TABLE memories ADD COLUMN kind VARCHAR(10) DEFAULT 'fact'"),
+        # 记忆证据链（DeepTutor 参考项：可检视记忆）
+        ("memories", "evidence_json", "ALTER TABLE memories ADD COLUMN evidence_json TEXT DEFAULT '[]'"),
         # V6.2 observability: per-message / per-run token usage
         ("messages", "tokens_in", "ALTER TABLE messages ADD COLUMN tokens_in INTEGER"),
         ("messages", "tokens_out", "ALTER TABLE messages ADD COLUMN tokens_out INTEGER"),

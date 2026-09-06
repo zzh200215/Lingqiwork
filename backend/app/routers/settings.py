@@ -205,6 +205,8 @@ async def get_memories():
             "source": m.source or "manual",
             "kind": m.kind if m.kind in memory.AUTO_KINDS else "fact",
             "created_at": str(m.created_at),
+            # 证据链：洞察/合并行带着它们的原句依据，页面可展开看「从哪来的」
+            "evidence": memory.parse_evidence(m.evidence_json),
         }
         for m in rows
     ]

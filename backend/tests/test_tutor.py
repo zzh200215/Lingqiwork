@@ -672,8 +672,8 @@ async def test_say_sends_no_material_block_when_the_kb_has_nothing(monkeypatch):
 # ---------- ending: 概念 / 自评 / 卡点 ----------
 
 
-async def fake_extract_triple(session_id, topic, model_id):
-    return "asyncio 事件循环", "协程什么时候切换", "以为 await 交给了操作系统"
+async def fake_extract_quad(session_id, topic, model_id):
+    return "asyncio 事件循环", "协程什么时候切换", "以为 await 交给了操作系统", "浏览器的事件循环会怎么调度？"
 
 
 async def _live(monkeypatch, topic: str) -> int:
@@ -693,7 +693,7 @@ async def test_end_stores_the_triple(monkeypatch):
 
     async def fake_extract(session_id, topic, model_id):
         assert model_id == "p/m"
-        return "asyncio 事件循环", "协程什么时候切换", "以为 await 交给了操作系统"
+        return "asyncio 事件循环", "协程什么时候切换", "以为 await 交给了操作系统", ""
 
     monkeypatch.setattr(core, "_extract", fake_extract)
     assert await core.end(sid, "half") == {
@@ -702,6 +702,7 @@ async def test_end_stores_the_triple(monkeypatch):
         "concept": "asyncio 事件循环",
         "aliases": "协程什么时候切换",
         "stuck": "以为 await 交给了操作系统",
+        "transfer": "",
         "material_nearby": [],  # autouse fixture keeps the KB empty
     }
     row = await core.detail(sid)
@@ -716,7 +717,7 @@ async def test_end_surfaces_nearby_material_from_your_kb(monkeypatch):
     按 source 去重、最多 NEARBY_MAX 个 —— 它是你在场时顺手看见的一行字，不是队列。"""
     await _reset()
     sid = await _live(monkeypatch, "asyncio")
-    monkeypatch.setattr(core, "_extract", fake_extract_triple)
+    monkeypatch.setattr(core, "_extract", fake_extract_quad)
 
     async def fake_retrieve(query: str, top_k: int):
         assert top_k == core.NEARBY_TOP_K + 1  # 1 个已引用来源，检索宽度随之放宽
@@ -759,7 +760,7 @@ async def test_stuck_points_scans_all_history_not_just_the_rail(monkeypatch):
 
     await _reset()
     sid = await _live(monkeypatch, "asyncio")
-    monkeypatch.setattr(core, "_extract", fake_extract_triple)
+    monkeypatch.setattr(core, "_extract", fake_extract_quad)
 
     async def fake_retrieve(query: str, top_k: int):
         assert query == "asyncio 事件循环"  # 刚谈完的概念，不是 topic
@@ -781,7 +782,7 @@ async def test_stuck_points_scans_all_history_not_just_the_rail(monkeypatch):
 async def test_end_skips_nearby_for_useless_and_survives_a_dead_index(monkeypatch):
     await _reset()
     sid = await _live(monkeypatch, "asyncio")
-    monkeypatch.setattr(core, "_extract", fake_extract_triple)
+    monkeypatch.setattr(core, "_extract", fake_extract_quad)
 
     called = []
 
@@ -807,7 +808,7 @@ async def test_end_keeps_the_verdict_when_extraction_comes_back_empty(monkeypatc
     monkeypatch.setattr(core, "_embed", _fake_embed)
 
     async def blank(session_id, topic, model_id):
-        return "", "", ""
+        return "", "", "", ""
 
     monkeypatch.setattr(core, "_extract", blank)
     got = await core.end(sid, "got")
@@ -824,7 +825,7 @@ async def test_end_skips_extraction_for_useless(monkeypatch):
 
     async def spy(session_id, topic, model_id):
         calls.append(session_id)
-        return "x", "y", "z"
+        return "x", "y", "z", ""
 
     monkeypatch.setattr(core, "_extract", spy)
     assert (await core.end(sid, "useless"))["concept"] == ""
@@ -846,7 +847,7 @@ async def test_end_is_re_callable(monkeypatch):
     sid = await _live(monkeypatch, "asyncio")
 
     async def fake_extract(session_id, topic, model_id):
-        return "asyncio 事件循环", "", ""
+        return "asyncio 事件循环", "", "", ""
 
     monkeypatch.setattr(core, "_extract", fake_extract)
     await core.end(sid, "half")
@@ -857,7 +858,78 @@ async def test_end_is_re_callable(monkeypatch):
 async def test_extract_with_an_empty_transcript_never_calls_the_model():
     await _reset()
     sid = await _seed("x", "", "")
-    assert await core._extract(sid, "x", "p/m") == ("", "", "")
+    assert await core._extract(sid, "x", "p/m") == ("", "", "", "")
+
+
+async def test_end_passes_the_transfer_question_through(monkeypatch):
+    """迁移问题（Bjork 参考项）：提取带了就原样带回；和 material_nearby 一样只在
+    总结里出现一次——会话行上没有它，没有第二次出现。"""
+    await _reset()
+    assert "transfer" in core._EXTRACT_PROMPT  # 提示词真的在要这个字段
+    sid = await _live(monkeypatch, "asyncio")
+    monkeypatch.setattr(core, "_extract", fake_extract_quad)
+    got = await core.end(sid, "got")
+    assert got["transfer"] == "浏览器的事件循环会怎么调度？"
+    assert "transfer" not in await core.detail(sid)  # 没落库：它是当场的一句话
+
+
+# ---------- 开场建议：记录的就近入口，不是队列 ----------
+
+
+async def _seed_at(topic: str, concept: str, verdict: str, created_at) -> int:
+    """created_at 显式给定：starters 按「每个概念最近一次」排序，得可复现。"""
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    async with SessionLocal() as db:
+        row = TutorSession(topic=topic, concept=concept, verdict=verdict, created_at=created_at)
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        return row.id
+
+
+async def test_starters_surface_recent_half_concepts(monkeypatch):
+    """开场建议（DeepTutor 参考项）：最近半懂的概念按新→旧最多 2 条；
+    说通的、没用的、没有 verdict 的都不来。"""
+    await _reset()
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    await _seed_at("旧会话", "旧半懂", "half", now - timedelta(days=9))
+    await _seed_at("新会话", "新半懂", "half", now - timedelta(days=1))
+    await _seed_at("更旧", "更旧半懂", "half", now - timedelta(days=30))
+    await _seed_at("通了", "说通了的概念", "got", now)
+    await _seed_at("没用会话", "没用概念", "useless", now)
+
+    import app.core.journal as journal_mod
+
+    monkeypatch.setattr(journal_mod, "recent", lambda limit=7, now=None: [])
+    got = await core.starters()
+    assert [s["topic"] for s in got] == ["新半懂", "旧半懂"]  # 新→旧，cap 在前
+    assert all(s["kind"] == "half" and s["note"] == "上次半懂" for s in got)
+
+
+async def test_starters_carry_a_journal_question(monkeypatch):
+    """日记里的疑问句也能成为开场建议：只收带疑问词的句子，一条为止；
+    半懂概念没有时它独自出现，原句截到 60 字。"""
+    await _reset()
+    entries = [
+        {"date": "2026-09-05", "time": "10:00", "text": "今天天气不错，出去走了一圈"},
+        {
+            "date": "2026-09-04",
+            "time": "09:00",
+            "text": "搞不懂 Kubernetes 的调度器为什么宁可把 pod 挂起，也要等特定节点",
+        },
+    ]
+    import app.core.journal as journal_mod
+
+    monkeypatch.setattr(journal_mod, "recent", lambda limit=7, now=None: entries)
+    got = await core.starters()
+    assert len(got) == 1
+    assert got[0]["kind"] == "journal" and got[0]["note"] == "日记 09-04"
+    assert got[0]["topic"].startswith("搞不懂 Kubernetes")
+    assert len(got[0]["topic"]) <= 60
 
 
 # ---------- history and 第 4 节's two numbers ----------

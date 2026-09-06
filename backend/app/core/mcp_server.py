@@ -67,16 +67,22 @@ async def search_history(q: str, limit: int = 10) -> list[dict]:
 
 @mcp.tool()
 async def get_user_memory(limit: int = 50) -> list[dict]:
-    """读工作台对用户的长期记忆（偏好 / 事实 / 习惯，automemory 抽取 + 手工添加）。
+    """读工作台对用户的长期记忆（偏好 / 事实 / 习惯 / 洞察，automemory 抽取 + 手工添加）。
 
-    返回 [{kind, content, at}]。代表「工作台理解的这个人是什么样」，回答个人
-    相关问题前值得先看一眼。
+    返回 [{kind, content, at, evidence_n}]。evidence_n 是这条记忆挂着的原句依据数
+    （洞察与合并行才有，0 = 直接来自对话或手写）。代表「工作台理解的这个人是什么样」，
+    回答个人相关问题前值得先看一眼。
     """
-    from app.core.memory import list_memories
+    from app.core.memory import list_memories, parse_evidence
 
     rows = await list_memories()
     return [
-        {"kind": m.kind, "content": m.content, "at": m.created_at.isoformat() if m.created_at else None}
+        {
+            "kind": m.kind,
+            "content": m.content,
+            "at": m.created_at.isoformat() if m.created_at else None,
+            "evidence_n": len(parse_evidence(m.evidence_json)),
+        }
         for m in rows[: max(1, min(limit, 100))]
     ]
 

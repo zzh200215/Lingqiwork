@@ -60,9 +60,11 @@ export interface MemoryItem {
   id: number
   content: string
   source?: 'manual' | 'auto'
-  /** 偏好 / 事实 / 习惯（preference | fact | habit）——automemory 抽取时的分类 */
-  kind?: 'preference' | 'fact' | 'habit'
+  /** 偏好 / 事实 / 习惯 / 洞察——automemory 抽取分类；洞察是夜间反思合成的 */
+  kind?: 'preference' | 'fact' | 'habit' | 'insight'
   created_at: string
+  /** 证据链：洞察/合并行的原句依据（[{id,text}]），普通抽取/手写行为空数组 */
+  evidence?: { id: number; text: string }[]
 }
 
 export interface MemoryExpose {
@@ -790,13 +792,15 @@ export async function streamNotesAi(
 // ---------- 对话式教学 (PLAN.md 第 6 节) ----------
 
 /** end() 的返回：概念/别名/卡点之外，`material_nearby` 是「材料里还有」，
- * 只在自评总结里出现一次（PLAN.md 第 7 节，第 2 节护栏版——不是队列）。 */
+ * 只在自评总结里出现一次（PLAN.md 第 7 节，第 2 节护栏版——不是队列）。
+ * `transfer` 是「换个场景试试」的检验问题，同样只在总结里出现一次。 */
 export interface TutorEndResult {
   id: number
   verdict: string
   concept: string
   aliases: string
   stuck: string
+  transfer: string
   material_nearby: { source: string; title: string; score: number }[]
 }
 
@@ -858,6 +862,14 @@ export interface TutorStats {
   got: number
   got_with_recall: number
   concepts: number
+}
+
+/** 开场建议：从自己的记录派生的就近入口（半懂概念 / 日记疑问句）。
+ * 点了才开会话——不是队列，没有计数，也没有「还没学」的欠账感。 */
+export interface TutorStarter {
+  kind: 'half' | 'journal'
+  topic: string
+  note: string
 }
 
 export const api = {
@@ -1317,6 +1329,7 @@ export const api = {
     request<TutorProfile>('/api/tutor/profile'),
   tutorStuck: (limit = 200) =>
     request<{ stuck: TutorStuckRow[] }>(`/api/tutor/stuck?limit=${limit}`),
+  tutorStarters: () => request<{ starters: TutorStarter[] }>('/api/tutor/starters'),
   tutorSession: (id: number) => request<TutorDetail>(`/api/tutor/sessions/${id}`),
   tutorStats: (days = 14) => request<TutorStats>(`/api/tutor/stats?days=${days}`),
 }

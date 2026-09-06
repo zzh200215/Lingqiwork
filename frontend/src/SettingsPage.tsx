@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import Layout from './Layout'
 import { api, type AgentPreset, type ArenaResult, type BackupList, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile } from './api'
 
@@ -2361,10 +2361,10 @@ export default function SettingsPage() {
           徽标）。注入对话时，记忆条数多会按当前问题相关性选取；保存时相似内容自动去重。「整理重复记忆」会把跨会话积累的近似表述交给模型合并成一条（合并前先经模型确认确为同一事实）。可编辑。
         </p>
         {memories.map((m) => (
-          <div
-            key={m.id}
-            className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 px-4 py-2.5 dark:border-neutral-800"
-          >
+          <Fragment key={m.id}>
+            <div
+              className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200 px-4 py-2.5 dark:border-neutral-800"
+            >
             {memEditId === m.id ? (
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <input
@@ -2393,10 +2393,20 @@ export default function SettingsPage() {
                 <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
                   {m.kind && m.kind !== 'fact' && (
                     <span
-                      title={m.kind === 'preference' ? '稳定偏好：决定口吻与推荐' : '周期性习惯：决定何时别打扰'}
-                      className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                      title={
+                        m.kind === 'preference'
+                          ? '稳定偏好：决定口吻与推荐'
+                          : m.kind === 'habit'
+                            ? '周期性习惯：决定何时别打扰'
+                            : '夜间反思合成的跨条目观察'
+                      }
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                        m.kind === 'insight'
+                          ? 'bg-violet-100 text-violet-600 dark:bg-violet-950 dark:text-violet-300'
+                          : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                      }`}
                     >
-                      {m.kind === 'preference' ? '偏好' : '习惯'}
+                      {m.kind === 'preference' ? '偏好' : m.kind === 'habit' ? '习惯' : '洞察'}
                     </span>
                   )}
                   {m.source === 'auto' && (
@@ -2426,7 +2436,16 @@ export default function SettingsPage() {
                 </div>
               </>
             )}
-          </div>
+            </div>
+            {/* 证据链（DeepTutor 参考项）：洞察/合并行不是凭空的——原句依据就地展开 */}
+            {m.evidence && m.evidence.length > 0 ? (
+              <p className="-mt-1.5 px-4 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                依据 {m.evidence.length} 条：
+                {m.evidence.slice(0, 3).map((ev) => ev.text).join(' · ')}
+                {m.evidence.length > 3 ? ` 等 ${m.evidence.length} 条` : ''}
+              </p>
+            ) : null}
+          </Fragment>
         ))}
         {memMsg && <div className="text-xs text-red-500">{memMsg}</div>}
         {!memories.length && <p className="text-sm text-neutral-400">还没有记忆 — 对话中告诉模型「记住我喜欢…」试试</p>}

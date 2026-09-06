@@ -93,6 +93,12 @@ async def list_stuck(limit: int = 200):
     return {"stuck": await core.stuck_points(limit)}
 
 
+@router.get("/starters")
+async def get_starters():
+    """开场建议：半懂概念 + 日记疑问句，纯派生（[] = 没有什么可建议的）。"""
+    return {"starters": await core.starters()}
+
+
 @router.get("/profile")
 async def get_profile():
     """学习画像：按概念聚合的派生结果，设置页只读展示。"""
