@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import Layout from './Layout'
-import { api, type AgentPreset, type BackupList, type FeedItem, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool } from './api'
+import { api, type AgentPreset, type BackupList, type FeedItem, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile } from './api'
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -140,6 +140,7 @@ export default function SettingsPage() {
   const [taskRuns, setTaskRuns] = useState<Record<number, TaskRunItem[]>>({})
 
   const [memories, setMemories] = useState<MemoryItem[]>([])
+  const [tutorProfile, setTutorProfile] = useState<TutorProfile | null>(null)
   const [memInput, setMemInput] = useState('')
   const [memEditId, setMemEditId] = useState<number | null>(null)
   const [memEditContent, setMemEditContent] = useState('')
@@ -223,6 +224,7 @@ export default function SettingsPage() {
       })
       setMcpView(await api.getMcp())
       api.listMemories().then(setMemories).catch(() => {})
+      api.tutorProfile().then(setTutorProfile).catch(() => {})
       api.getMemoryTidy().then((s) => setTidyReport(s.report)).catch(() => {})
       api.ttsVoices().then((r) => setTtsVoices(r.voices)).catch(() => {})
       api.listAgents().then(setAgents).catch(() => {})
@@ -2169,6 +2171,32 @@ export default function SettingsPage() {
       {/* Persistent memory */}
       {section === 'agents' && (
       <>
+      {tutorProfile && (tutorProfile.known.length > 0 || tutorProfile.half.length > 0 || tutorProfile.preferences.length > 0) ? (
+        <section className="mb-6 flex flex-col gap-2 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="flex items-center gap-2 font-semibold"><span>🎓</span> 学习画像</h2>
+          <p className="text-xs text-neutral-500">
+            自动汇总自教学记录，注入教学提示词校准讲解深度。是派生的记录，不能手改；教学页里它会自己更新。
+          </p>
+          {tutorProfile.known.length > 0 ? (
+            <p className="text-sm text-neutral-700 dark:text-neutral-200">
+              <span className="text-neutral-400">已说通（{tutorProfile.known.length}）：</span>
+              {tutorProfile.known.join('、')}
+            </p>
+          ) : null}
+          {tutorProfile.half.length > 0 ? (
+            <p className="text-sm text-neutral-700 dark:text-neutral-200">
+              <span className="text-neutral-400">半懂（{tutorProfile.half.length}）：</span>
+              {tutorProfile.half.join('、')}
+            </p>
+          ) : null}
+          {tutorProfile.preferences.length > 0 ? (
+            <p className="text-sm text-neutral-700 dark:text-neutral-200">
+              <span className="text-neutral-400">偏好与习惯：</span>
+              {tutorProfile.preferences.map((p) => p.content).join('；')}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
       <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-2 font-semibold"><span>💭</span> 长期记忆</h2>

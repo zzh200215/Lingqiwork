@@ -91,6 +91,24 @@ async def list_stuck(limit: int = 200):
     return {"stuck": await core.stuck_points(limit)}
 
 
+@router.get("/profile")
+async def get_profile():
+    """学习画像：按概念聚合的派生结果，设置页只读展示。"""
+    from app.core import memory as _memory
+
+    prof = await core.profile()
+    mems = await _memory.list_memories()
+    return {
+        "known": prof["known"],
+        "half": prof["half"],
+        "preferences": [
+            {"kind": m.kind, "content": m.content}
+            for m in mems
+            if getattr(m, "kind", None) in ("preference", "habit")
+        ],
+    }
+
+
 @router.get("/stats")
 async def get_stats(days: int = 14):
     return await core.stats(days)

@@ -297,6 +297,87 @@ def format_recall(hits: list[dict]) -> str:
     )
 
 
+# ---------- 学习画像：全量概念的水平一览（PLAN.md 第 7 节，参考 ChatApp 用户画像） ----------
+
+
+async def profile() -> dict:
+    """教学记录 → 按概念聚合的水平画像，**纯派生，不落库**。
+
+    recall 是按语义打分的「相关记录」（0.62 底线上下），画像补的是 breadth：
+    概念无关或分数不够时，老师也能知道这个人在哪些概念上说过通、哪些半懂，
+    用来校准讲解深度。每个概念取**最近一次** verdict——说通了后来又卡住，
+    以新的为准，退回半懂是诚实的行为。useless 不算数（教学没成，证明不了水平）。
+    """
+    try:
+        from sqlalchemy import select
+
+        from app.db import SessionLocal
+        from app.models import TutorSession
+
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TutorSession)
+                    .where(TutorSession.concept != "", TutorSession.verdict.in_(("got", "half")))
+                    .order_by(TutorSession.id)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 - profile is an enhancement; teaching goes on
+        log.warning("tutor profile query failed", exc_info=True)
+        return {"known": [], "half": []}
+    latest: dict[str, str] = {}
+    for r in rows:
+        latest[r.concept] = r.verdict  # id 升序遍历：后写覆盖，即最近一次
+    return {
+        "known": sorted(c for c, v in latest.items() if v == "got"),
+        "half": sorted(c for c, v in latest.items() if v == "half"),
+    }
+
+
+PROFILE_LIST_CAP = 12  # 注入块里每个清单最多列这么多概念，全量在设置页看
+
+
+def format_profile(prof: dict, memories: list | None = None) -> str:
+    """画像 + 偏好记忆 → one system block ('' when nothing at all). Pure."""
+    known, half = prof.get("known") or [], prof.get("half") or []
+    pref_lines = [
+        f"- 【{('偏好' if m.kind == 'preference' else '习惯')}】{m.content}"
+        for m in (memories or [])
+        if getattr(m, "kind", None) in ("preference", "habit")
+    ]
+    if not known and not half and not pref_lines:
+        return ""
+    parts = ["以下是这个用户的学习画像（自动汇总自教学记录与长期记忆，不用向他确认）："]
+    if known:
+        head = "、".join(known[-PROFILE_LIST_CAP:])
+        more = f"（共 {len(known)} 个，仅列最近 {PROFILE_LIST_CAP} 个）" if len(known) > PROFILE_LIST_CAP else ""
+        parts.append(f"已说通{more}：{head}")
+    if half:
+        head = "、".join(half[-PROFILE_LIST_CAP:])
+        more = f"（共 {len(half)} 个）" if len(half) > PROFILE_LIST_CAP else ""
+        parts.append(f"半懂{more}：{head}")
+    if pref_lines:
+        parts.append("他的偏好与习惯（来自长期记忆）：\n" + "\n".join(pref_lines))
+    parts.append(
+        "用它校准你的讲解：已说通的不要重讲；半懂的默认他还记得一点、从上次的状态往下走；"
+        "偏好决定详略。与当前话题无关的部分忽略。"
+    )
+    return "\n".join(parts)
+
+
+async def _profile_block() -> str:
+    """派生画像 + 取偏好记忆，拼成注入块。失败静默（增强，不挡教学）。"""
+    try:
+        prof = await profile()
+        from app.core import memory as _memory
+
+        mems = await _memory.list_memories()
+    except Exception:  # noqa: BLE001
+        log.warning("tutor profile block failed", exc_info=True)
+        return ""
+    return format_profile(prof, mems)
+
+
 # ---------- 取材：讲你自己的材料，而不是通用答案（PLAN.md 第 7 节 第 1 条） ----------
 
 
@@ -327,18 +408,22 @@ async def _retrieve(query: str, top_k: int) -> list[dict]:
 # ---------- one teaching reply ----------
 
 
-def build_messages(history: list[dict], recall: str = "", material: str = "") -> list[dict]:
-    """Prompt for one reply: teaching voice, then recall, then material, then the transcript.
+def build_messages(history: list[dict], recall: str = "", material: str = "", profile: str = "") -> list[dict]:
+    """Prompt for one reply: teaching voice, then recall, then profile, then material,
+    then the transcript.
 
     Recall is a second system message rather than being glued onto
     SOCRATIC_PROMPT: with nothing to recall the voice is then byte-identical
     every turn, so when the teaching drifts it is clear which block moved.
-    Material sits last of the three blocks — nearest the transcript, which is
-    where the model looks when deciding what to talk about.
+    Profile sits after recall — it is the stable breadth picture; material sits
+    last of the three blocks — nearest the transcript, which is where the model
+    looks when deciding what to talk about.
     """
     msgs: list[dict] = [{"role": "system", "content": SOCRATIC_PROMPT}]
     if recall:
         msgs.append({"role": "system", "content": recall})
+    if profile:
+        msgs.append({"role": "system", "content": profile})
     if material:
         msgs.append({"role": "system", "content": material})
     recent = history[-HISTORY_LIMIT:]
@@ -437,7 +522,8 @@ async def say(session_id: int, text: str):
     parts: list[str] = []
     try:
         async for delta in _stream(
-            model_id, build_messages(history, format_recall(hits), format_material(sources))
+            model_id,
+            build_messages(history, format_recall(hits), format_material(sources), await _profile_block()),
         ):
             parts.append(delta)
             yield "delta", {"text": delta}

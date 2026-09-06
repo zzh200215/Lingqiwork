@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
 
 sys.path.insert(0, ".")
 
@@ -532,6 +533,75 @@ def test_format_material_labels_sources_and_caps_each_chunk():
     assert "[来源 1 — clippings/fastapi.md]" in block
     assert long not in block  # capped, or one chunk drowns the teaching voice
     assert core.format_material([]) == ""
+
+
+def test_build_messages_orders_recall_profile_material():
+    history = [{"role": "user", "content": "问"}]
+    msgs = core.build_messages(history, recall="R", profile="P", material="M")
+    assert [m["content"] for m in msgs[:4]] == [core.SOCRATIC_PROMPT, "R", "P", "M"]
+
+
+async def test_profile_takes_the_latest_verdict_and_skips_useless():
+    """画像按概念取最近一次 verdict：说通了后来又卡住，退回半懂是诚实的行为。
+    useless 不算数（教学没成，证明不了水平），空概念也不进画像。"""
+    await _reset()
+    await _seed("早", "asyncio 事件循环", "half")
+    await _seed("晚", "asyncio 事件循环", "got")
+    await _seed("又晚", "React useEffect 依赖数组", "half")
+    await _seed("没用那次", "SQLite WAL", "useless")
+    await _seed("没概念", "", "got")
+
+    prof = await core.profile()
+    assert prof["known"] == ["asyncio 事件循环"]
+    assert prof["half"] == ["React useEffect 依赖数组"]
+
+
+def test_format_profile_empty_when_nothing_at_all():
+    assert core.format_profile({"known": [], "half": []}, []) == ""
+
+
+def test_format_profile_caps_long_lists_and_carries_preferences():
+    prof = {"known": [f"概念{i}" for i in range(20)], "half": ["半懂概念"]}
+    prefs = [SimpleNamespace(kind="preference", content="用户偏好简洁直接的回答")]
+    block = core.format_profile(prof, prefs)
+    assert "共 20 个" in block and f"概念{core.PROFILE_LIST_CAP - 1}" in block and "概念0" not in block
+    # 未超上限的清单不挂计数——括号只在被截断时才出现
+    assert "半懂：半懂概念" in block and "半懂（" not in block
+    assert "【偏好】用户偏好简洁直接的回答" in block
+    assert "不要重讲" in block
+
+
+async def test_say_injects_profile_between_recall_and_transcript(monkeypatch):
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    await _seed("上次", "asyncio 事件循环", "half", "以为 await 交给了操作系统")
+    sid = (await core.start("asyncio 事件循环"))["id"]
+
+    seen: list = []
+    monkeypatch.setattr(core, "_stream", _fake_stream(["讲"], seen))
+    await _collect(core.say(sid, "我想搞懂 await"))
+
+    messages = seen[0][1]
+    roles = [m["role"] for m in messages]
+    assert roles.count("system") == 3  # 教学人格 + recall + 画像（无取材）
+    assert "已说通" in messages[2]["content"] and "asyncio 事件循环" in messages[2]["content"]
+    assert messages[-1] == {"role": "user", "content": "我想搞懂 await"}
+
+
+async def test_say_sends_no_profile_block_when_history_is_empty(monkeypatch):
+    """还没有任何教学记录时，画像块缺席——教学人格的字节稳定性不被破坏。"""
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    sid = (await core.start("GIL"))["id"]
+    seen: list = []
+    monkeypatch.setattr(core, "_stream", _fake_stream(["答"], seen))
+    await _collect(core.say(sid, "GIL 是什么"))
+    assert [m["role"] for m in seen[0][1]] == ["system", "user"]
 
 
 def test_build_messages_orders_material_after_recall_and_before_transcript():
