@@ -264,6 +264,14 @@ export interface SearchHit {
   at: string | null
 }
 
+/** 信念演化时间线：automemory 事实聚成的一条「信念线」 */
+export interface BeliefThread {
+  label: string
+  first_at: string | null
+  last_at: string | null
+  items: { id: number; content: string; kind: string }[]
+}
+
 export interface NoteSearchHit {
   path: string
   count: number
@@ -949,6 +957,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text, title }),
     }),
+
+  /** 信念演化时间线：automemory 事实按语义聚成的「信念线」 */
+  beliefThreads: () => request<{ threads: BeliefThread[] }>('/api/beliefs'),
 
   listRepos: () => request<RepoList>('/api/repos'),
   cloneRepo: (url: string, name?: string) =>

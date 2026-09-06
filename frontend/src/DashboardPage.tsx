@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import Layout from './Layout'
-import { api, type DashboardStats, type TutorStats } from './api'
+import { api, type BeliefThread, type DashboardStats, type TutorStats } from './api'
 
 // 仪表盘 — 零柒视角
 // 顶部 banner 用零柒 sprite + LLM 生成的今日一句话；
@@ -31,10 +31,14 @@ export default function DashboardPage() {
     }
   }, [])
 
+  // 信念演化时间线（记忆时间轴主题）：纯拉取式的自我观察，没有就整块不渲染
+  const [beliefs, setBeliefs] = useState<BeliefThread[] | null>(null)
+
   useEffect(() => {
     api.dashboard().then(setStats).catch((e) => setError(String(e)))
     // swallowed on purpose: the dashboard must never blank out over one endpoint
     api.tutorStats().then(setTutor).catch(() => {})
+    api.beliefThreads().then((r) => setBeliefs(r.threads)).catch(() => {})
     void refreshBriefing()
   }, [refreshBriefing])
 
@@ -240,6 +244,35 @@ export default function DashboardPage() {
           </section>
         </div>
 
+        {beliefs && beliefs.length > 0 && (
+          <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">信念时间线</h2>
+              <span className="text-xs text-neutral-400">零柒记下的事，聚出来的「你怎么变」</span>
+            </div>
+            <ul className="mt-4 space-y-4">
+              {beliefs.map((t) => (
+                <li key={t.items[0].id} className="rounded-xl border border-neutral-100 p-3 dark:border-neutral-800">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">{t.label}</span>
+                    <span className="shrink-0 text-[11px] text-neutral-400">
+                      {monthOf(t.first_at)} → {monthOf(t.last_at)}
+                    </span>
+                  </div>
+                  <ol className="mt-2 space-y-1.5 border-l border-neutral-200 pl-3 dark:border-neutral-700">
+                    {t.items.map((it) => (
+                      <li key={it.id} className="relative text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
+                        <span className="absolute -left-[15px] top-[5px] h-1.5 w-1.5 rounded-full bg-violet-400" />
+                        {it.content}
+                      </li>
+                    ))}
+                  </ol>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">最近对话</h2>
@@ -316,6 +349,13 @@ export default function DashboardPage() {
       </div>
     </Layout>
   )
+}
+
+// 信念时间线的月份标签：ISO 时间 → 「3月」
+function monthOf(iso: string | null): string {
+  if (!iso) return '?'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '?' : `${d.getMonth() + 1}月`
 }
 
 function NarrativeCard({

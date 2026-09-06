@@ -16,6 +16,7 @@ from app.routers import (
     artifacts,
     asr,
     backup,
+    beliefs,
     cards,
     chat,
     conversations,
@@ -142,6 +143,7 @@ app.include_router(dashboard.router)
 app.include_router(prompts.router)
 app.include_router(skills.router)
 app.include_router(search.router)
+app.include_router(beliefs.router)
 app.include_router(backup.router)
 app.include_router(tasks.router)
 app.include_router(evals.router)
