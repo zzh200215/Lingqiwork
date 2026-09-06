@@ -331,3 +331,37 @@ async def stream_chat(
                     yield delta
         finally:
             await stream.close()
+
+
+async def stream_chat_fallback(
+    candidates: list[tuple[ProviderInfo, str, str]],
+    messages: list[dict],
+    usage: dict | None = None,
+    served: dict | None = None,
+) -> AsyncIterator[str]:
+    """stream_chat over a fallback chain (maple-os 参考项：降级链的迷你版).
+
+    candidates are (info, model, label); the label only feeds bookkeeping.
+    Switch to the next candidate **only while nothing has been emitted** — a
+    dead URL or bad key fails before the first chunk, and that is the case
+    worth surviving. Once text is flowing, errors propagate as before: a
+    mid-stream switch would duplicate or garble the answer the caller already
+    forwarded. `served`, when given, receives {"label": ...} of the candidate
+    that actually produced output, so callers can record the real provider.
+    """
+    last: Exception | None = None
+    for info, model, label in candidates:
+        emitted = False
+        try:
+            async for delta in stream_chat(info, model, messages, usage=usage):
+                if not emitted and served is not None:
+                    served["label"] = label
+                emitted = True
+                yield delta
+            return
+        except Exception as e:  # noqa: BLE001 - switching on failure is the point
+            if emitted:
+                raise
+            last = e
+    if last is not None:
+        raise last

@@ -902,6 +902,48 @@ async def test_stats_tolerates_a_junk_window():
         assert got["days"] == bad and got["sessions"] == 0 and got["got"] == 0
 
 
+# ---------- 降级链：主 provider 零输出时换下一家（maple-os 参考项 2） ----------
+
+
+async def test_stream_falls_back_to_the_next_enabled_provider(monkeypatch):
+    await _reset()
+    from sqlalchemy import delete
+
+    from app.db import SessionLocal
+    from app.models import ProviderConfig
+
+    async with SessionLocal() as db:
+        await db.execute(delete(ProviderConfig))
+        db.add(
+            ProviderConfig(
+                name="dead", kind="openai", base_url="https://dead", api_key="dead",
+                models=["m"], enabled=True,
+            )
+        )
+        db.add(
+            ProviderConfig(
+                name="live", kind="openai", base_url="https://live", api_key="live",
+                models=["m2"], enabled=True,
+            )
+        )
+        await db.commit()
+
+    import app.core.llm as llm
+
+    tried: list[str] = []
+
+    async def fake_stream(info, model, messages, usage=None):
+        tried.append(info.api_key)
+        if info.api_key == "dead":
+            raise ConnectionError("connection refused")
+        yield "讲"
+
+    monkeypatch.setattr(llm, "stream_chat", fake_stream)
+    got = await _collect(core._stream("dead/m", [{"role": "user", "content": "x"}]))
+    assert got == ["讲"]
+    assert tried == ["dead", "live"]
+
+
 
 
 

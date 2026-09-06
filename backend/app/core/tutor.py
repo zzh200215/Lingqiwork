@@ -436,17 +436,48 @@ def build_messages(history: list[dict], recall: str = "", material: str = "", pr
 
 
 async def _stream(model_id: str, messages: list[dict]):
-    """One streaming teaching call. Test seam: monkeypatch me."""
-    from app.core.llm import ProviderInfo, stream_chat
+    """One streaming teaching call. Test seam: monkeypatch me.
+
+    The pinned provider is tried first; if it yields nothing at all (dead URL,
+    bad key), the next enabled provider serves the turn — teaching must not
+    stop because one endpoint is down. Once text is flowing, errors propagate:
+    a mid-stream switch would duplicate or garble the reply.
+    """
+    from sqlalchemy import select
+
+    from app.core.llm import ProviderInfo, stream_chat_fallback
+    from app.models import ProviderConfig
     from app.routers.chat import resolve_model
 
     resolved = await resolve_model(model_id)
     p = resolved.provider
-    async for delta in stream_chat(
-        ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key),
-        resolved.model,
-        messages,
-    ):
+    candidates = [
+        (
+            ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key),
+            resolved.model,
+            f"{p.name}/{resolved.model}",
+        )
+    ]
+    from app.db import SessionLocal
+
+    async with SessionLocal() as db:
+        others = (
+            await db.execute(
+                select(ProviderConfig)
+                .where(ProviderConfig.enabled.is_(True), ProviderConfig.id != p.id)
+                .order_by(ProviderConfig.id)
+            )
+        ).scalars().all()
+    for o in others:
+        if o.models:
+            candidates.append(
+                (
+                    ProviderInfo(kind=o.kind, base_url=o.base_url, api_key=o.api_key),
+                    o.models[0],
+                    f"{o.name}/{o.models[0]}",
+                )
+            )
+    async for delta in stream_chat_fallback(candidates, messages):
         yield delta
 
 

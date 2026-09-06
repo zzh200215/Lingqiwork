@@ -28,6 +28,7 @@ from app.core.llm import (
     ProviderInfo,
     run_agentic_chat,
     stream_chat,
+    stream_chat_fallback,
 )
 from app.core.prefs import load_config
 from app.db import SessionLocal
@@ -156,6 +157,38 @@ async def _resolve(model_id: str) -> tuple[ProviderConfig, str]:
         if p.models:
             return p, p.models[0]
     raise RuntimeError("没有已启用且配置了模型的 provider")
+
+
+async def _candidates(model_id: str) -> list[tuple[ProviderInfo, str, str]]:
+    """(info, model, label) 降级链（maple-os 参考项）：先解析到的主 provider，
+    然后其余每个已启用 provider 各带上它的第一个模型。链的优先级就是启用列表
+    的顺序——这是隐式配置，不新增设置项（PLAN.md 第 9 节）。"""
+    primary, model = await _resolve(model_id)
+    out = [
+        (
+            ProviderInfo(kind=primary.kind, base_url=primary.base_url, api_key=primary.api_key),
+            model,
+            f"{primary.name}/{model}",
+        )
+    ]
+    async with SessionLocal() as db:
+        others = (
+            await db.execute(
+                select(ProviderConfig)
+                .where(ProviderConfig.enabled.is_(True), ProviderConfig.id != primary.id)
+                .order_by(ProviderConfig.id)
+            )
+        ).scalars().all()
+    for p in others:
+        if p.models:
+            out.append(
+                (
+                    ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key),
+                    p.models[0],
+                    f"{p.name}/{p.models[0]}",
+                )
+            )
+    return out
 
 
 def _safe_name(name: str) -> str:
@@ -428,10 +461,10 @@ async def _notify_error(t: dict, trigger: str, error: str) -> None:
 
 
 async def _execute(t: dict, log_entries: list[dict]) -> dict:
-    provider, model = await _resolve(t["model_id"])
-    model_id = f"{provider.name}/{model}"
+    candidates = await _candidates(t["model_id"])
+    model_id = candidates[0][2]
+    served: dict = {}  # 实际产出内容的 provider——降级发生时它可能不是第一家
     prefs = load_config()
-    info = ProviderInfo(kind=provider.kind, base_url=provider.base_url, api_key=provider.api_key)
 
     messages: list[dict] = []
     system = (prefs.get("system_prompt") or "").strip()
@@ -482,14 +515,17 @@ async def _execute(t: dict, log_entries: list[dict]) -> dict:
     usage: dict = {}
 
     async def _plain() -> str:
-        chunks = [c async for c in stream_chat(info, model, messages, usage=usage)]
+        chunks = [
+            c
+            async for c in stream_chat_fallback(candidates, messages, usage=usage, served=served)
+        ]
         return "".join(chunks).strip()
 
     if not use_tools:
         answer = await _plain()
         if not answer:
             raise RuntimeError("模型返回空内容")
-        return {"answer": answer, "sources": sources, "model_id": model_id, **stats, "tokens_in": usage.get("input"), "tokens_out": usage.get("output")}
+        return {"answer": answer, "sources": sources, "model_id": served.get("label") or model_id, **stats, "tokens_in": usage.get("input"), "tokens_out": usage.get("output")}
 
     from app.core.mcp import mcp_manager
 
@@ -499,7 +535,7 @@ async def _execute(t: dict, log_entries: list[dict]) -> dict:
         answer = await _plain()
         if not answer:
             raise RuntimeError("模型返回空内容")
-        return {"answer": answer, "sources": sources, "model_id": model_id, **stats, "tokens_in": usage.get("input"), "tokens_out": usage.get("output")}
+        return {"answer": answer, "sources": sources, "model_id": served.get("label") or model_id, **stats, "tokens_in": usage.get("input"), "tokens_out": usage.get("output")}
 
     async def _run_tool(name: str, args: dict) -> str:
         result = await mcp_manager.call_tool(name, args)
@@ -519,18 +555,34 @@ async def _execute(t: dict, log_entries: list[dict]) -> dict:
         else MAX_TOOL_ROUNDS
     )
     parts: list[str] = []
-    answer = await run_agentic_chat(
-        info,
-        model,
-        messages,
-        specs,
-        _run_tool,
-        parts.append,
-        lambda name, args: log.info("task tool call: %s %s", name, args),
-        max_rounds=max_rounds,
-        on_round=_on_round,
-        usage=usage,
-    )
+    answer = ""
+    last_err: Exception | None = None
+    for info, model, label in candidates:
+        parts.clear()
+        try:
+            answer = await run_agentic_chat(
+                info,
+                model,
+                messages,
+                specs,
+                _run_tool,
+                parts.append,
+                lambda name, args: log.info("task tool call: %s %s", name, args),
+                max_rounds=max_rounds,
+                on_round=_on_round,
+                usage=usage,
+            )
+            model_id = label
+            break
+        except Exception as e:  # noqa: BLE001
+            # 换下一家的条件比纯文本严格：一个字没吐、一个工具没跑。文本已经
+            # 流出会重复，工具已经执行会重复副作用——发生过就原样抛回给重试循环。
+            if parts or stats["tool_calls"]:
+                raise
+            last_err = e
+    else:
+        if last_err is not None:
+            raise last_err
     answer = (answer or "").strip() or "".join(parts).strip()
     if not answer:
         raise RuntimeError("模型返回空内容")

@@ -306,3 +306,100 @@ async def test_parse_schedule_rejects_broken_cron_and_garbage(monkeypatch):
     monkeypatch.setattr(core, "stream_chat", stream)
     with pytest.raises(ValueError, match="JSON"):
         await core.parse_schedule("每天八点")
+
+
+# ---------- 降级链（maple-os 参考项 2） ----------
+
+
+async def _add_providers(*names: str) -> None:
+    from app.models import ProviderConfig
+
+    async with SessionLocal() as db:
+        await db.execute(delete(ProviderConfig))
+        for n in names:
+            db.add(
+                ProviderConfig(
+                    name=n, kind="openai", base_url=f"https://{n}", api_key=n,
+                    models=[f"{n}-m"], enabled=True,
+                )
+            )
+        await db.commit()
+
+
+async def test_candidates_chain_lists_pinned_then_other_enabled_providers():
+    await _clear()
+    await _add_providers("p1", "p2", "p3")
+    got = await core._candidates("p2/p2-m")
+    assert [c[2] for c in got] == ["p2/p2-m", "p1/p1-m", "p3/p3-m"]
+
+
+async def test_execute_records_the_provider_that_actually_served(monkeypatch):
+    await _clear()
+    await _add_providers("p1", "p2")
+
+    async def fake_fallback(candidates, messages, usage=None, served=None):
+        assert [c[2] for c in candidates] == ["p1/p1-m", "p2/p2-m"]
+        if served is not None:
+            served["label"] = candidates[1][2]  # 主家挂了，第二家顶上
+        yield "答案"
+
+    monkeypatch.setattr(core, "stream_chat_fallback", fake_fallback)
+    t = {"name": "t", "prompt": "p", "model_id": "", "use_rag": False, "tools_enabled": False, "mode": "simple"}
+    got = await core._execute(t, [])
+    assert got["answer"] == "答案" and got["model_id"] == "p2/p2-m"
+
+
+def _patch_mcp_specs(monkeypatch) -> None:
+    import app.core.mcp as mcp_mod
+
+    spec = {"type": "function", "function": {"name": "x", "description": "", "parameters": {}}}
+    monkeypatch.setattr(mcp_mod.mcp_manager, "tool_specs", lambda include_memory=True: [spec])
+    monkeypatch.setattr(mcp_mod.mcp_manager, "call_tool", _fake_call_tool)
+
+
+async def _fake_call_tool(name: str, args: dict) -> str:
+    return "tool-ok"
+
+
+def _agent_task() -> dict:
+    return {"name": "t", "prompt": "p", "model_id": "", "use_rag": False, "tools_enabled": True, "mode": "agent"}
+
+
+async def test_agent_path_does_not_fallback_after_a_tool_ran(monkeypatch):
+    """工具已经执行 = 副作用已经发生，换 provider 重跑会重复它——宁可抛回重试循环。"""
+    await _clear()
+    await _add_providers("p1", "p2")
+    _patch_mcp_specs(monkeypatch)
+    tried: list[str] = []
+
+    async def fake_agentic(info, model, messages, tools, run_tool, emit_text, emit_tool, max_rounds=6, on_round=None, usage=None):
+        tried.append(info.api_key)
+        if info.api_key == "p1":
+            await run_tool("x", {})
+            emit_text("部分")
+            raise RuntimeError("mid-loop death")
+        return "最终答案"
+
+    monkeypatch.setattr(core, "run_agentic_chat", fake_agentic)
+    with pytest.raises(RuntimeError, match="mid-loop"):
+        await core._execute(_agent_task(), [])
+    assert tried == ["p1"]
+
+
+async def test_agent_path_falls_back_before_any_action(monkeypatch):
+    await _clear()
+    await _add_providers("p1", "p2")
+    _patch_mcp_specs(monkeypatch)
+    tried: list[str] = []
+
+    async def fake_agentic(info, model, messages, tools, run_tool, emit_text, emit_tool, max_rounds=6, on_round=None, usage=None):
+        tried.append(info.api_key)
+        if info.api_key == "p1":
+            raise ConnectionError("connection refused")
+        emit_text("最终答案")
+        return "最终答案"
+
+    monkeypatch.setattr(core, "run_agentic_chat", fake_agentic)
+    got = await core._execute(_agent_task(), [])
+    assert got["answer"] == "最终答案" and got["model_id"] == "p2/p2-m"
+    assert tried == ["p1", "p2"]
