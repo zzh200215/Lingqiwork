@@ -761,6 +761,15 @@ export interface TutorTurn {
   content: string
 }
 
+/** 一条记录在案的卡点（got/half 才算数）。independent of the rail's 50-row window. */
+export interface TutorStuckRow {
+  id: number
+  concept: string
+  stuck: string
+  verdict: string
+  created_at: string
+}
+
 /** A row in the history rail. `turn_count` is a number here; `TutorDetail.turns`
  * is the message list — two names because one key with two types gets misread. */
 export interface TutorSessionRow {
@@ -1195,6 +1204,9 @@ export const api = {
     }),
   tutorSessions: (limit = 50) =>
     request<{ sessions: TutorSessionRow[] }>(`/api/tutor/sessions?limit=${limit}`),
+  // 全量卡点：右栏会话列表只取 50 条，第 52 次记的卡点不能跟着消失
+  tutorStuck: (limit = 200) =>
+    request<{ stuck: TutorStuckRow[] }>(`/api/tutor/stuck?limit=${limit}`),
   tutorSession: (id: number) => request<TutorDetail>(`/api/tutor/sessions/${id}`),
   tutorStats: (days = 14) => request<TutorStats>(`/api/tutor/stats?days=${days}`),
 }

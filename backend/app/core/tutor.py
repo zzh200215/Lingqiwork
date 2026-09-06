@@ -60,6 +60,10 @@ MATERIAL_CHUNK_CHARS = 800  # per chunk; the teaching voice is 3-5 sentences, no
 # 你点完自评的那条总结里出现一次、最多 2 个文件、不落库、页面上没有它的常驻入口。
 NEARBY_TOP_K = 6  # 检索宽一点：按 source 去重后常常只剩两三个
 NEARBY_MAX = 2
+# 本会话取材已经引用过的来源。存在进程里、end() 时取走即删：单用户桌面应用，
+# 从不结课的会话才可能留下残留，量级由使用决定。放进 nearby 的 exclude，
+# 「材料里还有」不再推荐你刚看过的文件。
+_SESSION_SOURCES: dict[int, set[str]] = {}
 VERDICTS = ("got", "half", "useless")
 
 SOCRATIC_PROMPT = """你是一个苏格拉底式的技术老师。用户会说出他想搞懂的东西。你的任务不是把答案讲完，而是让他自己想通。
@@ -419,6 +423,10 @@ async def say(session_id: int, text: str):
         log.warning("tutor material retrieval failed", exc_info=True)
         sources = []
     if sources:
+        # 记下本会话引用过的来源，end() 的「材料里还有」拿它当排除集
+        _SESSION_SOURCES[session_id] = {
+            str(s.get("source") or "") for s in sources if s.get("source")
+        }
         yield "sources", {
             "sources": [
                 {"source": s.get("source", ""), "title": s.get("title", ""), "score": s.get("score", 0)}
@@ -531,21 +539,22 @@ async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str
         return "", "", ""
 
 
-async def _nearby_material(concept: str) -> list[dict]:
+async def _nearby_material(concept: str, exclude: set[str] | None = None) -> list[dict]:
     """刚搞懂的概念 → 你的材料里还讲过这附近的东西（<=NEARBY_MAX 个文件）。
 
     第 7 节「从你的材料里发现你可能想搞懂的东西」的护栏版：查询是**这个会话
     刚谈完的概念**（你在场的上下文里顺手看见），不是一份推送清单。所以它只在
     `end()` 的返回里出现一次——没有表、没有计数、没有角标，下一次会话开始它
-    就不在了。做之前回看过第 2 节。
+    就不在了。做之前回看过第 2 节。`exclude` 是本会话取材已经引用过的来源：
+    「还有」的字面意思就是别推荐你刚看过的。
     """
     try:
-        chunks = await _retrieve(concept, NEARBY_TOP_K)
+        chunks = await _retrieve(concept, NEARBY_TOP_K + len(exclude or ()))
     except Exception:  # noqa: BLE001 - a dead index must not break the verdict
         log.warning("tutor nearby-material failed", exc_info=True)
         return []
     out: list[dict] = []
-    seen: set[str] = set()
+    seen: set[str] = set(exclude or ())
     for c in chunks:
         src = str(c.get("source") or "")
         if not src or src in seen:
@@ -594,7 +603,8 @@ async def end(session_id: int, verdict: str) -> dict:
                 if row is not None:
                     row.concept, row.aliases, row.stuck = concept, aliases, stuck
                     await db.commit()
-            nearby = await _nearby_material(concept)
+            nearby = await _nearby_material(concept, _SESSION_SOURCES.pop(session_id, None))
+    _SESSION_SOURCES.pop(session_id, None)  # useless / 没提取出概念也要清掉残留
     return {
         "id": session_id,
         "verdict": verdict,
@@ -644,6 +654,41 @@ async def sessions(limit: int = 50) -> list[dict]:
             "turn_count": int(counts.get(r.id, 0)),
             "created_at": iso_utc(r.created_at),
             "ended_at": iso_utc(r.ended_at),
+        }
+        for r in rows
+    ]
+
+
+async def stuck_points(limit: int = 200) -> list[dict]:
+    """Every recorded 卡点, newest first — 「卡过的点」的全量来源。
+
+    The rail's session list caps at 50 rows for display, and filtering stuck rows
+    out of it would silently drop everything past that: a stuck point recorded in
+    session #52 would be invisible forever. This scans all history instead. Like
+    recall, `useless` verdicts are skipped — the teaching missed, the line proves
+    nothing. A record, not a queue (第 2 节): no counts, no nudges.
+    """
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import TutorSession, iso_utc
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(TutorSession)
+                .where(TutorSession.stuck != "", TutorSession.verdict.in_(("got", "half")))
+                .order_by(TutorSession.id.desc())
+                .limit(max(1, min(int(limit or 200), 500)))
+            )
+        ).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "concept": r.concept or r.topic,
+            "stuck": r.stuck,
+            "verdict": r.verdict,
+            "created_at": iso_utc(r.created_at),
         }
         for r in rows
     ]

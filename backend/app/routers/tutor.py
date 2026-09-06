@@ -85,6 +85,12 @@ async def list_sessions(limit: int = 50):
     return {"sessions": await core.sessions(limit)}
 
 
+@router.get("/stuck")
+async def list_stuck(limit: int = 200):
+    """全量卡点：不受右栏会话列表 50 条的显示上限约束。"""
+    return {"stuck": await core.stuck_points(limit)}
+
+
 @router.get("/stats")
 async def get_stats(days: int = 14):
     return await core.stats(days)

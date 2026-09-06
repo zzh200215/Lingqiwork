@@ -10,6 +10,7 @@ import {
   type TutorEndResult,
   type TutorSessionRow,
   type TutorStats,
+  type TutorStuckRow,
   type TutorTurn,
 } from './api'
 import {
@@ -55,7 +56,8 @@ function Markdown({ children }: { children: string }) {
 /** The one thing that makes this more than a chat wrapper, so it is shown, not
  * hidden: 验收 asks whether recall fired AND whether it was right, and only the
  * user can judge the second half. */
-function RecallChip({ hits }: { hits: TutorRecallHit[] }) {
+export function RecallChip({ hits }: { hits: TutorRecallHit[] }) {
+  if (hits.length === 0) return null // 自防护：空命中不该留下一个空壳标题
   return (
     <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-500/30 dark:bg-violet-500/10">
       <p className="pb-1 text-[11px] font-medium uppercase tracking-wider text-violet-500 dark:text-violet-300">
@@ -77,12 +79,12 @@ function RecallChip({ hits }: { hits: TutorRecallHit[] }) {
 type Turn = TutorTurn & { sources?: TutorMaterialSource[] }
 
 /** chroma 元数据里的 title 是文件名去后缀（「index」），没有信息量；路径尾部两段才认得出位置 */
-function shortSource(source: string): string {
+export function shortSource(source: string): string {
   const parts = source.split('/').filter(Boolean)
   return parts.slice(-2).join('/')
 }
 
-function MaterialLine({ sources }: { sources: TutorMaterialSource[] }) {
+export function MaterialLine({ sources }: { sources: TutorMaterialSource[] }) {
   return (
     <p className="text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
       取材：
@@ -130,16 +132,15 @@ export default function TutorPage() {
   const [verdict, setVerdict] = useState<'' | 'got' | 'half' | 'useless'>('')
   const [ended, setEnded] = useState<{ concept: string; stuck: string; nearby: TutorEndResult['material_nearby'] } | null>(null)
   const [rows, setRows] = useState<TutorSessionRow[]>([])
+  const [stuckRows, setStuckRows] = useState<TutorStuckRow[]>([])
   const [stats, setStats] = useState<TutorStats | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
-
-  // 卡过的点直接从历史行里来：stuck 非空就是一条。它跟着 rail 一起刷新。
-  const stuckRows = rows.filter((r) => r.stuck)
 
   const refreshRail = useCallback(() => {
     // best-effort: the rail is context, never a precondition for teaching
     api.tutorSessions().then((r) => setRows(r.sessions)).catch(() => {})
     api.tutorStats().then(setStats).catch(() => {})
+    api.tutorStuck().then((r) => setStuckRows(r.stuck)).catch(() => {})
   }, [])
 
   useEffect(() => refreshRail(), [refreshRail])
@@ -422,7 +423,7 @@ export default function TutorPage() {
                     className="block w-full rounded-lg py-1.5 text-left transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800/70"
                   >
                     <span className="block truncate text-xs text-neutral-600 dark:text-neutral-300">
-                      {r.concept || r.topic}
+                      {r.concept}
                       <span className="ml-1.5 text-[10px] text-neutral-400">
                         {(r.created_at || '').slice(5, 10)}
                         {r.verdict === 'half' ? ' · 半懂' : ''}

@@ -229,6 +229,7 @@ async def _reset() -> None:
     from app.db import SessionLocal
     from app.models import TutorSession, TutorTurn
 
+    core._SESSION_SOURCES.clear()  # 进程内的已引用来源是测试间的隐藏状态
     await _init_db()
     async with SessionLocal() as db:
         await db.execute(delete(TutorTurn))
@@ -643,6 +644,49 @@ async def test_end_stores_the_triple(monkeypatch):
 async def test_end_surfaces_nearby_material_from_your_kb(monkeypatch):
     """第 7 节「发现你可能想搞懂的东西」，护栏版：只在 end() 的返回里出现一次，
     按 source 去重、最多 NEARBY_MAX 个 —— 它是你在场时顺手看见的一行字，不是队列。"""
+    await _reset()
+    sid = await _live(monkeypatch, "asyncio")
+    monkeypatch.setattr(core, "_extract", fake_extract_triple)
+
+    async def fake_retrieve(query: str, top_k: int):
+        assert top_k == core.NEARBY_TOP_K + 1  # 1 个已引用来源，检索宽度随之放宽
+        return [
+            {"source": "notes/loop.md", "title": "事件循环", "score": 0.9},  # 本会话刚引用过
+            {"source": "clippings/uvloop.md", "title": "uvloop", "score": 0.6},
+            {"source": "repos/x.md", "title": "", "score": 0.5},
+        ]
+
+    monkeypatch.setattr(core, "_retrieve", fake_retrieve)
+    core._SESSION_SOURCES[sid] = {"notes/loop.md"}
+    got = await core.end(sid, "got")
+    assert [n["source"] for n in got["material_nearby"]] == ["clippings/uvloop.md", "repos/x.md"]
+    assert sid not in core._SESSION_SOURCES  # 取走即删，不残留
+
+
+async def test_end_clears_cited_sources_even_when_useless(monkeypatch):
+    await _reset()
+    sid = await _live(monkeypatch, "GIL")
+    core._SESSION_SOURCES[sid] = {"notes/gil.md"}
+    await core.end(sid, "useless")
+    assert sid not in core._SESSION_SOURCES
+
+
+async def test_stuck_points_scans_all_history_not_just_the_rail(monkeypatch):
+    """「卡过的点」不能跟着右栏的 50 条显示上限一起截断：第 52 次会话记下的卡点
+    也要在。useless 的卡点不算数 —— 教学没成，那句话证明不了任何东西。"""
+    await _reset()
+    old = await _seed("旧", "旧概念", "got", stuck="旧的卡点")
+    for i in range(60):
+        await _seed(f"填充{i}", "", "got")
+    new = await _seed("新", "新概念", "half", stuck="新的卡点")
+    await _seed("没用", "没用概念", "useless", stuck="不算数的卡点")
+    await _seed("没卡", "没卡概念", "got")
+
+    stuck = await core.stuck_points()
+    assert [r["id"] for r in stuck] == [new, old]  # newest first, useless 剔除
+    assert stuck[0]["concept"] == "新概念" and stuck[0]["stuck"] == "新的卡点"
+    assert len(await core.stuck_points(limit=1)) == 1
+
     await _reset()
     sid = await _live(monkeypatch, "asyncio")
     monkeypatch.setattr(core, "_extract", fake_extract_triple)
