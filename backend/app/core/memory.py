@@ -212,8 +212,11 @@ async def clear_all() -> int:
 # 分类照管家类产品的记忆设计收窄成三类（AI-Sphere-Butler 的偏好/事实/习惯/情感里，
 # 去掉了情感——没有明确用途；去掉了状态——时效性信息是流水账的主要来源）。
 # 每类各管一种「将来怎么用」：偏好决定口吻和推荐，事实补背景，习惯决定何时别打扰。
-AUTO_KINDS = ("preference", "fact", "habit")
-AUTO_KIND_LABELS = {"preference": "偏好", "fact": "事实", "habit": "习惯"}
+# insight（洞察）不是 automemory 抽出来的，是夜间反思（memory_tidy.reflect）合成的
+# 更高层观察——放在同一组里只是为了 add_memory 不把它强制成 fact，抽取提示词
+# （_AUTO_SYSTEM）仍然只许模型写前三类。
+AUTO_KINDS = ("preference", "fact", "habit", "insight")
+AUTO_KIND_LABELS = {"preference": "偏好", "fact": "事实", "habit": "习惯", "insight": "洞察"}
 
 _AUTO_SYSTEM = (
     "你负责维护用户的长期记忆库。用户会给你一段刚结束的对话和已有记忆列表。\n"

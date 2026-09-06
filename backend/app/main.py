@@ -37,6 +37,7 @@ from app.routers import (
     podcast,
     prompts,
     repos,
+    roundtable,
     search,
     settings as settings_router,
     skills,
@@ -151,6 +152,7 @@ app.include_router(prompts.router)
 app.include_router(skills.router)
 app.include_router(search.router)
 app.include_router(beliefs.router)
+app.include_router(roundtable.router)
 app.include_router(arena.router)
 app.include_router(backup.router)
 app.include_router(tasks.router)

@@ -261,3 +261,70 @@ def test_reschedule_reads_prefs(monkeypatch):
     save_config({"memory_tidy_enabled": False})
     memory_tidy.reschedule()
     assert calls["enabled"] is False
+
+
+# ---------- 睡眠期反思（reflect）：记忆流水 → kind=insight 的更高层观察 ----------
+
+
+async def test_reflect_adds_insight(monkeypatch):
+    monkeypatch.setattr(memory_tidy, "load_config", lambda: {"automemory_enabled": True})
+
+    async def _insight_embed(texts: list[str]) -> list[list[float]]:
+        # insight 文本给一个异维向量：不与 2-D 假嵌入空间里的任何事实撞 0.92 去重线
+        out = []
+        for t in texts:
+            out.append([0.1, 0.1, 1.0] if "重心" in t else (await _fake_embed([t]))[0])
+        return out
+
+    monkeypatch.setattr(memory, "_embed_texts", _insight_embed)
+    await _insert(
+        [
+            "用户偏好 Python",
+            "用户主用 Python 写代码",
+            "用户喜欢喝咖啡",
+            "用户常在早上跑步",
+            "用户在学 asyncio",
+        ]
+    )
+    calls: list = []
+    monkeypatch.setattr(
+        memory_tidy,
+        "stream_chat",
+        _fake_llm('[{"text": "用户的重心在 Python 与并发底层", "based_on": [1, 2]}]', calls),
+    )
+    report = await memory_tidy.reflect({"ok": True})
+    assert report["reflection"] == {"added": 1}
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(select(Memory).where(Memory.kind == "insight").order_by(Memory.id))
+        ).scalars().all()
+    assert len(rows) == 1 and rows[0].source == "auto" and "重心" in rows[0].content
+    # 提示词带编号流水与已有洞察节
+    assert "记忆流水" in calls[0][1]["content"] and "已有洞察" in calls[0][1]["content"]
+
+
+async def test_reflect_disabled_never_calls_llm(monkeypatch):
+    monkeypatch.setattr(memory_tidy, "load_config", lambda: {"automemory_enabled": False})
+    calls: list = []
+    monkeypatch.setattr(memory_tidy, "stream_chat", _boom_llm(calls))
+    report = await memory_tidy.reflect({})
+    assert report["reflection"] == {"skipped": "automemory off"}
+    assert calls == []
+
+
+async def test_reflect_needs_min_facts(monkeypatch):
+    monkeypatch.setattr(memory_tidy, "load_config", lambda: {"automemory_enabled": True})
+    await _insert(["甲", "乙", "丙", "丁"])  # 4 < REFLECT_MIN_FACTS
+    calls: list = []
+    monkeypatch.setattr(memory_tidy, "stream_chat", _boom_llm(calls))
+    report = await memory_tidy.reflect({})
+    assert report["reflection"]["skipped"].startswith("记忆少于")
+    assert calls == []
+
+
+async def test_run_tidy_reports_reflection_when_automemory_off(monkeypatch):
+    # 合并没得做（无相近簇路径）也要报告反思这一步——一个 job，一份报告
+    await _insert(["孤立的记忆甲", "孤立的记忆乙", "孤立的记忆丙", "孤立的记忆丁", "孤立的记忆戊"])
+    monkeypatch.setattr(memory_tidy, "_cluster", lambda rows, vecs: [])
+    report = await memory_tidy.run_tidy()
+    assert "reflection" in report

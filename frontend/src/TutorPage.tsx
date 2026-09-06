@@ -7,6 +7,7 @@ import CodeBlock from './CodeBlock'
 import Layout from './Layout'
 import {
   api,
+  type RoundtableResult,
   type TutorEndResult,
   type TutorSessionRow,
   type TutorStats,
@@ -122,7 +123,7 @@ function Bubble({ turn }: { turn: Turn }) {
 export default function TutorPage() {
   const [sid, setSid] = useState<number | null>(null)
   const [topic, setTopic] = useState('')
-  const [mode, setMode] = useState<'socratic' | 'feynman'>('socratic')
+  const [mode, setMode] = useState<'socratic' | 'feynman' | 'future'>('socratic')
   const [modelOk, setModelOk] = useState(true)
   const [turns, setTurns] = useState<Turn[]>([])
   const [hits, setHits] = useState<TutorRecallHit[]>([])
@@ -137,6 +138,11 @@ export default function TutorPage() {
   const [stuckBusy, setStuckBusy] = useState(false)
   const [stuckMsg, setStuckMsg] = useState('')
   const [stuckAudio, setStuckAudio] = useState('')
+  // 学习小组圆桌：拉取式——点「开圆桌」才跑，最近一次的纪要与播客就地展示
+  const [rtBusy, setRtBusy] = useState(false)
+  const [rt, setRt] = useState<RoundtableResult | null>(null)
+  const [rtMsg, setRtMsg] = useState('')
+  const [rtAudio, setRtAudio] = useState('')
   const [stats, setStats] = useState<TutorStats | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
   // 正在流式回复的会话：再学一个 / 开新会话 / 离开页面时掐断它，
@@ -165,6 +171,36 @@ export default function TutorPage() {
       setStuckBusy(false)
     }
   }, [stuckBusy])
+
+  // 圆桌：topic 留空，后端回落到最近的卡点；纪要就地展开，想听再做成播客
+  const runRoundtable = useCallback(async () => {
+    if (rtBusy) return
+    setRtBusy(true)
+    setRtMsg('')
+    setRtAudio('')
+    try {
+      setRt(await api.roundtableRun(''))
+    } catch (e) {
+      setRtMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRtBusy(false)
+    }
+  }, [rtBusy])
+
+  const makeRtPodcast = useCallback(async () => {
+    if (!rt || rtBusy) return
+    setRtBusy(true)
+    setRtMsg('')
+    try {
+      const r = await api.roundtablePodcast(rt.file)
+      setRtMsg(`播客已生成，${Math.max(1, Math.round(r.duration_sec / 60))} 分钟：`)
+      setRtAudio(`/api/podcast/audio/${r.file}`)
+    } catch (e) {
+      setRtMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRtBusy(false)
+    }
+  }, [rt, rtBusy])
 
   useEffect(() => refreshRail(), [refreshRail])
 
@@ -212,7 +248,8 @@ export default function TutorPage() {
     }
   }, [])
 
-  const beginWith = useCallback(async (topicText: string, repo = '', m: 'socratic' | 'feynman' = 'socratic') => {
+  const beginWith = useCallback(
+    async (topicText: string, repo = '', m: 'socratic' | 'feynman' | 'future' = 'socratic') => {
     const t = topicText.trim()
     if (!t || busy) return
     setTopic(t)
@@ -337,6 +374,17 @@ export default function TutorPage() {
                   >
                     🗣 我来讲（费曼）
                   </button>
+                  <button
+                    onClick={() => setMode('future')}
+                    className={`rounded-full border px-3 py-1.5 transition-colors ${
+                      mode === 'future'
+                        ? 'border-sky-500 bg-sky-500/10 font-medium text-sky-600 dark:text-sky-300'
+                        : 'border-neutral-300 text-neutral-500 hover:border-sky-300 dark:border-neutral-700'
+                    }`}
+                    title="和一年后的自己聊聊：用你的记忆、日记、学习记录合成「一年后的档案」"
+                  >
+                    🔮 未来的你
+                  </button>
                 </div>
                 <div className="flex gap-2">
                   <input
@@ -368,6 +416,11 @@ export default function TutorPage() {
                     {mode === 'feynman' && (
                       <span className="mr-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
                         费曼
+                      </span>
+                    )}
+                    {mode === 'future' && (
+                      <span className="mr-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] text-sky-700 dark:bg-sky-500/20 dark:text-sky-300">
+                        未来的你
                       </span>
                     )}
                     {topic || '这次'}
@@ -501,15 +554,55 @@ export default function TutorPage() {
                   <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
                     卡过的点
                   </p>
-                  <button
-                    onClick={() => void makeStuckPodcast()}
-                    disabled={stuckBusy}
-                    title="把最近的卡点做成一期双人讨论播客"
-                    className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
-                  >
-                    {stuckBusy ? '生成中…' : '🎧 做成播客'}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => void runRoundtable()}
+                      disabled={rtBusy}
+                      title="开一场圆桌：三个 AI 视角（老师/同侪/考官）笔谈最近的卡点"
+                      className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-sky-400 hover:text-sky-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-sky-500 dark:hover:text-sky-300"
+                    >
+                      {rtBusy && !rt ? '讨论中…' : '👥 圆桌'}
+                    </button>
+                    <button
+                      onClick={() => void makeStuckPodcast()}
+                      disabled={stuckBusy}
+                      title="把最近的卡点做成一期双人讨论播客"
+                      className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
+                    >
+                      {stuckBusy ? '生成中…' : '🎧 做成播客'}
+                    </button>
+                  </div>
                 </div>
+                {rt ? (
+                  <div className="mb-2 rounded-lg border border-neutral-100 p-2 dark:border-neutral-800">
+                    <p className="truncate text-[10px] text-neutral-400">
+                      圆桌 · {rt.topic}
+                    </p>
+                    <ul className="mt-1 space-y-1.5">
+                      {rt.turns.map((t, i) => (
+                        <li key={i} className="text-[11px] leading-relaxed text-neutral-600 dark:text-neutral-300">
+                          <span className="font-medium text-neutral-800 dark:text-neutral-100">{t.name}</span>
+                          ：{t.text}
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <button
+                        onClick={() => void makeRtPodcast()}
+                        disabled={rtBusy}
+                        className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
+                      >
+                        {rtBusy ? '生成中…' : '🎧 做成播客'}
+                      </button>
+                    </div>
+                    {rtMsg ? (
+                      <p className="mt-1 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                        {rtMsg}
+                        {rtAudio && <audio controls src={rtAudio} className="mt-1.5 w-full" />}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {stuckMsg ? (
                   <p className="pb-1.5 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
                     {stuckMsg}

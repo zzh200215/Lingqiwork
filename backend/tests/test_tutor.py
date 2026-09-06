@@ -1201,3 +1201,71 @@ async def test_stuck_blocks_respects_cap_and_days():
 
 
 
+
+
+# ---------- 未来的你（future mode）：声部、档案、end 不提取 ----------
+
+
+def test_format_future_dossier_pure():
+    prof = {"known": ["asyncio 事件循环"], "half": ["GIL"]}
+    memories = [type("M", (), {"content": "用户主用 Python"})()]
+    entries = [{"date": "2026-09-05", "time": "21:00", "text": "今天把圆桌想清楚了"}]
+    blocks = [("卡点：GIL（半懂）", "用户围绕 GIL 卡过")]
+    out = core.format_future_dossier(prof, memories, entries, blocks)
+    assert "【时间锚点】" in out and str(_now_year() + 1) in out
+    assert "已说通过：asyncio 事件循环" in out and "GIL" in out
+    assert "「今天把圆桌想清楚了」" in out
+    assert "- 用户主用 Python" in out and "卡点：GIL（半懂）" in out
+    # 全空档案 → ''，让 say() 的注入块自然缺席
+    assert core.format_future_dossier({}, [], [], []) == ""
+
+
+def _now_year() -> int:
+    from datetime import datetime
+
+    return datetime.now().year
+
+
+async def test_start_accepts_future_and_rejects_unknown_mode():
+    await _reset()
+    r = await core.start("一年后的我", mode="future")
+    assert r["mode"] == "future"
+    with pytest.raises(ValueError):
+        await core.start("x", mode="bogus")
+
+
+async def test_say_future_swaps_voice_and_dossier(monkeypatch):
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    sid = (await core.start("和一年后的我聊聊", mode="future"))["id"]
+    seen: list = []
+    monkeypatch.setattr(core, "_stream", _fake_stream(["你好，是我"], seen))
+    monkeypatch.setattr(core, "_future_dossier", _fake_dossier)
+    await _collect(core.say(sid, "一年后的我在做什么"))
+
+    messages = seen[0][1]
+    assert messages[0]["content"].startswith("你是用户一年后的自己")
+    assert messages[1] == {"role": "system", "content": "【时间锚点】测试档案"}
+    # 教学画像不许混进未来会话
+    assert all("已说通" not in m["content"] for m in messages)
+
+
+async def test_end_future_skips_extraction(monkeypatch):
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    sid = (await core.start("和一年后的我聊聊", mode="future"))["id"]
+
+    async def _no_extract(*a, **k):
+        raise AssertionError("future 会话不应提取概念/卡点")
+
+    monkeypatch.setattr(core, "_extract", _no_extract)
+    out = await core.end(sid, "got")
+    assert out["concept"] == "" and out["verdict"] == "got"
+
+
+async def _fake_dossier() -> str:
+    return "【时间锚点】测试档案"

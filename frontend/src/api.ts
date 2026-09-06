@@ -119,6 +119,14 @@ export interface JournalRecent {
   today: number
 }
 
+/** 学习小组圆桌：一次笔谈纪要（mentor / peer / skeptic 串行两轮） */
+export interface RoundtableResult {
+  topic: string
+  turns: { persona: 'mentor' | 'peer' | 'skeptic'; name: string; text: string }[]
+  file: string
+  at: string
+}
+
 export interface TtsResult {
   url: string
   cached: boolean
@@ -832,8 +840,8 @@ export interface TutorSessionRow {
   verdict: '' | 'got' | 'half' | 'useless'
   stuck: string
   recalled: boolean
-  /** socratic：老师问你答；feynman：反转，你讲它追问 */
-  mode: 'socratic' | 'feynman'
+  /** socratic：老师问你答；feynman：反转，你讲它追问；future：和一年后的自己聊 */
+  mode: 'socratic' | 'feynman' | 'future'
   turn_count: number
   created_at: string
   ended_at: string | null
@@ -1006,6 +1014,18 @@ export const api = {
     request<{ ok: boolean; id: string; title: string; file: string; duration_sec: number }>(
       '/api/podcast/stuck',
       { method: 'POST', body: JSON.stringify({ days }) }
+    ),
+
+  /** 学习小组圆桌：三 persona 笔谈一个卡点，纪要落盘 vault/roundtable/ */
+  roundtableRun: (topic = '', days = 90) =>
+    request<RoundtableResult>('/api/roundtable', {
+      method: 'POST',
+      body: JSON.stringify({ topic, days })
+    }),
+  roundtablePodcast: (file: string) =>
+    request<{ ok: boolean; id: string; title: string; file: string; duration_sec: number }>(
+      '/api/roundtable/podcast',
+      { method: 'POST', body: JSON.stringify({ file }) }
     ),
 
   listRepos: () => request<RepoList>('/api/repos'),
@@ -1279,7 +1299,7 @@ export const api = {
 
   // ---------- 对话式教学 ----------
   /** repo 非空 = 代码库陪读：会话取材限定在该仓库；mode = socratic | feynman */
-  tutorStart: (topic: string, repo?: string, mode?: 'socratic' | 'feynman') =>
+  tutorStart: (topic: string, repo?: string, mode?: 'socratic' | 'feynman' | 'future') =>
     request<TutorSessionStart>('/api/tutor/start', {
       method: 'POST',
       body: JSON.stringify({ topic, repo: repo || '', mode: mode || 'socratic' }),

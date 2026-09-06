@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import re
+from datetime import datetime
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +105,18 @@ FEYNMAN_PROMPT = """你在「费曼模式」里扮演一个聪明但没搞懂的
 - 不要客套，不要说「很好的解释」。
 - 不要一次抛三个问题。"""
 
-MODES = ("socratic", "feynman")
+MODES = ("socratic", "feynman", "future")
+
+FUTURE_PROMPT = """你是用户一年后的自己，正在和今天的 TA 说话。你手里的「一年后的档案」来自 TA 的记忆、日记和学习记录——你就是从那些日子里走过来的。
+
+规则：
+1. 用「我」的口吻，温和、具体、不装。你知道 TA 正在学什么、卡在哪，因为你就这么走过来的。
+2. 讲一年后的具体图景：哪些东西后来学会了、哪些当时觉得难后来发现不过如此、什么习惯留了下来。档案里没有的就说「我也不确定」——不要编造成功学，不要画饼。
+3. 少给建议，多讲经历。要给就说「我当时是这么做的」，不要说「你应该」。
+4. TA 说到焦虑、落后感的时候认真接住：用档案里 TA 自己过去的进步当证据，而不是空泛安慰。
+5. 每轮 2-4 句，像聊天。不要列清单，不要一次把一年的事讲完——TA 会再问的。
+6. 这是私人对话：不吹捧、不恐吓。你唯一的目标是让 TA 感到「一年后的我和现在的我是连续的」。
+7. 不要透露你是模型、不要讨论这个设定本身——TA 需要的是一段和自己的对话，不是一次角色扮演评测。"""
 
 # aliases 那一段的三条硬要求都是量出来的（2026-09-06 accept 实测，每个别名单独成一条
 # 向量）：「至少 4 个字」挡「async」这种裸词 —— 它对无关查询「asyncio 里的任务调度」
@@ -416,6 +428,72 @@ async def _profile_block() -> str:
     return format_profile(prof, mems)
 
 
+def format_future_dossier(prof: dict, memories: list, entries: list, blocks: list) -> str:
+    """四路数据 → 「一年后的档案」注入块。Pure，离线可测。
+
+    空档案返回 ''——say() 那边 profile_block 为空时 FUTURE_PROMPT 本身仍然
+    成立（模型靠「我也不确定」兜底），未来模式不能因为哪块数据缺席就说不出话。
+    """
+    lines: list[str] = []
+    now = datetime.now().astimezone()
+    lines.append(
+        f"【时间锚点】TA 今天是 {now:%Y-%m-%d}。你是一年后的 TA（约 {now.year + 1} 年），"
+        "从下面这些日子里走过来的。"
+    )
+    known = (prof.get("known") or [])[:PROFILE_LIST_CAP]
+    half = (prof.get("half") or [])[:PROFILE_LIST_CAP]
+    if known or half:
+        lines.append(
+            "【TA 在学什么】已说通过：" + ("、".join(known) or "暂无")
+            + "；还半懂：" + ("、".join(half) or "暂无")
+        )
+    journal_lines = [f"{e.get('date', '')[5:]} {e.get('time', '')} 「{(e.get('text') or '')[:60]}」" for e in entries[:5]]
+    if journal_lines:
+        lines.append("【TA 最近写的日记】\n" + "\n".join(journal_lines))
+    fact_lines = [f"- {m.content}" for m in memories[:12]]
+    if fact_lines:
+        lines.append("【TA 的长期记忆】\n" + "\n".join(fact_lines))
+    stuck_lines = [f"- {title}：{text}" for title, text in blocks[:3]]
+    if stuck_lines:
+        lines.append("【TA 最近卡过的点】\n" + "\n".join(stuck_lines))
+    if len(lines) == 1:
+        return ""
+    return "\n\n".join(lines)
+
+
+async def _future_dossier() -> str:
+    """「一年后的档案」：四路来源各取一点，全部 best-effort——未来模式不能因为
+    哪一块挂了就说不出话。纯查询无 LLM，每轮现算（数据在变，档案跟着变）。"""
+    from app.core import journal
+    from app.core.memory import list_memories
+
+    prof: dict = {}
+    memories: list = []
+    entries: list = []
+    blocks: list = []
+    try:
+        prof = await profile()
+    except Exception:  # noqa: BLE001
+        log.warning("future dossier: profile failed", exc_info=True)
+    try:
+        memories = await list_memories()
+    except Exception:  # noqa: BLE001
+        log.warning("future dossier: memories failed", exc_info=True)
+    try:
+        entries = journal.recent(5)
+    except Exception:  # noqa: BLE001
+        log.warning("future dossier: journal failed", exc_info=True)
+    try:
+        blocks = await stuck_blocks(days=90, cap=3)
+    except Exception:  # noqa: BLE001
+        log.warning("future dossier: stuck blocks failed", exc_info=True)
+    try:
+        return format_future_dossier(prof, memories, entries, blocks)
+    except Exception:  # noqa: BLE001
+        log.warning("future dossier: format failed", exc_info=True)
+        return ""
+
+
 # ---------- 取材：讲你自己的材料，而不是通用答案（PLAN.md 第 7 节 第 1 条） ----------
 
 
@@ -723,8 +801,15 @@ async def say(session_id: int, text: str):
 
     profile_block = await _profile_block()
     older = await _older_block(session_id, history, model_id)
-    # 费曼会话换声部：提示词反转，其余块（召回/画像/材料/压缩）一概不动
-    voice = FEYNMAN_PROMPT if mode == "feynman" else SOCRATIC_PROMPT
+    # 费曼会话换声部：提示词反转，其余块（召回/画像/材料/压缩）一概不动。
+    # 未来会话更进一步：声部换成「一年后的你」，画像块整个换成一年后的档案——
+    # 教学画像对这场对话是反效果（未来的 TA 不需要被提醒 TA 半懂什么，TA 要讲
+    # 一年之后的事）。
+    voice = {"socratic": SOCRATIC_PROMPT, "feynman": FEYNMAN_PROMPT, "future": FUTURE_PROMPT}.get(
+        mode, SOCRATIC_PROMPT
+    )
+    if mode == "future":
+        profile_block = await _future_dossier()
     parts: list[str] = []
     try:
         async for delta in _stream(
@@ -884,10 +969,13 @@ async def end(session_id: int, verdict: str) -> dict:
         row.ended_at = utcnow()
         await db.commit()
         topic, model_id = row.topic, row.model_id
+        mode = row.mode or "socratic"
 
     concept, aliases, stuck = "", "", ""
     nearby: list[dict] = []
-    if verdict != "useless" and model_id:
+    # 未来会话不是教学：提取概念/卡点只会把「和未来的自己聊天」的内容污染进
+    # 画像和召回——自评照存（记录是你的），提取跳过。
+    if verdict != "useless" and model_id and mode != "future":
         concept, aliases, stuck = await _extract(session_id, topic, model_id)
         if concept:  # a 卡点 with no concept is unrecallable, so both or neither
             async with SessionLocal() as db:

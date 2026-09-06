@@ -97,8 +97,8 @@ async def _apply_merge(keep_id: int, merged: str, drop_ids: list[int]) -> None:
         memory._vec_cache.pop(did, None)
 
 
-async def run_tidy() -> dict:
-    """One consolidation pass. Returns a report dict; never raises."""
+async def _tidy_pass() -> dict:
+    """合并去重这一段；反思（reflect）在 run_tidy 里接在它后面。never raises."""
     rows = await memory.list_memories()
     report: dict = {
         "ok": True,
@@ -163,6 +163,94 @@ async def run_tidy() -> dict:
         log.info("tidy: merged %d memories into #%d", len(members), keep.id)
 
     report["after"] = report["before"] - sum(len(d["ids"]) - 1 for d in report["details"])
+    _save_report(report)
+    return report
+
+
+async def run_tidy() -> dict:
+    """一晚上的活：先合并去重（_tidy_pass），再睡眠期反思（reflect）。
+
+    反思独立于合并：合并提前返回（记忆太少、没有相近簇）也照样反思。
+    """
+    report = await _tidy_pass()
+    return await reflect(report)
+
+
+# ---------- 睡眠期反思：从记忆流合成更高一层的洞察（Letta sleep-time + 反思树） ----------
+
+REFLECT_MIN_FACTS = 5  # 少于这个数，流水太薄，提炼出来的只会是复述
+REFLECT_CAP = 2
+
+_REFLECT_SYSTEM = (
+    "你负责维护用户的长期记忆库。给你这个用户的记忆流水（带编号）和已有洞察。只做一件事："
+    "从记忆流水里提炼**更高一层**的观察——不是复述任何单条，而是把多条记忆拼成一个"
+    "跨条目的结论（趋势、习惯的模式、关注点的转移）。\n"
+    "每条观察都必须能从编号记忆里找到依据；已有的洞察不要重复。\n"
+    "不要记：单条记忆已有的内容、时效性状态（在赶什么、这两天在哪）、情绪状态。\n"
+    '只输出 JSON 数组，每条是 {"text": "一句完整陈述（不超过 80 字）", "based_on": [记忆编号]}，'
+    f"最多 {REFLECT_CAP} 条；没有值得提炼的就输出 []。不要解释、不要代码块。\n"
+    '示例：[{"text": "用户近三周的重心从工具搭建转向了并发底层", "based_on": [3, 7, 12]}]'
+)
+
+
+async def reflect(report: dict) -> dict:
+    """记忆流水 → 1-2 条 kind=insight 的更高层观察，喂给信念时间线和 MCP 读记忆。
+
+    与合并共用同一开关（automemory_enabled，默认关）与同一 provider 解析，
+    不加新设置（第 9 节）。best-effort：反思挂了绝不动 tidy 的结果。
+    """
+    try:
+        if not load_config().get("automemory_enabled"):
+            report["reflection"] = {"skipped": "automemory off"}
+            _save_report(report)
+            return report
+        rows = await memory.list_memories()
+        facts = [m for m in rows if m.kind != "insight"][-40:]
+        existing = [m for m in rows if m.kind == "insight"][-5:]
+        if len(facts) < REFLECT_MIN_FACTS:
+            report["reflection"] = {"skipped": f"记忆少于 {REFLECT_MIN_FACTS} 条"}
+            _save_report(report)
+            return report
+        writer = await _resolve_writer()
+        if not writer:
+            report["reflection"] = {"skipped": "没有可用 provider"}
+            _save_report(report)
+            return report
+        info, model = writer
+        listing = "\n".join(f"{m.id}. {m.content}" for m in facts)
+        prior = "\n".join(f"- {m.content}" for m in existing) or "（暂无）"
+        prompt = (
+            f"已有洞察：\n{prior}\n\n记忆流水：\n{listing}\n\n"
+            "请提炼有没有值得新增的更高层观察。"
+        )
+        chunks = [
+            c
+            async for c in stream_chat(
+                info,
+                model,
+                [
+                    {"role": "system", "content": _REFLECT_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+        ]
+        raw = "".join(chunks).strip()
+        m = re.search(r"\[.*\]", raw, re.S)
+        items = json.loads(m.group(0)) if m else []
+        added = 0
+        if isinstance(items, list):
+            for item in items[:REFLECT_CAP]:
+                text = str((item or {}).get("text") or "").strip()[:120]
+                if not text:
+                    continue
+                result = await memory.add_memory(text, source="auto", kind="insight")
+                if result.startswith("已记住"):
+                    added += 1
+        report["reflection"] = {"added": added}
+        log.info("tidy: reflection added %d insight(s)", added)
+    except Exception:  # noqa: BLE001 - 反思挂了绝不动 tidy 的结果
+        log.warning("tidy reflection failed", exc_info=True)
+        report["reflection"] = {"error": "reflection failed"}
     _save_report(report)
     return report
 
