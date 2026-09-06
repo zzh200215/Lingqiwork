@@ -10,13 +10,19 @@
 不出本机。刻意只暴露**读**工具——外部工具看工作台，改动仍走工作台自己的
 界面，权限边界就是「只读」本身，不加开关（第 9 节）。
 
-坑位记录：streamable_http_app() 把 session manager 的启动挂在**被挂载 app**
-自己的 lifespan 上，而 Starlette 的 mount 不会跑子 app 的 lifespan——所以
-main.py 必须在主 lifespan 里 `async with mcp_server.running():`。
+坑位记录（两个都踩过）：
+1. streamable_http_app() 把 session manager 的启动挂在**被挂载 app**自己的
+   lifespan 上，而 Starlette 的 mount 不会跑子 app 的 lifespan——所以 main.py
+   必须在主 lifespan 里 `async with mcp_server.running():`。
+2. 根上挂着 StaticFiles 时，`Mount("/mcp")` 对**不带斜杠的裸前缀**不再匹配
+   （连 307 重定向都没有），请求直接落到静态文件变 405；`/mcp/` 倒是一切
+   正常。所以 install() 用「/mcp 精确路由 + /mcp 子路径 Mount」双保险：精确
+   路由把 path 重写成 / 再转交子应用，任何前缀形态都可达。
 """
 import logging
 
 from mcp.server.mcpserver import MCPServer
+from starlette.routing import Mount, Route
 
 log = logging.getLogger(__name__)
 
@@ -97,9 +103,37 @@ async def get_today_briefing() -> dict:
     return await today_next()
 
 
+_child = None  # asgi_app() 时创建的子应用，补位路由转交给它
+
+
 def asgi_app():
-    """挂载点：返回 streamable HTTP 的 Starlette app（stateless，无会话管理）。"""
-    return mcp.streamable_http_app(streamable_http_path="/", stateless_http=True)
+    """MCP 子应用（streamable HTTP，stateless，内部路由在 /）。"""
+    global _child
+    _child = mcp.streamable_http_app(streamable_http_path="/", stateless_http=True)
+    return _child
+
+
+class _BareEntrypoint:
+    """裸 /mcp 的补位：重写 path 为 / 后转交子应用（见模块 docstring 坑位 2）。"""
+
+    async def __call__(self, scope, receive, send):
+        if _child is None:
+            raise RuntimeError("mcp_server.routes() 尚未安装")
+        scope = dict(scope)
+        scope["path"] = "/"
+        await _child(scope, receive, send)
+
+
+def routes() -> list:
+    """装到宿主 app 上的路由组：精确 /mcp 在前，子路径 Mount 在后。
+
+    顺序刻意如此：裸 /mcp 命中精确路由（不再依赖 Mount 对裸前缀的匹配），
+    /mcp/… 命中 Mount。宿主必须在静态文件的 / 挂载**之前**调用。
+    """
+    return [
+        Route("/mcp", endpoint=_BareEntrypoint(), methods=["GET", "POST", "DELETE"]),
+        Mount("/mcp", app=asgi_app()),
+    ]
 
 
 def running():

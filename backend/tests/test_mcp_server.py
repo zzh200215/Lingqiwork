@@ -14,7 +14,6 @@ import os
 import shutil
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
 sys.path.insert(0, ".")
@@ -129,16 +128,12 @@ def _payload(result):
 async def _mcp_http_server():
     import uvicorn
     from starlette.applications import Starlette
-    from starlette.routing import Mount
 
-    mcp_asgi = mcp_server.asgi_app()  # 必须先于 running()：session manager 在这里创建
-
-    @asynccontextmanager
-    async def _lifespan(app):
-        async with mcp_server.running():
-            yield
-
-    mini = Starlette(lifespan=_lifespan, routes=[Mount("/mcp", app=mcp_asgi)])
+    # 与生产同拓扑：/mcp 精确路由 + /mcp 子路径 Mount（mcp_server.routes() 自带顺序）
+    mini = Starlette(
+        lifespan=lambda app: mcp_server.running(),
+        routes=mcp_server.routes(),
+    )
     config = uvicorn.Config(mini, host="127.0.0.1", port=0, log_level="warning")
     server = uvicorn.Server(config)
     serve_task = asyncio.create_task(server.serve())

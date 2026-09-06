@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import BASE_DIR, settings
+from app.core import mcp_server  # mount 在模块级跑，必须先于 lifespan 导入
 from app.db import engine
 from app.models import Base
 from app.routers import (
@@ -174,8 +175,10 @@ app.include_router(today.router)
 app.include_router(tutor.router)
 app.include_router(usage.router)
 
-# MCP server（streamable HTTP，只读工具）挂在 /mcp；session manager 由 lifespan 启动
-app.mount("/mcp", mcp_server.asgi_app())
+# MCP server（streamable HTTP，只读工具）挂在 /mcp；session manager 由 lifespan 启动。
+# 必须在静态文件的 / 挂载之前装（见 mcp_server 模块 docstring 的坑位说明）。
+for _r in mcp_server.routes():
+    app.router.routes.append(_r)
 
 
 @app.get("/api/health")
