@@ -92,6 +92,10 @@ class Memory(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     content: Mapped[str] = mapped_column(Text)  # single fact sentence
     source: Mapped[str] = mapped_column(String(10), default="manual")  # manual | auto
+    # 偏好 / 事实 / 习惯 三类（preference | fact | habit），automemory 抽取时分类，
+    # 注入提示词时带上标签，模型才知道「这是他的稳定偏好」还是「这是长期项目背景」。
+    # 刻意没有「状态」类：时效性信息会变成流水账，_AUTO_SYSTEM 里明确拒收。
+    kind: Mapped[str] = mapped_column(String(10), default="fact")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

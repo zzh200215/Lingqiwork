@@ -2213,6 +2213,14 @@ export default function SettingsPage() {
             ) : (
               <>
                 <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
+                  {m.kind && m.kind !== 'fact' && (
+                    <span
+                      title={m.kind === 'preference' ? '稳定偏好：决定口吻与推荐' : '周期性习惯：决定何时别打扰'}
+                      className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                    >
+                      {m.kind === 'preference' ? '偏好' : '习惯'}
+                    </span>
+                  )}
                   {m.source === 'auto' && (
                     <span
                       title="由自动记忆从对话中提取"

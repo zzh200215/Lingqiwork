@@ -97,7 +97,13 @@ async def format_memories(query: str | None = None) -> str:
                 rows = kept
                 header_note = f"（已从 {total} 条记忆中按相关性选取 {len(rows)} 条）\n"
 
-    lines = "\n".join(f"- {m.content}" for m in rows)
+    # 只给非默认类贴标签：事实是大多数，每行都挂【事实】是注入里的噪音
+    lines = "\n".join(
+        f"- 【{AUTO_KIND_LABELS.get(m.kind, '事实')}】{m.content}"
+        if getattr(m, "kind", None) in ("preference", "habit")
+        else f"- {m.content}"
+        for m in rows
+    )
     return (
         "以下是关于用户的长期记忆（来自过往对话，可能帮助回答）：\n"
         f"{header_note}{lines}\n"
@@ -118,7 +124,7 @@ async def _similar_existing(content: str, contents: list[str]) -> str | None:
     return None
 
 
-async def add_memory(content: str, source: str = "manual") -> str:
+async def add_memory(content: str, source: str = "manual", kind: str = "fact") -> str:
     content = content.strip()
     if not content:
         return "[错误] 内容为空"
@@ -143,7 +149,11 @@ async def add_memory(content: str, source: str = "manual") -> str:
             ).scalar_one()
             await db.delete(oldest)
             _vec_cache.pop(oldest.id, None)
-        row = Memory(content=content, source=source if source in ("manual", "auto") else "manual")
+        row = Memory(
+            content=content,
+            source=source if source in ("manual", "auto") else "manual",
+            kind=kind if kind in AUTO_KINDS else "fact",
+        )
         db.add(row)
         await db.commit()
     return f"已记住：{content}"
@@ -193,15 +203,29 @@ async def clear_all() -> int:
 
 # ---------- automemory: model decides what was worth remembering ----------
 
+# 分类照管家类产品的记忆设计收窄成三类（AI-Sphere-Butler 的偏好/事实/习惯/情感里，
+# 去掉了情感——没有明确用途；去掉了状态——时效性信息是流水账的主要来源）。
+# 每类各管一种「将来怎么用」：偏好决定口吻和推荐，事实补背景，习惯决定何时别打扰。
+# 分类照管家类产品的记忆设计收窄成三类（AI-Sphere-Butler 的偏好/事实/习惯/情感里，
+# 去掉了情感——没有明确用途；去掉了状态——时效性信息是流水账的主要来源）。
+# 每类各管一种「将来怎么用」：偏好决定口吻和推荐，事实补背景，习惯决定何时别打扰。
+# 分类照管家类产品的记忆设计收窄成三类（AI-Sphere-Butler 的偏好/事实/习惯/情感里，
+# 去掉了情感——没有明确用途；去掉了状态——时效性信息是流水账的主要来源）。
+# 每类各管一种「将来怎么用」：偏好决定口吻和推荐，事实补背景，习惯决定何时别打扰。
+AUTO_KINDS = ("preference", "fact", "habit")
+AUTO_KIND_LABELS = {"preference": "偏好", "fact": "事实", "habit": "习惯"}
+
 _AUTO_SYSTEM = (
     "你负责维护用户的长期记忆库。用户会给你一段刚结束的对话和已有记忆列表。\n"
-    "只提取「关于用户本人的持久事实」（偏好、背景、约定、长期项目），如：常用地名、"
-    "技术栈偏好、称呼习惯、项目名称。不要记：普通聊天内容、一次性任务、时效性信息、"
-    "对话中已有的记忆。\n"
-    '只输出 JSON 数组，每条是一句完整陈述（不超过 100 字），最多 2 条；没有值得记的就输出 []。'
-    "不要解释、不要代码块。示例：[\"用户主用 Python，偏好 uv 管理依赖\"]"
+    "只提取「关于用户本人的持久信息」，分三类：\n"
+    "- preference（偏好）：稳定的喜好与厌恶，如技术栈偏好、称呼习惯、界面口味。\n"
+    "- fact（事实）：持久背景，如所在城市、项目名称、在学什么。\n"
+    "- habit（习惯）：周期性行为，如每周三晚上开会、习惯早上写代码。\n"
+    "不要记：普通聊天内容、一次性任务、时效性信息（在赶什么 deadline、这两天在哪）、情绪状态、对话中已有的记忆。\n"
+    '只输出 JSON 数组，每条是 {"kind": "preference|fact|habit", "text": "一句完整陈述（不超过 100 字）"}，最多 2 条；没有值得记的就输出 []。\n'
+    "不要解释、不要代码块。\n"
+    '示例：[{"kind": "preference", "text": "用户主用 Python，偏好 uv 管理依赖"}]'
 )
-
 
 async def auto_extract(info: ProviderInfo, model: str, user_text: str, answer_text: str) -> list[str]:
     """After one exchange, ask the model which durable facts to keep.
@@ -232,15 +256,23 @@ async def auto_extract(info: ProviderInfo, model: str, user_text: str, answer_te
         m = re.search(r"\[.*\]", raw, re.S)
         if not m:
             return []
-        facts = json.loads(m.group(0))
-        if not isinstance(facts, list):
+        items = json.loads(m.group(0))
+        if not isinstance(items, list):
             return []
         saved: list[str] = []
-        for fact in facts[:AUTO_FACT_CAP]:
-            text = str(fact).strip()[:AUTO_FACT_CHARS]
+        for item in items[:AUTO_FACT_CAP]:
+            # 旧格式（裸字符串）照单全收为 fact；对象格式校验 kind，乱写的归 fact
+            if isinstance(item, str):
+                kind, text = "fact", item
+            elif isinstance(item, dict):
+                kind = str(item.get("kind") or "fact")
+                text = str(item.get("text") or "")
+            else:
+                continue
+            text = text.strip()[:AUTO_FACT_CHARS]
             if not text:
                 continue
-            result = await add_memory(text, source="auto")
+            result = await add_memory(text, source="auto", kind=kind)
             if result.startswith("已记住"):
                 saved.append(text)
         return saved

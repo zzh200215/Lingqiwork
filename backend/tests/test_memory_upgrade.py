@@ -79,9 +79,9 @@ def _env(monkeypatch):
     yield
 
 
-async def _add_raw(content: str, source: str = "manual") -> int:
+async def _add_raw(content: str, source: str = "manual", kind: str = "fact") -> int:
     async with SessionLocal() as db:
-        row = Memory(content=content, source=source)
+        row = Memory(content=content, source=source, kind=kind)
         db.add(row)
         await db.commit()
         await db.refresh(row)
@@ -207,3 +207,48 @@ async def test_auto_extract_garbage_reply_is_silent(monkeypatch):
     info = ProviderInfo(kind="openai", base_url="", api_key="k")
     assert await memory.auto_extract(info, "m", "你好", "你好！") == []
     assert await _contents() == []
+
+
+async def test_auto_extract_types_facts_into_kinds(monkeypatch):
+    """分类粒度（参考管家类产品收窄成三类）：抽取出的记忆带 kind 落库，
+    注入提示词时带上标签——模型才知道这是稳定偏好还是项目背景。"""
+    monkeypatch.setattr(
+        memory,
+        "stream_chat",
+        _fake_stream(
+            '[{"kind": "preference", "text": "用户偏好 Python"},'
+            '{"kind": "fact", "text": "用户养了一只猫"},'
+            '{"kind": "habit", "text": "用户常在早上跑步"}]'
+        ),
+    )
+    info = ProviderInfo(kind="openai", base_url="", api_key="k")
+    saved = await memory.auto_extract(info, "m", "对话内容", "回复")
+    assert len(saved) == 2  # AUTO_FACT_CAP = 2，第三条被砍
+    kinds = {m.content: m.kind for m in await memory.list_memories()}
+    assert kinds["用户偏好 Python"] == "preference"
+    assert kinds["用户养了一只猫"] == "fact"
+
+
+async def test_auto_extract_normalizes_bad_kinds(monkeypatch):
+    """模型乱写 kind（mood/emotion 一类的）不能落进库——归 fact。"""
+    monkeypatch.setattr(
+        memory,
+        "stream_chat",
+        _fake_stream('[{"kind": "mood", "text": "用户今天心情不错"}, "裸字符串也收"]'),
+    )
+    info = ProviderInfo(kind="openai", base_url="", api_key="k")
+    await memory.auto_extract(info, "m", "对话", "回复")
+    assert {m.kind for m in await memory.list_memories()} == {"fact"}
+
+
+async def test_format_memories_labels_kinds(monkeypatch):
+    await _add_raw("用户偏好 uv 管理依赖", kind="preference")
+    await _add_raw("用户在做 AI 工作台")
+    block = await memory.format_memories()
+    assert "【偏好】用户偏好 uv 管理依赖" in block
+    assert "用户在做 AI 工作台" in block and "【事实】用户在做" not in block
+
+
+async def test_add_memory_rejects_unknown_kind():
+    await memory.add_memory("用户在学 Rust", kind="mood")
+    assert (await memory.list_memories())[0].kind == "fact"

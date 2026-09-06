@@ -203,6 +203,7 @@ async def get_memories():
             "id": m.id,
             "content": m.content,
             "source": m.source or "manual",
+            "kind": m.kind if m.kind in memory.AUTO_KINDS else "fact",
             "created_at": str(m.created_at),
         }
         for m in rows

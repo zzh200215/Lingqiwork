@@ -60,6 +60,8 @@ export interface MemoryItem {
   id: number
   content: string
   source?: 'manual' | 'auto'
+  /** 偏好 / 事实 / 习惯（preference | fact | habit）——automemory 抽取时的分类 */
+  kind?: 'preference' | 'fact' | 'habit'
   created_at: string
 }
 
