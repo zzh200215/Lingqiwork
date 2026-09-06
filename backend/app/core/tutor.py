@@ -86,6 +86,26 @@ SOCRATIC_PROMPT = """你是一个苏格拉底式的技术老师。用户会说�
 - 不要在他还没暴露理解程度之前就开始讲。
 - 不要问"你想从哪里开始"这种把决定推回给他的问题。"""
 
+# 费曼模式：同一个会话引擎，方向反过来。用户讲，模型当考官学生。
+# 它是 mode 的实现细节，不是第二个产品——召回/画像/取材/压缩/end() 全部共用。
+FEYNMAN_PROMPT = """你在「费曼模式」里扮演一个聪明但没搞懂的 学生 + 考官。用户会向你解释一个概念，你的任务是检验他是不是真的懂了。
+
+规则：
+1. 他讲完后，像一个真诚困惑的学生那样提问——追问没讲清的步骤、没定义的术语、跳掉的「为什么」。
+2. 他甩术语而不解释时，要求他用大白话重说一遍；他类比含糊时，要一个具体例子。
+3. 他讲对的部分不要重复夸奖，直接推进到更深一层。
+4. 发现讲不通的地方，指出来矛盾在哪，让他自己再试一次——不要替他讲。
+5. 只有他明确卡死或求救时，才给一次最小提示，然后继续让他自己往下讲。
+6. 每轮只做一件事：提一个最好的问题，或指出一个最关键的漏洞。不要列清单。
+7. 结尾如果他已经讲圆了，让他用三句话给完全外行的人再讲一遍——这是最终检验。
+
+不要做的事：
+- 不要接管讲解，哪怕你觉得你讲得更好——检验比讲解重要。
+- 不要客套，不要说「很好的解释」。
+- 不要一次抛三个问题。"""
+
+MODES = ("socratic", "feynman")
+
 # aliases 那一段的三条硬要求都是量出来的（2026-09-06 accept 实测，每个别名单独成一条
 # 向量）：「至少 4 个字」挡「async」这种裸词 —— 它对无关查询「asyncio 里的任务调度」
 # 拿到 0.632，越过 0.62；「不要纯英文」挡「coroutine suspension」这种 —— 中文查询对它
@@ -124,16 +144,19 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # ---------- session lifecycle ----------
 
 
-async def start(topic: str, repo: str = "") -> dict:
+async def start(topic: str, repo: str = "", mode: str = "socratic") -> dict:
     """Open a session on `topic`. Pins the model so the teaching voice can't
     change mid-session; reports whether that model is known-broken so the page
     can say so instead of failing on the first turn (PLAN.md 第 9 节).
 
     `repo` 非空 = 代码库陪读：这场会话的取材只在 repos/<repo>/ 的 chunk 里找，
-    仓库必须已在 prefs 的 repos 里索引过。"""
+    仓库必须已在 prefs 的 repos 里索引过。
+    `mode` = socratic（老师问你答，默认）| feynman（你讲它追问）。"""
     topic = (topic or "").strip()[:200]
     if not topic:
         raise ValueError("topic is empty")
+    if mode not in MODES:
+        raise ValueError(f"mode 必须是 {'/'.join(MODES)}")
     repo = (repo or "").strip()[:100]
     if repo:
         from app.core.prefs import load_config
@@ -148,7 +171,7 @@ async def start(topic: str, repo: str = "") -> dict:
 
     model_id = providers.default_model_id() or ""
     async with SessionLocal() as db:
-        row = TutorSession(topic=topic, model_id=model_id, repo=repo)
+        row = TutorSession(topic=topic, model_id=model_id, repo=repo, mode=mode)
         db.add(row)
         await db.commit()
         await db.refresh(row)
@@ -157,6 +180,7 @@ async def start(topic: str, repo: str = "") -> dict:
         "id": sid,
         "topic": topic,
         "repo": repo,
+        "mode": mode,
         "model_id": model_id,
         "model_ok": bool(model_id) and not providers.is_unhealthy(model_id),
     }
@@ -475,10 +499,18 @@ def format_older(summary: str, uncovered: list[dict]) -> str:
 
 
 def build_messages(
-    history: list[dict], recall: str = "", material: str = "", profile: str = "", older: str = ""
+    history: list[dict],
+    recall: str = "",
+    material: str = "",
+    profile: str = "",
+    older: str = "",
+    voice: str = SOCRATIC_PROMPT,
 ) -> list[dict]:
     """Prompt for one reply: teaching voice, then recall, then profile, then
     material, then the compressed older middle, then the transcript.
+
+    `voice` picks the persona (socratic teacher vs feynman examiner); it is the
+    first system message and everything downstream is mode-agnostic.
 
     Recall is a second system message rather than being glued onto
     SOCRATIC_PROMPT: with nothing to recall the voice is then byte-identical
@@ -487,7 +519,7 @@ def build_messages(
     after profile; `older` sits nearest the transcript — it *is* conversation,
     and the model reads what is adjacent when picking up the thread.
     """
-    msgs: list[dict] = [{"role": "system", "content": SOCRATIC_PROMPT}]
+    msgs: list[dict] = [{"role": "system", "content": voice}]
     if recall:
         msgs.append({"role": "system", "content": recall})
     if profile:
@@ -637,6 +669,7 @@ async def say(session_id: int, text: str):
             return
         topic = row.topic
         repo = row.repo or ""
+        mode = row.mode or "socratic"
         model_id = row.model_id or (providers.default_model_id() or "")
         if model_id and not row.model_id:
             row.model_id = model_id  # pinned late: opened before any provider existed
@@ -690,11 +723,13 @@ async def say(session_id: int, text: str):
 
     profile_block = await _profile_block()
     older = await _older_block(session_id, history, model_id)
+    # 费曼会话换声部：提示词反转，其余块（召回/画像/材料/压缩）一概不动
+    voice = FEYNMAN_PROMPT if mode == "feynman" else SOCRATIC_PROMPT
     parts: list[str] = []
     try:
         async for delta in _stream(
             model_id,
-            build_messages(history, format_recall(hits), format_material(sources), profile_block, older),
+            build_messages(history, format_recall(hits), format_material(sources), profile_block, older, voice),
         ):
             parts.append(delta)
             yield "delta", {"text": delta}
@@ -908,6 +943,7 @@ async def sessions(limit: int = 50) -> list[dict]:
             "verdict": r.verdict,
             "stuck": r.stuck,
             "recalled": bool(r.recalled),
+            "mode": r.mode or "socratic",
             "turn_count": int(counts.get(r.id, 0)),
             "created_at": iso_utc(r.created_at),
             "ended_at": iso_utc(r.ended_at),
@@ -972,6 +1008,7 @@ async def detail(session_id: int) -> dict | None:
             "verdict": r.verdict,
             "stuck": r.stuck,
             "recalled": bool(r.recalled),
+            "mode": r.mode or "socratic",
             "model_id": r.model_id,
             "created_at": iso_utc(r.created_at),
             "ended_at": iso_utc(r.ended_at),

@@ -444,6 +444,8 @@ class TutorSession(Base):
     summary_upto: Mapped[int] = mapped_column(Integer, default=0)
     # 代码库陪读（全局唤起脑暴清单）：非空 = 这场会话的取材只在 repos/<repo>/ 里找
     repo: Mapped[str] = mapped_column(String(100), default="")
+    # socratic（默认：老师问你答）| feynman（反转：你讲它追问，检验你是不是真懂）
+    mode: Mapped[str] = mapped_column(String(10), default="socratic")
     model_id: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(

@@ -764,6 +764,8 @@ export interface TutorEndResult {
 export interface TutorSessionStart {
   id: number
   topic: string
+  repo: string
+  mode: 'socratic' | 'feynman'
   model_id: string
   /** false = no provider, or a recent probe failed. Say so before the first turn. */
   model_ok: boolean
@@ -799,6 +801,8 @@ export interface TutorSessionRow {
   verdict: '' | 'got' | 'half' | 'useless'
   stuck: string
   recalled: boolean
+  /** socratic：老师问你答；feynman：反转，你讲它追问 */
+  mode: 'socratic' | 'feynman'
   turn_count: number
   created_at: string
   ended_at: string | null
@@ -1221,11 +1225,11 @@ export const api = {
   todayNext: () => request<TodayNext>('/api/today/next'),
 
   // ---------- 对话式教学 ----------
-  /** repo 非空 = 代码库陪读：会话取材限定在该仓库 */
-  tutorStart: (topic: string, repo?: string) =>
+  /** repo 非空 = 代码库陪读：会话取材限定在该仓库；mode = socratic | feynman */
+  tutorStart: (topic: string, repo?: string, mode?: 'socratic' | 'feynman') =>
     request<TutorSessionStart>('/api/tutor/start', {
       method: 'POST',
-      body: JSON.stringify({ topic, repo: repo || '' }),
+      body: JSON.stringify({ topic, repo: repo || '', mode: mode || 'socratic' }),
     }),
   /** 懂了 / 半懂 / 没用 — the only manual input in the product (PLAN.md 第 4 节) */
   tutorEnd: (session_id: number, verdict: 'got' | 'half' | 'useless') =>

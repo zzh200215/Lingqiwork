@@ -122,6 +122,7 @@ function Bubble({ turn }: { turn: Turn }) {
 export default function TutorPage() {
   const [sid, setSid] = useState<number | null>(null)
   const [topic, setTopic] = useState('')
+  const [mode, setMode] = useState<'socratic' | 'feynman'>('socratic')
   const [modelOk, setModelOk] = useState(true)
   const [turns, setTurns] = useState<Turn[]>([])
   const [hits, setHits] = useState<TutorRecallHit[]>([])
@@ -192,13 +193,14 @@ export default function TutorPage() {
     }
   }, [])
 
-  const beginWith = useCallback(async (topicText: string, repo = '') => {
+  const beginWith = useCallback(async (topicText: string, repo = '', m: 'socratic' | 'feynman' = 'socratic') => {
     const t = topicText.trim()
     if (!t || busy) return
     setTopic(t)
+    setMode(m)
     setErr('')
     try {
-      const s = await api.tutorStart(t, repo)
+      const s = await api.tutorStart(t, repo, m)
       setSid(s.id)
       setModelOk(s.model_ok)
       setTurns([])
@@ -245,6 +247,7 @@ export default function TutorPage() {
       const d = await api.tutorSession(id)
       setSid(d.id)
       setTopic(d.topic)
+      setMode(d.mode || 'socratic')
       setTurns(d.turns)
       setHits([])
       setVerdict(d.verdict)
@@ -272,6 +275,7 @@ export default function TutorPage() {
     abortRef.current?.abort()
     setSid(null)
     setTopic('')
+    setMode('socratic')
     setTurns([])
     setHits([])
     setDraft('')
@@ -291,6 +295,30 @@ export default function TutorPage() {
                 <p className="pb-4 text-sm text-neutral-500">
                   说一个具体的东西。它会先问你现在怎么理解，再讲。
                 </p>
+                {/* 模式切换：学（苏格拉底）还是讲（费曼）。是会话级选择，不是设置。 */}
+                <div className="mb-3 flex gap-2 text-xs">
+                  <button
+                    onClick={() => setMode('socratic')}
+                    className={`rounded-full border px-3 py-1.5 transition-colors ${
+                      mode === 'socratic'
+                        ? 'border-violet-500 bg-violet-500/10 font-medium text-violet-600 dark:text-violet-300'
+                        : 'border-neutral-300 text-neutral-500 hover:border-violet-300 dark:border-neutral-700'
+                    }`}
+                  >
+                    🎓 老师教我
+                  </button>
+                  <button
+                    onClick={() => setMode('feynman')}
+                    className={`rounded-full border px-3 py-1.5 transition-colors ${
+                      mode === 'feynman'
+                        ? 'border-amber-500 bg-amber-500/10 font-medium text-amber-600 dark:text-amber-300'
+                        : 'border-neutral-300 text-neutral-500 hover:border-amber-300 dark:border-neutral-700'
+                    }`}
+                    title="反转：你来讲，它当较真的学生追问，检验你是不是真懂"
+                  >
+                    🗣 我来讲（费曼）
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <input
                     value={topic}
@@ -317,7 +345,14 @@ export default function TutorPage() {
             <>
               <header className="flex items-center gap-3 border-b border-neutral-200/80 px-6 py-3 dark:border-neutral-800/80">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{topic || '这次'}</p>
+                  <p className="truncate text-sm font-medium">
+                    {mode === 'feynman' && (
+                      <span className="mr-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+                        费曼
+                      </span>
+                    )}
+                    {topic || '这次'}
+                  </p>
                   {ended?.concept ? (
                     <p className="truncate text-[11px] text-neutral-500">
                       {ended.concept}

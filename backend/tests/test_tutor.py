@@ -1108,6 +1108,55 @@ async def test_repo_session_scopes_material_to_that_repo(monkeypatch):
     assert "vault/notes" not in material[0]
 
 
+# ---------- 费曼模式：方向反转，引擎共用 ----------
+
+
+async def test_start_feynman_mode_stores_and_rejects_unknown(monkeypatch):
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    monkeypatch.setattr(providers, "is_unhealthy", lambda mid, cache=None: False)
+
+    got = await core.start("asyncio 事件循环", mode="feynman")
+    assert got["mode"] == "feynman"
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    async with SessionLocal() as db:
+        row = await db.get(TutorSession, got["id"])
+        assert row.mode == "feynman"
+
+    with pytest.raises(ValueError, match="mode"):
+        await core.start("别的", mode="socraticc")
+
+
+def test_build_messages_default_voice_is_byte_stable_and_feynman_swaps_first_block():
+    h = _hist(4)
+    msgs = core.build_messages(h)
+    assert msgs[0]["content"] == core.SOCRATIC_PROMPT  # 默认声部不变
+    msgs_f = core.build_messages(h, voice=core.FEYNMAN_PROMPT)
+    assert msgs_f[0]["content"] == core.FEYNMAN_PROMPT
+    assert msgs_f[1:] == msgs[1:]  # 只有声部块变了
+
+
+async def test_say_in_feynman_session_sends_the_feynman_voice(monkeypatch):
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    monkeypatch.setattr(providers, "is_unhealthy", lambda mid, cache=None: False)
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    sid = (await core.start("asyncio 事件循环", mode="feynman"))["id"]
+    seen: list = []
+    monkeypatch.setattr(core, "_stream", _fake_stream(["你说的 await 是"], seen))
+    events = [e async for e in core.say(sid, "await 就是把控制权交出去")]
+    assert [k for k, _ in events][-1] == "done"
+    _model_id, messages = seen[0]
+    assert messages[0]["content"] == core.FEYNMAN_PROMPT
+    assert messages[-1] == {"role": "user", "content": "await 就是把控制权交出去"}
+
+
 
 
 

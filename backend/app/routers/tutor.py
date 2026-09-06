@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 class StartIn(BaseModel):
     topic: str
     repo: str = ""  # 代码库陪读：非空则取材限定在该仓库
+    mode: str = "socratic"  # socratic（老师问你答）| feynman（你讲它追问）
 
 
 class SayIn(BaseModel):
@@ -46,7 +47,7 @@ async def start(body: StartIn):
     """Open a session. Reports `model_ok` so a dead model is visible up front
     instead of on the first reply (PLAN.md 第 9 节)."""
     try:
-        return await core.start(body.topic, repo=body.repo)
+        return await core.start(body.topic, repo=body.repo, mode=body.mode)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
