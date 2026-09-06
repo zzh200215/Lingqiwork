@@ -1157,6 +1157,44 @@ async def test_say_in_feynman_session_sends_the_feynman_voice(monkeypatch):
     assert messages[-1] == {"role": "user", "content": "await 就是把控制权交出去"}
 
 
+# ---------- 卡点讨论播客的源材料（对话播客 2.0） ----------
+
+
+async def test_stuck_blocks_picks_recent_got_or_half_only():
+    await _reset()
+    await _seed("t-useless", "没用的会话", "useless", "无")
+    await _seed("t1", "协程调度", "half", "以为 await 会阻塞线程")
+    await _seed("t2", "闭包变量", "got", "没分清捕获的是变量还是值")
+
+    blocks = await core.stuck_blocks(days=90, cap=8)
+    # useless 不算数（和卡点一览同一条规矩）；倒序 → t2 在前
+    assert [b[0] for b in blocks] == ["卡点：闭包变量（说通了）", "卡点：协程调度（半懂）"]
+    assert "以为 await" in blocks[1][1]
+
+
+async def test_stuck_blocks_respects_cap_and_days():
+    await _reset()
+    from datetime import datetime, timedelta
+
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    async with SessionLocal() as db:
+        db.add(
+            TutorSession(
+                topic="老会话", concept="老概念", verdict="half", stuck="很久以前卡的",
+                created_at=datetime.now().astimezone() - timedelta(days=200),
+            )
+        )
+        for i in range(3):
+            db.add(TutorSession(topic=f"t{i}", concept=f"概念{i}", verdict="half", stuck=f"卡点{i}"))
+        await db.commit()
+
+    blocks = await core.stuck_blocks(days=90, cap=2)
+    assert len(blocks) == 2
+    assert all("老概念" not in b[0] for b in blocks)
+
+
 
 
 

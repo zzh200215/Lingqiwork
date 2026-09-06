@@ -46,6 +46,32 @@ async def generate(body: PodcastIn):
     return result
 
 
+class StuckPodcastIn(BaseModel):
+    days: int = 90  # 只取最近 N 天的卡点
+
+
+@router.post("/stuck")
+async def stuck_podcast(body: StuckPodcastIn | None = None):
+    """卡点 → 双人讨论播客（对话播客 2.0）。
+
+    源材料是教学会话记下的卡点摘要而非对话逐字稿：播客讨论「这个卡点怎么
+    想通」比逐字重放有用。拉取式——只有你点它才生成（第 2 节）。"""
+    from app.core import tutor as tutor_core
+
+    blocks = await tutor_core.stuck_blocks(days=body.days if body else 90)
+    if not blocks:
+        raise HTTPException(422, "最近没有卡点记录，先去学点东西")
+    from datetime import datetime as _dt
+
+    try:
+        result = await podcast.generate_from_blocks(blocks, title=f"卡点讨论 · {_dt.now():%Y-%m-%d}")
+    except Exception as e:  # noqa: BLE001 - LLM/TTS/IO failures
+        raise HTTPException(502, f"{type(e).__name__}: {e}") from e
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "生成失败")
+    return result
+
+
 @router.post("/generate/stream")
 async def generate_stream(body: PodcastIn):
     """SSE variant of /generate: stage events for live UI progress."""

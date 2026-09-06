@@ -3,13 +3,25 @@ full generation flow over fake LLM/TTS seams. No network, no real voices.
 """
 import atexit
 import json
+import os
 import shutil
 import struct
+import sys
 import tempfile
 import wave
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, ".")
+
+# 必须在 import app 之前绑到临时库：本模块以前从不设 env，靠套件里别的测试
+# 先导入 app 才碰巧没事——单独跑就会把引擎绑到默认库上去。
+_POD_TMP = Path(tempfile.mkdtemp(prefix="wb-podcast-", dir=Path(__file__).parent))
+atexit.register(lambda: shutil.rmtree(_POD_TMP, ignore_errors=True))
+os.environ["WB_DB_PATH"] = str(_POD_TMP / "test.db")
+os.environ["WB_CONFIG_PATH"] = str(_POD_TMP / "config.json")
+os.environ["WB_CHROMA_PATH"] = str(_POD_TMP / "chroma")
 
 from app.core import podcast
 
@@ -428,3 +440,33 @@ def test_delete_roundtrip(pod_env):
     assert not (podcast.PODCAST_DIR / "pod-1.wav").exists()
     with pytest.raises(FileNotFoundError):
         podcast.delete("pod-1")
+
+
+# ---------- 卡点讨论播客端点（对话播客 2.0） ----------
+
+
+async def test_stuck_podcast_endpoint(pod_env, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.routers import podcast as pod_router
+
+    async def fake_blocks(days=90, cap=8):
+        assert days == 30
+        return [("卡点：闭包（半懂）", "卡在变量捕获")]
+
+    async def fake_gen(blocks, host_voice="", guest_voice="", title=""):
+        assert blocks and "卡点讨论" in title
+        return {"ok": True, "id": "p1", "file": "p1.wav", "title": title}
+
+    monkeypatch.setattr("app.core.tutor.stuck_blocks", fake_blocks)
+    monkeypatch.setattr(podcast, "generate_from_blocks", fake_gen)
+    r = await pod_router.stuck_podcast(pod_router.StuckPodcastIn(days=30))
+    assert r["ok"] is True and r["file"] == "p1.wav"
+
+    # 没有卡点就明说，不是空转
+    async def empty(days=90, cap=8):
+        return []
+
+    monkeypatch.setattr("app.core.tutor.stuck_blocks", empty)
+    with pytest.raises(HTTPException, match="卡点"):
+        await pod_router.stuck_podcast(pod_router.StuckPodcastIn())

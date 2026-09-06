@@ -965,6 +965,13 @@ export const api = {
   /** 信念演化时间线：automemory 事实按语义聚成的「信念线」 */
   beliefThreads: () => request<{ threads: BeliefThread[] }>('/api/beliefs'),
 
+  /** 卡点讨论播客（对话播客 2.0）：最近的卡点 → 双人讨论音频 */
+  podcastFromStuck: (days = 90) =>
+    request<{ ok: boolean; id: string; title: string; file: string; duration_sec: number }>(
+      '/api/podcast/stuck',
+      { method: 'POST', body: JSON.stringify({ days }) }
+    ),
+
   listRepos: () => request<RepoList>('/api/repos'),
   cloneRepo: (url: string, name?: string) =>
     request<RepoItem>('/api/repos', { method: 'POST', body: JSON.stringify({ url, name }) }),

@@ -987,6 +987,36 @@ async def stuck_points(limit: int = 200) -> list[dict]:
     ]
 
 
+async def stuck_blocks(days: int = 90, cap: int = 8) -> list[tuple[str, str]]:
+    """卡点 → 播客源材料（(标题, 文本) 块），「卡点讨论」播客的输入。
+
+    复用 stuck_points 的过滤（got/half 且 stuck 非空，useless 不算数），按
+    created_at 倒序取最近的。材料刻意只带卡点摘要、不带原对话——播客要讨论
+    的是「这个卡点怎么想通」，逐字重放教学没有那个价值。"""
+    from datetime import datetime, timedelta
+
+    rows = await stuck_points(limit=max(cap, 1) * 4)
+    cutoff = datetime.now().astimezone() - timedelta(days=max(1, days))
+    blocks: list[tuple[str, str]] = []
+    for r in rows:
+        created = r.get("created_at") or ""
+        try:
+            if created and datetime.fromisoformat(created) < cutoff:
+                continue
+        except ValueError:
+            pass
+        state = "说通了" if r["verdict"] == "got" else "半懂"
+        blocks.append(
+            (
+                f"卡点：{r['concept']}（{state}）",
+                f"用户围绕「{r['concept']}」有过一场教学会话，自评{state}，当时卡在：{r['stuck']}。",
+            )
+        )
+        if len(blocks) >= cap:
+            break
+    return blocks
+
+
 async def detail(session_id: int) -> dict | None:
     """One session plus its transcript (None if gone), so a reload can reopen it.
 

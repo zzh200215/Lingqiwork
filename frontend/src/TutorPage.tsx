@@ -134,6 +134,9 @@ export default function TutorPage() {
   const [ended, setEnded] = useState<{ concept: string; stuck: string; nearby: TutorEndResult['material_nearby'] } | null>(null)
   const [rows, setRows] = useState<TutorSessionRow[]>([])
   const [stuckRows, setStuckRows] = useState<TutorStuckRow[]>([])
+  const [stuckBusy, setStuckBusy] = useState(false)
+  const [stuckMsg, setStuckMsg] = useState('')
+  const [stuckAudio, setStuckAudio] = useState('')
   const [stats, setStats] = useState<TutorStats | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
   // 正在流式回复的会话：再学一个 / 开新会话 / 离开页面时掐断它，
@@ -146,6 +149,22 @@ export default function TutorPage() {
     api.tutorStats().then(setStats).catch(() => {})
     api.tutorStuck().then((r) => setStuckRows(r.stuck)).catch(() => {})
   }, [])
+
+  // 卡点讨论播客（对话播客 2.0）：拉取式——你点它才生成，生成完就地能听
+  const makeStuckPodcast = useCallback(async () => {
+    if (stuckBusy) return
+    setStuckBusy(true)
+    setStuckMsg('')
+    try {
+      const r = await api.podcastFromStuck()
+      setStuckMsg(`已生成「${r.title}」，${Math.max(1, Math.round(r.duration_sec / 60))} 分钟：`)
+      setStuckAudio(`/api/podcast/audio/${r.file}`)
+    } catch (e) {
+      setStuckMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStuckBusy(false)
+    }
+  }, [stuckBusy])
 
   useEffect(() => refreshRail(), [refreshRail])
 
@@ -478,9 +497,27 @@ export default function TutorPage() {
             {/* 卡过的点是记录，不是清单：不计数、不打勾、不催。你想看的时候它在那里。 */}
             {stuckRows.length > 0 ? (
               <div className="px-3 pb-3">
-                <p className="pb-1.5 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-                  卡过的点
-                </p>
+                <div className="flex items-center justify-between pb-1.5">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                    卡过的点
+                  </p>
+                  <button
+                    onClick={() => void makeStuckPodcast()}
+                    disabled={stuckBusy}
+                    title="把最近的卡点做成一期双人讨论播客"
+                    className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
+                  >
+                    {stuckBusy ? '生成中…' : '🎧 做成播客'}
+                  </button>
+                </div>
+                {stuckMsg ? (
+                  <p className="pb-1.5 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                    {stuckMsg}
+                    {stuckAudio && (
+                      <audio controls src={stuckAudio} className="mt-1.5 w-full" />
+                    )}
+                  </p>
+                ) : null}
                 {stuckRows.map((r) => (
                   <button
                     key={r.id}
