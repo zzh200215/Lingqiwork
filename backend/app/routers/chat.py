@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from app.core import indexer
@@ -92,7 +92,7 @@ def _build_rag_context(sources: list[dict]) -> str:
 _CTX_FILE_CHAR_CAP = 12000  # per-file cap for whole-file injection (# command)
 
 _LOCAL_IMG_RE = re.compile(r"!\[[^\]]*\]\((/api/images/[^)\s]+)\)")
-from app.core.images import IMAGE_DIR, resolve_name  # noqa: E402
+from app.core.images import resolve_name  # noqa: E402
 
 
 def _attach_local_images(llm_messages: list[dict]) -> list[str]:
@@ -307,7 +307,13 @@ async def _generate(req: ChatRequest):
 
     # RAG: retrieve from knowledge base and inject as a system message.
     sources: list[dict] = []
-    top_k = req.top_k if req.top_k != 5 else int(prefs.get("rag_top_k", 5))
+    if req.top_k != 5:
+        top_k = req.top_k
+    else:
+        try:
+            top_k = int(prefs.get("rag_top_k") or 5)
+        except (TypeError, ValueError):
+            top_k = 5
     if use_rag:
         try:
             sources = await indexer_retrieve(query_text, top_k)
@@ -358,6 +364,8 @@ async def _generate(req: ChatRequest):
             yield _sse("error", {"message": f"对比模型无效: {e.detail}"})
             return
 
+    partial_parts: list[str] = []  # 出错时保留已流出的文本，供错误分支落库
+
     async def run_one(r: ResolvedModel, uid: str | None):
         streamed_parts: list[str] = []
         final = ""
@@ -365,6 +373,7 @@ async def _generate(req: ChatRequest):
         def on_delta(t: str) -> None:
             q.put_nowait(("delta", t, uid))
             streamed_parts.append(t)
+            partial_parts.append(t)
 
         def on_tool(name: str, arguments: dict) -> None:
             q.put_nowait(("tool", name, arguments))
@@ -501,16 +510,29 @@ async def _generate(req: ChatRequest):
                 pass
     else:
         # provider/tool error — keep whatever text streamed before it failed
-        partial = (answers.get("a") or "").strip()
+        partial = (answers.get("a") or "".join(partial_parts) or "").strip()
         if partial:
             await _save_assistant_message(conv.id, partial, model_id, sources)
+
+
+class Followups(BaseModel):
+    """后续追问问题。模型直接给字符串数组；items 包装以兼容 anthropic tool。"""
+
+    items: list[str] = Field(default_factory=list)
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def _strs(cls, v):
+        if not isinstance(v, list):
+            return []
+        return [str(x).strip()[:40] for x in v if str(x).strip()]
 
 
 async def _generate_followups(
     resolved: ResolvedModel, llm_messages: list[dict], answer: str
 ) -> list[str]:
     """Ask the same model for 3 short follow-up questions (Open WebUI-style)."""
-    from app.core.llm import stream_chat
+    from app.core.structured import extract_json
 
     prompt = (
         "基于以上对话，生成 3 个用户可能想继续追问的问题。"
@@ -522,16 +544,10 @@ async def _generate_followups(
     ]
     p = resolved.provider
     info = ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key)
-    text = ""
-    async for delta in stream_chat(info, resolved.model, msgs):
-        text += delta
-    import re as _re
-
-    m = _re.search(r"\[.*\]", text, _re.S)
-    if not m:
+    obj, meta = await extract_json(info, resolved.model, msgs, Followups)
+    if obj is None:
         return []
-    arr = json.loads(m.group(0))
-    return [str(q).strip()[:40] for q in arr if str(q).strip()][:3]
+    return obj.items[:3]
 
 
 async def _save_assistant_message(

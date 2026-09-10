@@ -18,6 +18,12 @@ LANGUAGES = ("auto", "zh", "en", "ja")
 # hasn't chosen an endpoint themselves (env is read once at hub import).
 _MIRROR_ENV = {"HF_ENDPOINT": "https://hf-mirror.com", "HF_HUB_DISABLE_XET": "1"}
 
+# 尽早设置镜像：huggingface_hub 在首次 import 时读取一次 env，而 embedder/reranker
+# 也会 import 它——等 ASR 首次转写再设就晚了，国内网络下 Whisper 模型下载会失败。
+if not os.environ.get("HF_ENDPOINT"):
+    for k, v in _MIRROR_ENV.items():
+        os.environ.setdefault(k, v)
+
 _model = None  # WhisperModel, created on first transcribe
 _model_name = ""
 _lock = threading.Lock()
@@ -33,9 +39,6 @@ def _load(model_size: str):
     with _lock:
         if _model is not None and _model_name == model_size:
             return _model
-        if not os.environ.get("HF_ENDPOINT"):
-            for k, v in _MIRROR_ENV.items():
-                os.environ.setdefault(k, v)
         from faster_whisper import WhisperModel
 
         t0 = time.time()

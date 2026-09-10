@@ -13,8 +13,8 @@ import asyncio
 import json
 import logging
 import math
-import re
 
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import delete, select
 
 from app.core.llm import ProviderInfo, stream_chat
@@ -79,7 +79,12 @@ def merge_evidence(existing_json: str, extras: list[list[dict]]) -> str:
             continue
         seen.add(item["id"])
         out.append(item)
-    return json.dumps(out[-EVIDENCE_CAP:], ensure_ascii=False)
+    if len(out) > EVIDENCE_CAP:
+        # 超限丢最旧：按 id 保留最大的 EVIDENCE_CAP 个（id 越大越新、越接近现状），
+        # 同时维持原有的相对顺序（extras 直接依据在前、历史证据在后）。
+        keep_ids = {i["id"] for i in sorted(out, key=lambda i: i["id"], reverse=True)[:EVIDENCE_CAP]}
+        out = [i for i in out if i["id"] in keep_ids]
+    return json.dumps(out, ensure_ascii=False)
 
 # id -> (content, normalized vector); avoids re-embedding unchanged memories
 _vec_cache: dict[int, tuple[str, list[float]]] = {}
@@ -135,7 +140,11 @@ async def format_memories(query: str | None = None) -> str:
     header_note = ""
     if query and len(rows) > RECALL_THRESHOLD:
         total = len(rows)
-        qvec = (await _embed_texts([query.strip()[:500]]))[0]
+        try:
+            qvec = (await _embed_texts([query.strip()[:500]]))[0]
+        except Exception:  # noqa: BLE001 - embedding failure must not break chat
+            log.warning("memory query embedding failed, injecting all", exc_info=True)
+            qvec = None
         vecs = await _vectors_for(rows)
         if qvec and any(vecs):
             scored = sorted(
@@ -287,6 +296,41 @@ _AUTO_SYSTEM = (
     '示例：[{"kind": "preference", "text": "用户主用 Python，偏好 uv 管理依赖"}]'
 )
 
+class AutoMemory(BaseModel):
+    """一条自动抽取的记忆。裸字符串（旧格式）照单收为 fact。"""
+
+    kind: str = "fact"
+    text: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_str(cls, data):
+        if isinstance(data, str):
+            return {"kind": "fact", "text": data}
+        return data
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _kind(cls, v):
+        k = str(v or "").strip()
+        return k if k in AUTO_KINDS else "fact"  # 乱写的归 fact
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _text(cls, v):
+        if v is None or isinstance(v, (list, dict)):
+            return ""
+        return str(v).strip()
+
+
+class AutoMemories(BaseModel):
+    """automemory 抽取结果。模型通常直接给数组，这里用 items 包一层以兼容
+    anthropic 的 tool input_schema（必须是 object）——两种形状都收，见
+    structured._validate 的适配。"""
+
+    items: list[AutoMemory] = Field(default_factory=list)
+
+
 async def auto_extract(info: ProviderInfo, model: str, user_text: str, answer_text: str) -> list[str]:
     """After one exchange, ask the model which durable facts to keep.
 
@@ -294,6 +338,8 @@ async def auto_extract(info: ProviderInfo, model: str, user_text: str, answer_te
     Never raises on model/parse errors — automemory must not break chat.
     """
     try:
+        from app.core.structured import extract_json
+
         rows = await list_memories()
         existing = "\n".join(f"- {m.content}" for m in rows) or "（暂无）"
         prompt = (
@@ -301,38 +347,25 @@ async def auto_extract(info: ProviderInfo, model: str, user_text: str, answer_te
             f"刚结束的对话：\n【用户】{user_text[:3000]}\n【助手】{answer_text[:3000]}\n\n"
             "请判断有没有值得新增的长期记忆。"
         )
-        chunks = [
-            c
-            async for c in stream_chat(
-                info,
-                model,
-                [
-                    {"role": "system", "content": _AUTO_SYSTEM},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-        ]
-        raw = "".join(chunks).strip()
-        m = re.search(r"\[.*\]", raw, re.S)
-        if not m:
-            return []
-        items = json.loads(m.group(0))
-        if not isinstance(items, list):
+        obj, meta = await extract_json(
+            info,
+            model,
+            [
+                {"role": "system", "content": _AUTO_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            AutoMemories,
+            stream_fn=stream_chat,  # 保住 memory.stream_chat 这个既有 mock seam
+        )
+        if obj is None:
+            log.info("automemory extraction unavailable: %s", meta.error)
             return []
         saved: list[str] = []
-        for item in items[:AUTO_FACT_CAP]:
-            # 旧格式（裸字符串）照单全收为 fact；对象格式校验 kind，乱写的归 fact
-            if isinstance(item, str):
-                kind, text = "fact", item
-            elif isinstance(item, dict):
-                kind = str(item.get("kind") or "fact")
-                text = str(item.get("text") or "")
-            else:
-                continue
-            text = text.strip()[:AUTO_FACT_CHARS]
+        for item in obj.items[:AUTO_FACT_CAP]:
+            text = item.text.strip()[:AUTO_FACT_CHARS]
             if not text:
                 continue
-            result = await add_memory(text, source="auto", kind=kind)
+            result = await add_memory(text, source="auto", kind=item.kind)
             if result.startswith("已记住"):
                 saved.append(text)
         return saved

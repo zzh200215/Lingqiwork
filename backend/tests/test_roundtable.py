@@ -3,7 +3,6 @@
 LLM 走降级链（stream_chat_fallback）与 provider 解析（tasks._candidates）都在
 函数体内延迟导入，patch 各自的源模块即可；ROUND_DIR 指到项目内临时目录。
 """
-import asyncio
 import atexit
 import shutil
 import sys

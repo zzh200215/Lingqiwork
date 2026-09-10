@@ -13,11 +13,12 @@ stays silent when they don't. No tools, no scheduled jobs. Heavy imports stay
 inside functions, matching the other core modules.
 """
 import asyncio
-import json
 import logging
 import math
 import re
 from datetime import datetime
+
+from pydantic import BaseModel, Field, field_validator
 
 log = logging.getLogger(__name__)
 
@@ -869,6 +870,37 @@ def _clean_aliases(raw, concept: str = "") -> str:
     return ALIAS_SEP.join(out)
 
 
+class TutorExtract(BaseModel):
+    """end() 的提取结果。字段宽松：类型不对一律当空，避免一次模型抖动丢掉整条记录。
+
+    裁剪长度与原实现保持一致（concept 120 / stuck 200 / transfer 120）。超长
+    不报错、只截断——截断比为了长度再触发一次模型调用划算。
+    """
+
+    concept: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    stuck: str = ""
+    transfer: str = ""
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def _as_list(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return re.split(r"[、,，;；/|\n]+", v) if v.strip() else []
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
+
+    @field_validator("concept", "stuck", "transfer", mode="before")
+    @classmethod
+    def _as_text(cls, v):
+        if v is None or isinstance(v, (list, dict)):
+            return ""
+        return str(v).strip()
+
+
 async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str, str, str]:
     """One non-streaming call → (concept, aliases, stuck, transfer), all '' on failure.
 
@@ -881,7 +913,8 @@ async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str
         if not rows:
             return "", "", "", ""
 
-        from app.core.llm import ProviderInfo, stream_chat
+        from app.core.llm import ProviderInfo
+        from app.core.structured import extract_json
         from app.routers.chat import resolve_model
 
         script = "\n\n".join(
@@ -890,31 +923,24 @@ async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str
 
         resolved = await resolve_model(model_id)
         p = resolved.provider
-        raw = "".join(
+        obj, meta = await extract_json(
+            ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key),
+            resolved.model,
             [
-                c
-                async for c in stream_chat(
-                    ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key),
-                    resolved.model,
-                    [
-                        {"role": "system", "content": _EXTRACT_PROMPT},
-                        {"role": "user", "content": f"话题：{topic}\n\n{script}"},
-                    ],
-                )
-            ]
+                {"role": "system", "content": _EXTRACT_PROMPT},
+                {"role": "user", "content": f"话题：{topic}\n\n{script}"},
+            ],
+            TutorExtract,
         )
-        m = re.search(r"\{.*\}", raw, re.S)
-        if not m:
+        if obj is None:
+            log.info("tutor extraction unavailable: %s", meta.error)
             return "", "", "", ""
-        data = json.loads(m.group(0))
-        if not isinstance(data, dict):
-            return "", "", "", ""
-        concept = str(data.get("concept") or "").strip()[:120]
+        concept = obj.concept[:120]
         return (
             concept,
-            _clean_aliases(data.get("aliases"), concept),
-            str(data.get("stuck") or "").strip()[:200],
-            str(data.get("transfer") or "").strip()[:120],
+            _clean_aliases(obj.aliases, concept),
+            obj.stuck[:200],
+            obj.transfer[:120],
         )
     except Exception:  # noqa: BLE001 - the verdict is already saved; this is the extra
         log.warning("tutor extraction failed", exc_info=True)

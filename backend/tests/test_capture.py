@@ -4,9 +4,7 @@
 「剪藏」动作的后端语义：选中文本落盘成 clippings md 并进索引，空文本拒绝。
 vault 与索引都 monkeypatch 到临时目录，绝不碰真实数据。
 """
-import asyncio
 import atexit
-import os
 import shutil
 import sys
 import tempfile

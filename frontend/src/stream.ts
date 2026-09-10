@@ -217,7 +217,7 @@ export async function streamPodcastGenerate(
  * The three functions above each inline this loop; rather than refactor live
  * paths (streamChat is the chat hot path) this exists for new callers only.
  */
-async function* sseFrames(
+export async function* sseFrames(
   res: Response
 ): AsyncGenerator<[string, Record<string, unknown>]> {
   const reader = res.body!.getReader()
@@ -359,6 +359,70 @@ export async function streamTutorSay(
     else if (event === 'done') done = { ok: true, ...(data as object) }
     else if (event === 'error')
       done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
+  }
+  return done
+}
+
+export interface ResearchSourceRef {
+  n: number
+  /** 'kb' = 你自己的知识库；'web' = 网络 */
+  kind: 'kb' | 'web' | string
+  title: string
+  /** vault 相对路径（kb）或 URL（web） */
+  ref: string
+}
+
+export interface ResearchReport {
+  title: string
+  sections: { heading: string; body: string }[]
+  /** 正文里真正引用到的来源编号 */
+  used: number[]
+  sources: ResearchSourceRef[]
+  model_id?: string
+}
+
+export interface ResearchDone {
+  ok: boolean
+  error?: string
+  report?: ResearchReport
+}
+
+/** Progress stages the page renders as it goes: plan / gathering / sources / writing. */
+export type ResearchStage = (event: string, data: Record<string, unknown>) => void
+
+/**
+ * One research run (学习闭环的中间两跳). `onStage` fires for each progress event;
+ * resolves with the terminal report (ok=false carries the error). Like the tutor
+ * stream it does not throw on a model/material failure — progress is already on
+ * screen, so the page reports it inline and keeps the session alive.
+ */
+export async function streamResearch(
+  topic: string,
+  onStage: ResearchStage,
+  signal?: AbortSignal
+): Promise<ResearchDone> {
+  const res = await fetch('/api/research', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = `研究失败: ${res.status}`
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(detail)
+  }
+
+  let done: ResearchDone = { ok: false, error: '流提前结束' }
+  for await (const [event, data] of sseFrames(res)) {
+    if (event === 'report') done = { ok: true, report: data as unknown as ResearchReport }
+    else if (event === 'error')
+      done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
+    else onStage(event, data)
   }
   return done
 }

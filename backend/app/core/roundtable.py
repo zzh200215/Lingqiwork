@@ -121,7 +121,7 @@ def _save(topic: str, turns: list[dict]) -> Path:
     ROUND_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now()
     path = ROUND_DIR / f"{now:%Y-%m-%d}-{_slug(topic)}.md"
-    body = [f"# 学习小组圆桌：{topic}", f"", f"{now:%Y-%m-%d %H:%M} · {' · '.join(_names_in(turns))}", ""]
+    body = [f"# 学习小组圆桌：{topic}", "", f"{now:%Y-%m-%d %H:%M} · {' · '.join(_names_in(turns))}", ""]
     round_no = 0
     for i, t in enumerate(turns):
         if i % len(PERSONAS) == 0:

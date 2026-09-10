@@ -92,12 +92,13 @@ def _parse_script(raw: str) -> list[dict]:
     """
     if not raw or not raw.strip():
         raise ValueError("模型返回空脚本")
-    text = raw.strip()
-    m = re.search(r"[\[{].*[\]}]", text, re.DOTALL)
-    if not m:
+    from app.core.structured import clean_json
+
+    blob = clean_json(raw.strip())
+    if not blob:
         raise ValueError("模型输出里没有找到 JSON 脚本")
     try:
-        data = json.loads(m.group(0))
+        data = json.loads(blob)
     except json.JSONDecodeError as e:
         raise ValueError(f"脚本 JSON 解析失败: {e}") from e
 

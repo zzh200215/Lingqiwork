@@ -20,6 +20,7 @@ import sqlite3
 from datetime import datetime
 
 from apscheduler.triggers.cron import CronTrigger
+from pydantic import BaseModel, field_validator
 from sqlalchemy import delete, select
 
 from app.config import VAULT_DIR, settings
@@ -236,6 +237,7 @@ async def run_task(
     trigger: str = "cron",
     upstream_task_id: int | None = None,
     chain_depth: int = 0,
+    chain_path: frozenset[int] = frozenset(),
 ) -> dict:
     """Execute one task now. Never raises: failures land in last_status/task_runs."""
     async with SessionLocal() as db:
@@ -276,80 +278,101 @@ async def run_task(
     tokens_in = tokens_out = None
     log_entries: list[dict] = []
     status, error = "error", ""
-    for attempt in range(1, attempts + 1):
-        log_entries = []
-        try:
-            result = await _execute(snapshot, log_entries)
-            answer, sources, model_id = result["answer"], result["sources"], result["model_id"]
-            rounds, tool_calls = result["rounds"], result["tool_calls"]
-            tokens_in = result.get("tokens_in")
-            tokens_out = result.get("tokens_out")
-            status, error = "ok", ""
-            break
-        except Exception as e:  # noqa: BLE001 - report, never propagate to scheduler
-            log.exception("task %s attempt %d/%d failed", task_id, attempt, attempts)
-            error = f"{type(e).__name__}: {e}"
-            if attempt < attempts:
-                await asyncio.sleep(_RETRY_DELAY_SECONDS)
-
     vault_file = None
     conv_id = snapshot["conversation_id"]
-    if status == "ok":
-        conv_id = await _persist(
-            task_id, snapshot, answer, sources, model_id, trigger, upstream_task_id,
-            tokens_in=tokens_in, tokens_out=tokens_out,
-        )
-        if snapshot["save_to_vault"]:
-            vault_file = _write_vault(snapshot["name"], answer, started)
-        await _finish_run(
-            run_id, "ok", answer=answer, model_id=model_id,
-            rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
-            tokens_in=tokens_in, tokens_out=tokens_out,
-        )
-        await _fire_chain(task_id, snapshot, answer, chain_depth, manual)
-        if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
-            WATCH_HOOK(task_id)
-        await _distill(snapshot, answer)
-    else:
-        await _finish_run(
-            run_id, "error", error=error, model_id=model_id,
-            rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
-            tokens_in=tokens_in, tokens_out=tokens_out,
-        )
-        if not manual and snapshot["notify_on_error"]:
-            await _notify_error(snapshot, trigger, error)
+    finished = False  # 是否已把 run 落成终态；兜底靠它避免重复 finish
 
-    if trigger != "manual" and load_config().get("desktop_notify", True):
-        try:
-            from app.core import notify
-
-            if status == "error":
-                await asyncio.to_thread(notify.desktop, f"任务失败：{snapshot['name']}", error[:180])
-            elif snapshot["mode"] == "agent":  # long unattended runs only
-                await asyncio.to_thread(notify.desktop, f"任务完成：{snapshot['name']}", (answer or "")[:180])
-        except Exception:  # noqa: BLE001 - a broken toaster must not fail the task
-            log.debug("desktop notification failed", exc_info=True)
-
-    # 零柒: surface the run to the resident companion (best-effort, ROADMAP V14)
     try:
-        from app.core import pet
+        for attempt in range(1, attempts + 1):
+            log_entries = []
+            try:
+                result = await _execute(snapshot, log_entries)
+                answer, sources, model_id = result["answer"], result["sources"], result["model_id"]
+                rounds, tool_calls = result["rounds"], result["tool_calls"]
+                tokens_in = result.get("tokens_in")
+                tokens_out = result.get("tokens_out")
+                status, error = "ok", ""
+                break
+            except Exception as e:  # noqa: BLE001 - report, never propagate to scheduler
+                log.exception("task %s attempt %d/%d failed", task_id, attempt, attempts)
+                error = f"{type(e).__name__}: {e}"
+                if attempt < attempts:
+                    await asyncio.sleep(_RETRY_DELAY_SECONDS)
 
         if status == "ok":
-            pet.emit("task_done", name=snapshot["name"], detail=(answer or "")[:120])
+            conv_id = await _persist(
+                task_id, snapshot, answer, sources, model_id, trigger, upstream_task_id,
+                tokens_in=tokens_in, tokens_out=tokens_out,
+            )
+            if snapshot["save_to_vault"]:
+                vault_file = _write_vault(snapshot["name"], answer, started)
+            await _finish_run(
+                run_id, "ok", answer=answer, model_id=model_id,
+                rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
+                tokens_in=tokens_in, tokens_out=tokens_out,
+            )
+            finished = True
+            await _fire_chain(task_id, snapshot, answer, chain_depth, manual, chain_path)
+            if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
+                WATCH_HOOK(task_id)
+            await _distill(snapshot, answer)
         else:
-            pet.emit("task_failed", name=snapshot["name"], detail=error[:160])
-    except Exception:  # noqa: BLE001
-        log.debug("pet emit failed", exc_info=True)
+            await _finish_run(
+                run_id, "error", error=error, model_id=model_id,
+                rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
+                tokens_in=tokens_in, tokens_out=tokens_out,
+            )
+            finished = True
+            if not manual and snapshot["notify_on_error"]:
+                await _notify_error(snapshot, trigger, error)
 
-    async with SessionLocal() as db:
-        task = await db.get(ScheduledTask, task_id)
-        if task:
-            task.last_run = started.astimezone()
-            task.last_status = status
-            task.last_result = (answer or error)[:_RESULT_CAP]
-            if conv_id:
-                task.conversation_id = conv_id
-            await db.commit()
+        if trigger != "manual" and load_config().get("desktop_notify", True):
+            try:
+                from app.core import notify
+
+                if status == "error":
+                    await asyncio.to_thread(notify.desktop, f"任务失败：{snapshot['name']}", error[:180])
+                elif snapshot["mode"] == "agent":  # long unattended runs only
+                    await asyncio.to_thread(notify.desktop, f"任务完成：{snapshot['name']}", (answer or "")[:180])
+            except Exception:  # noqa: BLE001 - a broken toaster must not fail the task
+                log.debug("desktop notification failed", exc_info=True)
+
+        # 零柒: surface the run to the resident companion (best-effort, ROADMAP V14)
+        try:
+            from app.core import pet
+
+            if status == "ok":
+                pet.emit("task_done", name=snapshot["name"], detail=(answer or "")[:120])
+            else:
+                pet.emit("task_failed", name=snapshot["name"], detail=error[:160])
+        except Exception:  # noqa: BLE001
+            log.debug("pet emit failed", exc_info=True)
+    except Exception as e:  # noqa: BLE001 - 兜底：绝不让 run 停在 running
+        log.exception("task %s crashed after execution", task_id)
+        status, error = "error", f"{type(e).__name__}: {e}"
+        if not finished:
+            try:
+                await _finish_run(
+                    run_id, "error", error=error, model_id=model_id,
+                    rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
+                    tokens_in=tokens_in, tokens_out=tokens_out,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("finish_run fallback failed")
+
+    # 更新 last_status（兜底，DB 失败也不向上抛，run_task 永不抛异常）
+    try:
+        async with SessionLocal() as db:
+            task = await db.get(ScheduledTask, task_id)
+            if task:
+                task.last_run = started.astimezone()
+                task.last_status = status
+                task.last_result = (answer or error)[:_RESULT_CAP]
+                if conv_id:
+                    task.conversation_id = conv_id
+                await db.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("task last_status update failed")
 
     return {
         "status": status,
@@ -397,7 +420,8 @@ async def _distill(t: dict, answer: str) -> None:
 
 
 async def _fire_chain(
-    task_id: int, snapshot: dict, answer: str, chain_depth: int, manual: bool
+    task_id: int, snapshot: dict, answer: str, chain_depth: int, manual: bool,
+    chain_path: frozenset[int] = frozenset(),
 ) -> int | None:
     """Hand the answer to the downstream task (vault file) and run it.
 
@@ -406,6 +430,9 @@ async def _fire_chain(
     """
     nxt_id = snapshot.get("chain_next_id")
     if not nxt_id or chain_depth >= _CHAIN_MAX_DEPTH:
+        return None
+    if nxt_id in chain_path:
+        log.warning("chain: cycle detected at task %s (path %s), stopping", nxt_id, sorted(chain_path))
         return None
 
     async def _go() -> None:
@@ -417,7 +444,10 @@ async def _fire_chain(
                     return
                 downstream_name = nxt.name
             _write_handoff(snapshot["name"], downstream_name, answer)
-            await run_task(nxt_id, trigger="chain", upstream_task_id=task_id, chain_depth=chain_depth + 1)
+            await run_task(
+                nxt_id, trigger="chain", upstream_task_id=task_id,
+                chain_depth=chain_depth + 1, chain_path=chain_path | {task_id},
+            )
         except Exception:  # noqa: BLE001 - the pipeline must not crash the caller
             log.exception("chain handoff to task %s failed", nxt_id)
 
@@ -732,32 +762,46 @@ _PARSE_SYSTEM = (
 )
 
 
+class ScheduleParse(BaseModel):
+    """自然语言 → cron 的解析草稿。cron 为空表示「这不是周期性需求」，
+    由调用方落成一句人话报错，而不是硬编一个时间表。"""
+
+    cron: str = ""
+    name: str = ""
+    prompt: str = ""
+
+    @field_validator("cron", "name", "prompt", mode="before")
+    @classmethod
+    def _text(cls, v):
+        if v is None or isinstance(v, (list, dict)):
+            return ""
+        return str(v).strip()
+
+
 async def parse_schedule(text: str) -> dict:
     """Ask the model to turn '每天早上8点…' into a cron + task draft."""
+    from app.core.structured import extract_json
+
     provider, model = await _resolve("")
     info = ProviderInfo(kind=provider.kind, base_url=provider.base_url, api_key=provider.api_key)
-    chunks = [
-        c
-        async for c in stream_chat(
-            info,
-            model,
-            [
-                {"role": "system", "content": _PARSE_SYSTEM},
-                {"role": "user", "content": text},
-            ],
-        )
-    ]
-    raw = "".join(chunks).strip()
-    m = re.search(r"\{.*\}", raw, re.S)
-    if not m:
-        raise ValueError(f"模型未返回 JSON：{raw[:120]}")
-    data = json.loads(m.group(0))
-    cron = str(data.get("cron") or "").strip()
+    obj, meta = await extract_json(
+        info,
+        model,
+        [
+            {"role": "system", "content": _PARSE_SYSTEM},
+            {"role": "user", "content": text},
+        ],
+        ScheduleParse,
+        stream_fn=stream_chat,  # 保住 tasks.stream_chat 的既有 mock seam
+    )
+    if obj is None:
+        raise ValueError(f"模型未返回 JSON：{meta.error[:120]}")
+    cron = obj.cron.strip()
     if not cron:  # 模型判定这不是周期性任务需求——照实说，别硬编
         raise ValueError("这听起来不是一个周期性的任务需求；定时任务需要能落到一个重复时间表上")
     cron = validate_cron(cron)
     return {
         "cron": cron,
-        "name": str(data.get("name") or "").strip()[:100] or "新任务",
-        "prompt": str(data.get("prompt") or text).strip(),
+        "name": obj.name.strip()[:100] or "新任务",
+        "prompt": obj.prompt.strip() or text,
     }

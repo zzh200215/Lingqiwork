@@ -15,7 +15,6 @@ import subprocess
 import sys
 import time
 import uuid
-from pathlib import Path
 
 from app.config import DATA_DIR
 from app.core.prefs import load_config
@@ -104,7 +103,9 @@ def run(code: str, language: str = "python", timeout: int | None = None) -> dict
         timed_out = True
         exit_code = -1
         stdout = e.stdout or ""
-        stderr = (e.stderr or "") + f"\n[超过 {t} 秒被终止]"
+        # TimeoutExpired.stdout/stderr 在 POSIX 上是未解码的 bytes，先收口再拼字符串，
+        # 否则 (bytes or "") + str 会抛 TypeError（Windows 上 run() 会重新 communicate 覆盖为 str）
+        stderr = _as_text(e.stderr) + f"\n[超过 {t} 秒被终止]"
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     result = {

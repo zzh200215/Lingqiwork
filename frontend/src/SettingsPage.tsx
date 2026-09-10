@@ -96,6 +96,8 @@ export default function SettingsPage() {
     image_provider: string
     image_model: string
     image_size: string
+    websearch_api: string
+    websearch_api_key: string
     feeds_enabled: boolean
     feeds_time: string
     smtp_host: string
@@ -170,6 +172,8 @@ export default function SettingsPage() {
   const [skillBusy, setSkillBusy] = useState(false)
   const [skillMsg, setSkillMsg] = useState('')
   const [skillContent, setSkillContent] = useState<Record<string, string>>({})
+  const [editingSkill, setEditingSkill] = useState<string | null>(null)
+  const [skillDraft, setSkillDraft] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -208,6 +212,8 @@ export default function SettingsPage() {
         image_provider: p.image_provider || '',
         image_model: p.image_model || 'qwen-image-3.0',
         image_size: p.image_size || '1024*1024',
+        websearch_api: p.websearch_api || '',
+        websearch_api_key: p.websearch_api_key || '',
         feeds_enabled: p.feeds_enabled ?? false,
         feeds_time: p.feeds_time || '08:00',
         smtp_host: p.smtp_host || '',
@@ -291,6 +297,8 @@ export default function SettingsPage() {
         image_provider: prefs.image_provider.trim(),
         image_model: prefs.image_model.trim() || 'qwen-image-3.0',
         image_size: prefs.image_size.trim() || '1024*1024',
+        websearch_api: prefs.websearch_api,
+        websearch_api_key: prefs.websearch_api_key.trim(),
         feeds_enabled: prefs.feeds_enabled,
         feeds_time: /^([01]?\d|2[0-3]):[0-5]\d$/.test(prefs.feeds_time.trim())
           ? prefs.feeds_time.trim()
@@ -732,6 +740,42 @@ export default function SettingsPage() {
       setSkillContent((m) => ({ ...m, [name]: r.content }))
     } catch {
       setSkillContent((m) => ({ ...m, [name]: '（加载失败）' }))
+    }
+  }
+
+  async function editSkill(name: string) {
+    try {
+      const r = await api.readSkill(name)
+      setSkillContent((m) => ({ ...m, [name]: r.content }))
+      setSkillDraft(r.raw)
+      setEditingSkill(name)
+    } catch {
+      setSkillMsg('（加载失败）')
+    }
+  }
+
+  async function saveSkill(name: string) {
+    if (!skillDraft.trim()) {
+      setSkillMsg('✗ 内容不能为空')
+      return
+    }
+    setSkillBusy(true)
+    setSkillMsg('保存中…')
+    try {
+      const r = await api.updateSkill(name, skillDraft)
+      setEditingSkill(null)
+      setSkillContent((m) => {
+        const next = { ...m }
+        delete next[name]
+        delete next[r.name]
+        return next
+      })
+      setSkillMsg(`✓ 已保存技能「${r.name}」(${r.chars} 字)`)
+      setSkillItems((await api.listSkills()).skills)
+    } catch (e) {
+      setSkillMsg(`✗ ${String(e)}`)
+    } finally {
+      setSkillBusy(false)
     }
   }
 
@@ -2768,21 +2812,52 @@ export default function SettingsPage() {
                 </div>
                 <div className="mt-0.5 text-xs text-neutral-500">{s.description}</div>
               </div>
-              <button onClick={() => removeSkill(s.name)} className="shrink-0 text-sm text-red-400 hover:text-red-600">
-                删除
-              </button>
+              <div className="flex shrink-0 items-center gap-3">
+                <button onClick={() => editSkill(s.name)} className="text-sm text-blue-500 hover:text-blue-600">
+                  编辑
+                </button>
+                <button onClick={() => removeSkill(s.name)} className="text-sm text-red-400 hover:text-red-600">
+                  删除
+                </button>
+              </div>
             </div>
-            <details
-              className="mt-2 text-xs text-neutral-500"
-              onToggle={(e) => {
-                if ((e.target as HTMLDetailsElement).open) void viewSkill(s.name)
-              }}
-            >
-              <summary className="cursor-pointer select-none">查看内容</summary>
-              <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-neutral-50 p-3 leading-relaxed dark:bg-neutral-900">
-                {skillContent[s.name] ?? '加载中…'}
-              </pre>
-            </details>
+            {editingSkill === s.name ? (
+              <div className="mt-2">
+                <textarea
+                  value={skillDraft}
+                  onChange={(e) => setSkillDraft(e.target.value)}
+                  className={`${inputCls} min-h-[160px] w-full font-mono text-xs leading-relaxed`}
+                  placeholder="粘贴 SKILL.md 全文（frontmatter name/description + 正文）"
+                />
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => saveSkill(s.name)}
+                    disabled={skillBusy}
+                    className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+                  >
+                    {skillBusy ? '保存中…' : '保存'}
+                  </button>
+                  <button
+                    onClick={() => setEditingSkill(null)}
+                    className="rounded-md border border-neutral-300 px-3 py-1 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-300"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <details
+                className="mt-2 text-xs text-neutral-500"
+                onToggle={(e) => {
+                  if ((e.target as HTMLDetailsElement).open) void viewSkill(s.name)
+                }}
+              >
+                <summary className="cursor-pointer select-none">查看内容</summary>
+                <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-neutral-50 p-3 leading-relaxed dark:bg-neutral-900">
+                  {skillContent[s.name] ?? '加载中…'}
+                </pre>
+              </details>
+            )}
           </div>
         ))}
         {!skillItems.length && <p className="text-sm text-neutral-400">还没有技能</p>}
@@ -2872,6 +2947,37 @@ export default function SettingsPage() {
       {/* MCP tools */}
       {section === 'mcp' && (
       <>
+      {prefs && (
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>🔍</span> 联网搜索</h2>
+        <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
+          web_search 工具的搜索引擎。配置 Keenable API Key 后优先走 Keenable（稳定、带正文摘要）；
+          免费爬取 Bing / DuckDuckGo 始终作为兜底。
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-sm">
+            搜索源
+            <select
+              value={prefs.websearch_api}
+              onChange={(e) => setPrefs({ ...prefs, websearch_api: e.target.value })}
+              className={`${inputCls} w-52`}
+            >
+              <option value="keenable">Keenable（搜索 API，推荐）</option>
+              <option value="">免费爬取（Bing / DDG）</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Keenable API Key
+            <input
+              value={prefs.websearch_api_key}
+              onChange={(e) => setPrefs({ ...prefs, websearch_api_key: e.target.value })}
+              placeholder="keen_..."
+              className={`${inputCls} w-96`}
+            />
+          </label>
+        </div>
+      </section>
+      )}
       <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-2 font-semibold"><span>🔌</span> MCP 工具服务器</h2>

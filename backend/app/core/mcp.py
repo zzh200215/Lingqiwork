@@ -172,81 +172,141 @@ async def _skill_load(args: dict) -> str:
     return await skills.load_skill_tool(args)
 
 
-async def _web_search(args: dict) -> str:
-    query = (args.get("query") or "").strip()
+# ---------- 联网搜索：结构化结果 + 文本格式化两层 ----------
+#
+# `search_web` 返回结构化结果（研究引擎直接消费）；`_web_search` 是它之上的
+# 文本格式化（给 agent 的 tool 输出）。引擎顺序：配了 keenable 就排第一，
+# 否则 Bing → DuckDuckGo 兜底。两层分开是为了让研究引擎拿得到标题/链接/摘要，
+# 而不必去正则解析自己拼出来的编号文本。
+
+_SEARCH_UA = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+}
+
+
+class SearchError(RuntimeError):
+    """所有搜索引擎都没结果时抛出，携带每家的失败原因。"""
+
+
+def _search_bing(query: str) -> list[tuple[str, str, str]]:
+    req = Request("https://www.bing.com/search?q=" + quote_plus(query), headers=_SEARCH_UA)
+    with urlopen(req, timeout=15) as resp:
+        html = resp.read(500_000).decode("utf-8", "ignore")
+    results: list[tuple[str, str, str]] = []
+    for block in re.findall(
+        r'<li class="b_algo"(.*?)(?=<li class="b_algo"|</ol>)', html, re.S
+    )[:8]:
+        m = re.search(r'<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+        if not m:
+            continue
+        title = unescape(re.sub(r"(?s)<[^>]+>", "", m.group(2))).strip()
+        sn = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
+        snippet = (
+            unescape(re.sub(r"(?s)<[^>]+>", "", sn.group(1))).strip()
+            if sn
+            else ""
+        )
+        if title and m.group(1).startswith("http"):
+            results.append((title, m.group(1), snippet[:300]))
+    return results
+
+
+def _search_ddg(query: str) -> list[tuple[str, str, str]]:
+    # fallback: DuckDuckGo HTML endpoint (needs direct access)
+    req = Request(
+        "https://html.duckduckgo.com/html/?q=" + quote_plus(query), headers=_SEARCH_UA
+    )
+    with urlopen(req, timeout=15) as resp:
+        html = resp.read(500_000).decode("utf-8", "ignore")
+    results: list[tuple[str, str, str]] = []
+    blocks = re.findall(
+        r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>(.*?)(?=<a[^>]+class="result__a"|$)',
+        html,
+        re.S,
+    )
+    for url, title_html, rest in blocks[:8]:
+        title = unescape(re.sub(r"(?s)<[^>]+>", "", title_html)).strip()
+        snippet_m = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', rest, re.S)
+        snippet = (
+            unescape(re.sub(r"(?s)<[^>]+>", "", snippet_m.group(1))).strip()
+            if snippet_m
+            else ""
+        )
+        uddg = re.search(r"uddg=([^&]+)", url)
+        if uddg:
+            url = unquote(uddg.group(1))
+        if url.startswith("//"):
+            url = "https:" + url
+        if title:
+            results.append((title, url, snippet[:300]))
+    return results
+
+
+def _search_keenable(query: str, ws_key: str) -> list[tuple[str, str, str]]:
+    req = Request(
+        "https://api.keenable.ai/v1/search",
+        data=json.dumps({"query": query, "max_results": 8}).encode("utf-8"),
+        headers={"X-API-Key": ws_key, "Content-Type": "application/json", **_SEARCH_UA},
+    )
+    with urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read(1_000_000).decode("utf-8", "ignore"))
+    results: list[tuple[str, str, str]] = []
+    for r in data.get("results", [])[:8]:
+        title = str(r.get("title") or "").strip()
+        url = str(r.get("url") or "").strip()
+        snippet = str(r.get("snippet") or r.get("description") or "").strip()
+        if title and url.startswith("http"):
+            results.append((title, url, snippet[:300]))
+    return results
+
+
+async def search_web(query: str) -> list[dict]:
+    """联网搜索 → [{title, url, snippet}]。所有引擎都没结果时抛 `SearchError`。
+
+    研究引擎的消费口；`_web_search`（agent 工具）是它之上的文本格式化。
+    Test seam: monkeypatch me.
+    """
+    query = (query or "").strip()
     if not query:
-        return "[错误] query 不能为空"
+        return []
 
-    _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
+    cfg = load_config()
+    ws_api = str(cfg.get("websearch_api") or "").strip()
+    ws_key = str(cfg.get("websearch_api_key") or "").strip()
 
-    def _search_bing() -> list[tuple[str, str, str]]:
-        req = Request("https://www.bing.com/search?q=" + quote_plus(query), headers=_UA)
-        with urlopen(req, timeout=15) as resp:
-            html = resp.read(500_000).decode("utf-8", "ignore")
-        results: list[tuple[str, str, str]] = []
-        for block in re.findall(
-            r'<li class="b_algo"(.*?)(?=<li class="b_algo"|</ol>)', html, re.S
-        )[:8]:
-            m = re.search(r'<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
-            if not m:
-                continue
-            title = unescape(re.sub(r"(?s)<[^>]+>", "", m.group(2))).strip()
-            sn = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
-            snippet = (
-                unescape(re.sub(r"(?s)<[^>]+>", "", sn.group(1))).strip()
-                if sn
-                else ""
-            )
-            if title and m.group(1).startswith("http"):
-                results.append((title, m.group(1), snippet[:300]))
-        return results
-
-    def _search_ddg() -> list[tuple[str, str, str]]:
-        # fallback: DuckDuckGo HTML endpoint (needs direct access)
-        req = Request(
-            "https://html.duckduckgo.com/html/?q=" + quote_plus(query), headers=_UA
-        )
-        with urlopen(req, timeout=15) as resp:
-            html = resp.read(500_000).decode("utf-8", "ignore")
-        results: list[tuple[str, str, str]] = []
-        blocks = re.findall(
-            r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>(.*?)(?=<a[^>]+class="result__a"|$)',
-            html,
-            re.S,
-        )
-        for url, title_html, rest in blocks[:8]:
-            title = unescape(re.sub(r"(?s)<[^>]+>", "", title_html)).strip()
-            snippet_m = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', rest, re.S)
-            snippet = (
-                unescape(re.sub(r"(?s)<[^>]+>", "", snippet_m.group(1))).strip()
-                if snippet_m
-                else ""
-            )
-            uddg = re.search(r"uddg=([^&]+)", url)
-            if uddg:
-                url = unquote(uddg.group(1))
-            if url.startswith("//"):
-                url = "https:" + url
-            if title:
-                results.append((title, url, snippet[:300]))
-        return results
+    engines: list[tuple[str, object]] = []
+    if ws_api == "keenable" and ws_key:
+        engines.append(("keenable", lambda: _search_keenable(query, ws_key)))
+    engines += [("bing", lambda: _search_bing(query)), ("duckduckgo", lambda: _search_ddg(query))]
 
     errors = []
-    for engine, fn in (("bing", _search_bing), ("duckduckgo", _search_ddg)):
+    for engine, fn in engines:
         try:
             results = await asyncio.to_thread(fn)
         except Exception as e:  # noqa: BLE001 - one blocked engine falls through to the next
             errors.append(f"{engine}: {type(e).__name__}")
             continue
         if results:
-            break
+            return [{"title": t, "url": u, "snippet": s} for t, u, s in results]
         errors.append(f"{engine}: 无结果")
-    else:
-        return f"[tool error] 所有搜索引擎都失败（{'; '.join(errors)}）"
+    raise SearchError("; ".join(errors))
+
+
+async def _web_search(args: dict) -> str:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return "[错误] query 不能为空"
+    try:
+        results = await search_web(query)
+    except SearchError as e:
+        return f"[tool error] 所有搜索引擎都失败（{e}）"
 
     lines = []
-    for i, (title, url, snippet) in enumerate(results, 1):
-        lines.append(f"{i}. {title}\n   {url}" + (f"\n   {snippet}" if snippet else ""))
+    for i, r in enumerate(results, 1):
+        lines.append(
+            f"{i}. {r['title']}\n   {r['url']}"
+            + (f"\n   {r['snippet']}" if r["snippet"] else "")
+        )
     out = "\n\n".join(lines)
     if len(out) > _OUTPUT_LIMIT:
         out = out[:_OUTPUT_LIMIT] + "\n...[已截断]"

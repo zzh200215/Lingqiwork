@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    # Windows 与开发机一致：notify/winotify、tts 的 SAPI 回退、keyboard、
+    # pywebview 壳层都是 Windows 专属，在 ubuntu 上跑会假报失败。
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync
+      - name: Run tests (one file per process)
+        run: uv run python run_tests.py
+      - name: Lint (pyflakes)
+        # uv 建的 venv 不含 pip，不能用 `python -m pip install`；
+        # `--with` 会在项目环境上叠一个临时层，只装 pyflakes。
+        run: uv run --with pyflakes python -m pyflakes app
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check
+        run: npx tsc -b --noEmit
+      - name: Unit tests
+        run: npm test

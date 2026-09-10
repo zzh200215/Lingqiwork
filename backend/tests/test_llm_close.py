@@ -2,7 +2,6 @@
 被显式关闭——没有 finally close，页面 abort 后底层响应要等 GC 兜底，上游继续
 烧完整个回复。anthropic 分支靠 `async with` 已是确定性关闭，这里钉 openai 分支。
 """
-import asyncio
 import sys
 from types import SimpleNamespace
 
@@ -34,9 +33,13 @@ class _FakeClient:
             completions=SimpleNamespace(create=self._create)
         )
         self._stream = stream
+        self.closed = False
 
     async def _create(self, **kwargs):
         return self._stream
+
+    async def close(self):
+        self.closed = True
 
 
 def _chunk(text: str):

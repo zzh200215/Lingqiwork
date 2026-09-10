@@ -168,3 +168,15 @@ async def run_eval(body: RunIn | None = None):
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"{type(e).__name__}: {e}") from e
+
+
+@router.get("/compare")
+async def compare_runs(limit: int = 2):
+    """对比最近 N 次运行：这次比上次好了还是坏了（只读，不跑模型）。"""
+    return await core.compare_history(limit=limit)
+
+
+@router.get("/health")
+async def eval_set_health():
+    """评测集健康度：条数、标注覆盖、是否「全满分」测不出回归。"""
+    return await core.eval_health()

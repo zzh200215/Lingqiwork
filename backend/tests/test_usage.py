@@ -12,7 +12,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, ".")
 

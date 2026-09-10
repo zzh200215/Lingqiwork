@@ -14,13 +14,13 @@ The last run's report is persisted next to the db for the Settings page.
 """
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core import memory
+from app.core.structured import extract_json
 from app.core.llm import ProviderInfo, stream_chat
 from app.core.prefs import load_config
 from app.db import SessionLocal
@@ -68,18 +68,89 @@ def _cluster(rows: list[Memory], vecs: list[list[float] | None]) -> list[list[in
 
 
 def _parse_merge(raw: str) -> str | None:
-    """Extract the merged statement; None = keep / unparseable."""
-    m = re.search(r"\{.*\}", raw or "", re.S)
-    if not m:
+    """Extract the merged statement; None = keep / unparseable.
+
+    清洗走 structured.clean_json（去围栏 + 括号配对 + 尾逗号），比原来的裸
+    贪婪正则稳：模型带前言、给代码块、输出两段 JSON 都能拿到对的片段。
+    调用链的完整降级在 _tidy_pass 里走 extract_json；这里保留为纯函数，
+    一是单测直接钉它的语义，二是冒烟场景可以离线验。
+    """
+    from app.core.structured import clean_json
+
+    blob = clean_json(raw or "")
+    if not blob:
         return None
     try:
-        data = json.loads(m.group(0))
+        data = json.loads(blob)
     except json.JSONDecodeError:
         return None
     if not isinstance(data, dict) or data.get("action") != "merge":
         return None
     content = str(data.get("content") or "").strip()
     return content[:MAX_MERGED_CHARS] or None
+
+
+class TidyMerge(BaseModel):
+    """整理员的合并判定。action 不是 merge 的一律视为 keep。"""
+
+    action: str = "keep"
+    content: str = ""
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _action(cls, v):
+        if v is None or isinstance(v, (list, dict)):
+            return "keep"
+        return str(v).strip()
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _content(cls, v):
+        if v is None or isinstance(v, (list, dict)):
+            return ""
+        return str(v).strip()
+
+
+class ReflectInsight(BaseModel):
+    """一条反思洞察。裸字符串（模型不按协议时的旧形状）照收为一条；
+    based_on 里流水里不存在的编号由调用方按流水丢弃。"""
+
+    text: str = ""
+    based_on: list[int] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_str(cls, data):
+        if isinstance(data, str):
+            return {"text": data}
+        return data
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _text(cls, v):
+        if v is None or isinstance(v, (list, dict)):
+            return ""
+        return str(v).strip()
+
+    @field_validator("based_on", mode="before")
+    @classmethod
+    def _ids(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, (int, str)):
+            v = [v]
+        if not isinstance(v, list):
+            return []
+        out = []
+        for n in v:
+            s = str(n).strip().lstrip("-")
+            if s.isdigit():
+                out.append(int(s))
+        return out
+
+
+class ReflectItems(BaseModel):
+    items: list[ReflectInsight] = Field(default_factory=list)
 
 
 async def _apply_merge(keep_id: int, merged: str, drop_ids: list[int]) -> None:
@@ -146,18 +217,19 @@ async def _tidy_pass() -> dict:
         members = [rows[i] for i in group]
         listing = "\n".join(f"{n}. {m.content}" for n, m in enumerate(members, 1))
         try:
-            chunks = [
-                c
-                async for c in stream_chat(
-                    info,
-                    model,
-                    [
-                        {"role": "system", "content": _TIDY_SYSTEM},
-                        {"role": "user", "content": f"记忆列表：\n{listing}"},
-                    ],
-                )
-            ]
-            merged = _parse_merge("".join(chunks))
+            obj, meta = await extract_json(
+                info,
+                model,
+                [
+                    {"role": "system", "content": _TIDY_SYSTEM},
+                    {"role": "user", "content": f"记忆列表：\n{listing}"},
+                ],
+                TidyMerge,
+                stream_fn=stream_chat,  # 保住 memory_tidy.stream_chat 的既有 mock seam
+            )
+            merged = None
+            if obj is not None and obj.action == "merge" and obj.content.strip():
+                merged = obj.content.strip()[:MAX_MERGED_CHARS]
         except Exception:  # noqa: BLE001 - one bad cluster must not stop the pass
             log.warning("tidy merge call failed for cluster %s", group, exc_info=True)
             merged = None
@@ -234,38 +306,31 @@ async def reflect(report: dict) -> dict:
             f"已有洞察：\n{prior}\n\n记忆流水：\n{listing}\n\n"
             "请提炼有没有值得新增的更高层观察。"
         )
-        chunks = [
-            c
-            async for c in stream_chat(
-                info,
-                model,
-                [
-                    {"role": "system", "content": _REFLECT_SYSTEM},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-        ]
-        raw = "".join(chunks).strip()
-        m = re.search(r"\[.*\]", raw, re.S)
-        items = json.loads(m.group(0)) if m else []
+        obj, meta = await extract_json(
+            info,
+            model,
+            [
+                {"role": "system", "content": _REFLECT_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            ReflectItems,
+            stream_fn=stream_chat,  # 保住 memory_tidy.stream_chat 的既有 mock seam
+        )
+        if obj is None:
+            log.info("tidy reflection unavailable: %s", meta.error)
         added = 0
-        if isinstance(items, list):
-            for item in items[:REFLECT_CAP]:
-                text = str((item or {}).get("text") or "").strip()[:120]
-                if not text:
-                    continue
-                # 证据链：based_on 编号映射回流水里的原句做文本快照——洞察不能
-                # 只是模型的一句话，页面上要能展开看它是从哪几条记忆拼出来的。
-                # 流水里不存在的编号（模型幻觉）直接丢弃。
-                by_id = {r.id: r.content for r in facts}
-                evidence = [
-                    {"id": int(n), "text": by_id[int(n)]}
-                    for n in ((item or {}).get("based_on") or [])
-                    if str(n).strip().lstrip("-").isdigit() and int(n) in by_id
-                ]
-                result = await memory.add_memory(text, source="auto", kind="insight", evidence=evidence)
-                if result.startswith("已记住"):
-                    added += 1
+        for item in (obj.items if obj is not None else [])[:REFLECT_CAP]:
+            text = item.text.strip()[:120]
+            if not text:
+                continue
+            # 证据链：based_on 编号映射回流水里的原句做文本快照——洞察不能
+            # 只是模型的一句话，页面上要能展开看它是从哪几条记忆拼出来的。
+            # 流水里不存在的编号（模型幻觉）直接丢弃（schema 已把非数字清掉）。
+            by_id = {r.id: r.content for r in facts}
+            evidence = [{"id": n, "text": by_id[n]} for n in item.based_on if n in by_id]
+            result = await memory.add_memory(text, source="auto", kind="insight", evidence=evidence)
+            if result.startswith("已记住"):
+                added += 1
         report["reflection"] = {"added": added}
         log.info("tidy: reflection added %d insight(s)", added)
     except Exception:  # noqa: BLE001 - 反思挂了绝不动 tidy 的结果

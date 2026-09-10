@@ -205,7 +205,8 @@ def record_health(results: dict[str, dict]) -> dict[str, dict]:
     from app.core.prefs import load_config, save_config
 
     at = _now().astimezone().isoformat(timespec="seconds")
-    merged = {**(load_config().get(HEALTH_KEY) or {})}
+    existing = load_config().get(HEALTH_KEY) or {}
+    merged = {**(existing if isinstance(existing, dict) else {})}
     for mid, r in results.items():
         merged[mid] = {**r, "at": at}
     save_config({HEALTH_KEY: merged})

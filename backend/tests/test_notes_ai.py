@@ -3,16 +3,13 @@
 Covers the new selection-rewrite and note-side-chat actions plus the
 legacy whole-note actions and their input caps.
 """
-import os
 import sys
-from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, ".")
 
 from app.routers.notes import (  # noqa: E402
-    _CHAT_HISTORY_TURNS,
     _CHAT_NOTE_CAP,
     _SELECTION_CONTEXT_CAP,
     AiAction,

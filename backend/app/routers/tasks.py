@@ -260,9 +260,13 @@ async def update_task(task_id: int, body: TaskPatch, db: AsyncSession = Depends(
     if not row:
         raise HTTPException(404, "task not found")
     changes = body.model_dump(exclude_none=True)
+    # chain_next_id 需要能置空（解除任务链）：exclude_none=True 会把显式传的 null 丢掉，
+    # 这里单独补上，让「取消下游」能真正生效。
+    if "chain_next_id" in body.model_fields_set and body.chain_next_id is None:
+        changes["chain_next_id"] = None
     if changes.get("chain_next_id") == task_id:
         raise HTTPException(400, "下游任务不能是自己（会形成循环）")
-    if "chain_next_id" in changes and not await db.get(ScheduledTask, changes["chain_next_id"]):
+    if changes.get("chain_next_id") is not None and not await db.get(ScheduledTask, changes["chain_next_id"]):
         raise HTTPException(400, "下游任务不存在")
     for k, v in changes.items():
         setattr(row, k, v)

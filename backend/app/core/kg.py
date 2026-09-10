@@ -117,12 +117,14 @@ def _sanitize_type(t: str, default: str = "关联") -> str:
 def _parse_extraction(raw: str) -> dict:
     """Model reply → {"entities": [...], "relations": [...]}, filtered and
     bounded. Pure function; always returns the two keys."""
+    from app.core.structured import clean_json
+
     out = {"entities": [], "relations": []}
-    m = re.search(r"\{.*\}", raw or "", re.S)
-    if not m:
+    blob = clean_json(raw or "")
+    if not blob:
         return out
     try:
-        data = json.loads(m.group(0))
+        data = json.loads(blob)
     except json.JSONDecodeError:
         return out
     if not isinstance(data, dict):
@@ -170,20 +172,18 @@ async def _llm_json(text: str, path: str) -> str:
 
     resolved = await resolve_model(model_id)
     p = resolved.provider
-    from app.core.llm import ProviderInfo, stream_chat
+    from app.core.llm import ProviderInfo, stream_chat, structured_chat
 
-    chunks = [
-        c
-        async for c in stream_chat(
-            ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key),
-            resolved.model,
-            [
-                {"role": "system", "content": _EXTRACTION_SYSTEM},
-                {"role": "user", "content": f"[文件 {path}]\n{text}"},
-            ],
-        )
+    info = ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key)
+    messages = [
+        {"role": "system", "content": _EXTRACTION_SYSTEM},
+        {"role": "user", "content": f"[文件 {path}]\n{text}"},
     ]
-    return "".join(chunks)
+    # 实体抽取对格式要求高：原生 JSON mode / tool_choice 优先，不支持再走普通流式
+    native = await structured_chat(info, resolved.model, messages)
+    if native is not None:
+        return native
+    return "".join([c async for c in stream_chat(info, resolved.model, messages)])
 
 
 # ---------- graph writes ----------

@@ -142,3 +142,69 @@ def test_skill_load_lists_extra_files():
     content = skills.load_skill("extra")
     assert "checklist.md" in content
     skills.remove("extra")
+
+
+# ---- edit / update (V6.1.1) ----
+
+def test_read_raw_returns_frontmatter():
+    skills._install_text("upd-raw", VALID)
+    try:
+        raw = skills.read_raw("upd-raw")
+        assert raw.startswith("---")
+        assert "name: code-review" in raw
+        assert "代码审查指南" in raw
+    finally:
+        skills.remove("upd-raw")
+
+
+def test_read_raw_missing_raises():
+    with pytest.raises(ValueError):
+        skills.read_raw("upd-raw-missing")
+
+
+def test_update_changes_content():
+    skills._install_text("code-review", VALID)
+    try:
+        new_text = VALID.replace("审查代码质量时使用", "重构代码时使用").replace("代码审查指南", "重构指南")
+        r = skills.update("code-review", new_text)
+        assert r["name"] == "code-review"
+        assert "重构" in skills.load_skill("code-review")
+        assert "重构" in skills.read_raw("code-review")
+    finally:
+        skills.remove("code-review")
+
+
+def test_update_renames_folder():
+    skills._install_text("upd-old", VALID.replace("code-review", "upd-renamed"))
+    try:
+        r = skills.update("upd-old", VALID.replace("code-review", "upd-renamed"))
+        assert r["name"] == "upd-renamed"
+        assert "代码审查指南" in skills.load_skill("upd-renamed")
+        assert skills.load_skill("upd-old").startswith("[未找到]")
+    finally:
+        skills.remove("upd-renamed")
+
+
+def test_update_missing_skill_raises():
+    with pytest.raises(ValueError):
+        skills.update("upd-ghost", VALID)
+
+
+def test_update_requires_description():
+    skills._install_text("upd-nodesc", VALID)
+    try:
+        with pytest.raises(ValueError):
+            skills.update("upd-nodesc", NO_META)
+    finally:
+        skills.remove("upd-nodesc")
+
+
+def test_update_rename_conflict():
+    skills._install_text("upd-a", VALID.replace("code-review", "upd-a"))
+    skills._install_text("upd-b", VALID.replace("code-review", "upd-b"))
+    try:
+        with pytest.raises(ValueError):
+            skills.update("upd-a", VALID.replace("code-review", "upd-b"))
+    finally:
+        skills.remove("upd-a")
+        skills.remove("upd-b")

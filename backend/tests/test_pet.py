@@ -31,7 +31,7 @@ os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
 os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 
 from app.core import pet  # noqa: E402
-from app.core.prefs import load_config, save_config  # noqa: E402
+from app.core.prefs import save_config  # noqa: E402
 
 
 # --- compose: 零柒's voice -----------------------------------------------------

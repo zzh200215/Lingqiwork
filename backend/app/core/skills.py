@@ -142,6 +142,14 @@ async def load_skill_tool(args: dict) -> str:
     return load_skill((args.get("name") or "").strip())
 
 
+def read_raw(name: str) -> str:
+    """Raw SKILL.md text (frontmatter + body) — for editing in the UI."""
+    d = _resolve_skill_dir((name or "").strip())
+    if d is None:
+        raise ValueError(f"技能 '{name}' 不存在")
+    return (d / "SKILL.md").read_text(encoding="utf-8", errors="ignore")
+
+
 def _install_text(name: str, text: str, overwrite: bool = False) -> dict:
     """Write a SKILL.md as a new skill folder (shared by URL install + tests)."""
     parsed = _parse_skill_text(text)
@@ -157,6 +165,28 @@ def _install_text(name: str, text: str, overwrite: bool = False) -> dict:
     (d / "SKILL.md").write_text(text.strip() + "\n", encoding="utf-8")
     log.info("skill installed: %s", d.name)
     return {"name": d.name, "description": parsed["description"], "chars": len(parsed["body"])}
+
+
+def update(name: str, content: str) -> dict:
+    """Replace an existing skill's SKILL.md; rename the folder when the
+    frontmatter `name:` changes (conflict-checked)."""
+    current = _resolve_skill_dir((name or "").strip())
+    if current is None:
+        raise ValueError(f"技能 '{name}' 不存在")
+    parsed = _parse_skill_text(content)
+    if not parsed["body"]:
+        raise ValueError("SKILL.md 内容为空")
+    if not parsed["description"]:
+        raise ValueError("SKILL.md 缺少 description（frontmatter 里需要一行 description: 何时使用）")
+    new_name = (parsed["name"] or "").strip() or current.name
+    target = _skill_dir(new_name)  # validates the name
+    if target != current and target.exists():
+        raise ValueError(f"技能 '{new_name}' 已存在")
+    if target != current:
+        current.rename(target)
+    (target / "SKILL.md").write_text(content.strip() + "\n", encoding="utf-8")
+    log.info("skill updated: %s", target.name)
+    return {"name": target.name, "description": parsed["description"], "chars": len(parsed["body"])}
 
 
 def _to_raw_github(url: str) -> str:

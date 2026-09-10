@@ -16,7 +16,9 @@ import {
   type TutorTurn,
 } from './api'
 import {
+  streamResearch,
   streamTutorSay,
+  type ResearchReport,
   type TutorMaterialSource,
   type TutorRecallHit,
 } from './stream'
@@ -52,6 +54,14 @@ function Markdown({ children }: { children: string }) {
         {children}
       </ReactMarkdown>
     </div>
+  )
+}
+
+/** 研究报告 → markdown。正文里的 [n] 原样保留，对应来源在卡片的折叠区里。 */
+function reportMarkdown(r: ResearchReport): string {
+  return (
+    `## ${r.title}\n\n` +
+    r.sections.map((s) => (s.heading ? `### ${s.heading}\n\n${s.body}` : s.body)).join('\n\n')
   )
 }
 
@@ -144,6 +154,11 @@ export default function TutorPage() {
   const [rt, setRt] = useState<RoundtableResult | null>(null)
   const [rtMsg, setRtMsg] = useState('')
   const [rtAudio, setRtAudio] = useState('')
+  // 研究（学习闭环的中间两跳）：拉取式——点「深入研究」才跑，成品可存进知识库
+  const [rsBusy, setRsBusy] = useState(false)
+  const [rs, setRs] = useState<ResearchReport | null>(null)
+  const [rsMsg, setRsMsg] = useState('')
+  const [rsSaved, setRsSaved] = useState('')
   const [stats, setStats] = useState<TutorStats | null>(null)
   // 开场建议（DeepTutor 参考项）：从记录里派生的就近入口，挂了就静默没有
   const [starters, setStarters] = useState<TutorStarter[]>([])
@@ -151,6 +166,8 @@ export default function TutorPage() {
   // 正在流式回复的会话：再学一个 / 开新会话 / 离开页面时掐断它，
   // 否则 fetch 会读完整段回复、上游也把 token 烧完（中断传播的前端一半）
   const abortRef = useRef<AbortController | null>(null)
+  // 研究同样要能掐断：换会话 / 离开页面时中止，否则换完会话还会弹出上一场的研究卡
+  const rsAbortRef = useRef<AbortController | null>(null)
 
   const refreshRail = useCallback(() => {
     // best-effort: the rail is context, never a precondition for teaching
@@ -205,6 +222,76 @@ export default function TutorPage() {
     }
   }, [rt, rtBusy])
 
+  // 研究（学习闭环的中间两跳）：以本会话话题为输入拉取式跑一次「搜 → 读 → 成文」。
+  // 进度走 rsMsg；结果卡出来后可以「存进知识库」——落 vault/research/ 并进索引，
+  // 下一次相关话题的取材块就能捞到它（那一跳是现成的，这里不需要多做）。
+  const runResearch = useCallback(async () => {
+    const t = topic.trim()
+    if (!t || rsBusy) return
+    rsAbortRef.current?.abort()
+    const ctl = new AbortController()
+    rsAbortRef.current = ctl
+    setRsBusy(true)
+    setRs(null)
+    setRsSaved('')
+    setRsMsg('规划检索式…')
+    try {
+      const r = await streamResearch(
+        t,
+        (event, data) => {
+          if (event === 'plan')
+            setRsMsg(`已规划 ${(data.queries as string[] | undefined)?.length ?? 0} 个检索式，检索中…`)
+          else if (event === 'gathering') setRsMsg('检索知识库与网络…')
+          else if (event === 'sources')
+            setRsMsg(`取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，成文中…`)
+          else if (event === 'writing') setRsMsg('成文中…')
+        },
+        ctl.signal
+      )
+      if (r.ok && r.report) {
+        setRs(r.report)
+        setRsMsg('')
+      } else {
+        setRsMsg(r.error ?? '研究失败')
+      }
+    } catch (e) {
+      // 主动掐断不算错误：换会话时不该冒出一条红字
+      if ((e as { name?: string })?.name !== 'AbortError') {
+        setRsMsg(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setRsBusy(false)
+    }
+  }, [topic, rsBusy])
+
+  const saveResearch = useCallback(async () => {
+    if (!rs || rsBusy || rsSaved) return
+    setRsBusy(true)
+    setRsMsg('')
+    try {
+      const r = await api.researchSave({
+        title: rs.title,
+        sections: rs.sections,
+        used: rs.used,
+        sources: rs.sources,
+      })
+      setRsSaved(r.filename)
+    } catch (e) {
+      setRsMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRsBusy(false)
+    }
+  }, [rs, rsBusy, rsSaved])
+
+  /** 换会话 / 再学一个 / 离开：中止在跑的研究并清空卡，别让上一场的结果落到新会话上 */
+  const clearResearch = useCallback(() => {
+    rsAbortRef.current?.abort()
+    setRs(null)
+    setRsMsg('')
+    setRsSaved('')
+    setRsBusy(false)
+  }, [])
+
   useEffect(() => refreshRail(), [refreshRail])
 
   // 开场建议只在开场屏有意义：挂载时拉一次，点一个就开会话，不轮询不催
@@ -216,8 +303,14 @@ export default function TutorPage() {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [turns.length, streaming])
 
-  // 卸载（切到其他页面）时掐断还在流式的回复
-  useEffect(() => () => abortRef.current?.abort(), [])
+  // 卸载（切到其他页面）时掐断还在流式的回复 / 在跑的研究
+  useEffect(
+    () => () => {
+      abortRef.current?.abort()
+      rsAbortRef.current?.abort()
+    },
+    []
+  )
 
   const send = useCallback(async (sessionId: number, text: string) => {
     abortRef.current?.abort()
@@ -263,6 +356,7 @@ export default function TutorPage() {
     setTopic(t)
     setMode(m)
     setErr('')
+    clearResearch()
     try {
       const s = await api.tutorStart(t, repo, m)
       setSid(s.id)
@@ -276,7 +370,7 @@ export default function TutorPage() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
-  }, [busy, send, refreshRail])
+  }, [busy, send, refreshRail, clearResearch])
 
   const begin = useCallback(() => beginWith(topic), [beginWith, topic])
 
@@ -307,6 +401,7 @@ export default function TutorPage() {
 
   const open = useCallback(async (id: number) => {
     setErr('')
+    clearResearch()
     try {
       const d = await api.tutorSession(id)
       setSid(d.id)
@@ -319,7 +414,7 @@ export default function TutorPage() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
-  }, [])
+  }, [clearResearch])
 
   // 全局搜索深链：/tutor.html?session=ID 直接打开那次会话（教学命中从聊天页跳过来）
   const deepLink = useRef(new URLSearchParams(window.location.search).get('session'))
@@ -346,7 +441,8 @@ export default function TutorPage() {
     setErr('')
     setVerdict('')
     setEnded(null)
-  }, [])
+    clearResearch()
+  }, [clearResearch])
 
   return (
     <Layout page="tutor">
@@ -461,6 +557,14 @@ export default function TutorPage() {
                   ) : null}
                 </div>
                 <button
+                  onClick={() => void runResearch()}
+                  disabled={rsBusy || !topic.trim()}
+                  title="围绕这个话题搜资料、读正文，写一篇带引用的讲解；成品可存进知识库"
+                  className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-sky-600 transition-colors hover:bg-sky-50 hover:text-sky-700 disabled:opacity-40 dark:text-sky-300 dark:hover:bg-sky-500/10"
+                >
+                  {rsBusy ? '研究中…' : '🔍 深入研究'}
+                </button>
+                <button
                   onClick={reset}
                   className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                 >
@@ -489,6 +593,61 @@ export default function TutorPage() {
                     <p className="text-sm text-neutral-400">在想…</p>
                   ) : null}
                   {err ? <p className="text-sm text-rose-600 dark:text-rose-400">{err}</p> : null}
+                  {/* 研究卡就地展开在会话流里：进度 → 带引用的讲解 → 存进知识库。
+                      它是这一场会话的动作，不落右栏、不计数（第 2 节）。 */}
+                  {rs || rsBusy || rsMsg ? (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-500/30 dark:bg-sky-500/10">
+                      <div className="flex items-center justify-between gap-2 pb-1">
+                        <p className="text-[11px] font-medium uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                          🔍 研究
+                        </p>
+                        {rs ? (
+                          <button
+                            onClick={() => void saveResearch()}
+                            disabled={rsBusy || !!rsSaved}
+                            className="rounded-full border border-sky-300 px-2 py-0.5 text-[10px] text-sky-700 transition-colors hover:bg-sky-100 disabled:opacity-40 dark:border-sky-500/40 dark:text-sky-300 dark:hover:bg-sky-500/20"
+                          >
+                            {rsSaved ? '已存进知识库' : rsBusy ? '保存中…' : '存进知识库'}
+                          </button>
+                        ) : null}
+                      </div>
+                      {rsMsg ? <p className="text-[11px] text-neutral-500">{rsMsg}</p> : null}
+                      {rs ? (
+                        <>
+                          <Markdown>{reportMarkdown(rs)}</Markdown>
+                          {rs.sources.length > 0 ? (
+                            <details className="mt-2 border-t border-sky-200/70 pt-2 dark:border-sky-500/20">
+                              <summary className="cursor-pointer text-[11px] text-neutral-500">
+                                来源 {rs.sources.length} 条（你自己的材料{' '}
+                                {rs.sources.filter((s) => s.kind === 'kb').length} 条）
+                              </summary>
+                              <ul className="mt-1 space-y-0.5">
+                                {rs.sources.map((s) => (
+                                  <li key={s.n} className="text-[11px] leading-relaxed">
+                                    <span
+                                      className={
+                                        rs.used.includes(s.n)
+                                          ? 'font-medium text-neutral-800 dark:text-neutral-100'
+                                          : 'text-neutral-500 dark:text-neutral-400'
+                                      }
+                                    >
+                                      [{s.n}] {s.kind === 'kb' ? '📄' : '🌐'} {s.title}
+                                    </span>
+                                    <span className="text-neutral-400"> — {s.ref}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          ) : null}
+                          {rsSaved ? (
+                            <p className="mt-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                              已存到 {rsSaved}，已进索引——下次相关话题的取材会先捞到它
+                            </p>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div ref={bottom} />
                 </div>
               </div>

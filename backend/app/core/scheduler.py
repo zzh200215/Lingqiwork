@@ -229,12 +229,18 @@ async def job_report() -> list[dict]:
             fails += 1
         last = runs[0] if runs else None
         flag = KNOWN_JOBS.get(job_id)
+        if flag is None:
+            # 动态任务型 job（task_N 等）没有配置开关；历史残留（任务已禁用/删除）
+            # 不该被 health 当成「应该在跑但没在跑」的假警报，一律记为 disabled。
+            disabled = job_id not in live
+        else:
+            disabled = bool(flag) and not cfg.get(flag, True)
         out.append(
             {
                 "job_id": job_id,
                 "registered": job_id in live,
                 "enabled_by": flag or "",
-                "disabled": bool(flag) and not cfg.get(flag, True),
+                "disabled": disabled,
                 "next_run": next_run(job_id),
                 "runs": len(runs),
                 "consecutive_failures": fails,

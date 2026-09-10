@@ -36,7 +36,6 @@ atexit.register(_cleanup)
 
 from contextlib import asynccontextmanager  # noqa: E402
 
-import pytest  # noqa: E402
 
 from app.core import mcp_server  # noqa: E402
 from app.db import SessionLocal, engine  # noqa: E402

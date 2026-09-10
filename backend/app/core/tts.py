@@ -10,8 +10,10 @@ content hash under data/tts/ and served from /api/tts/audio/.
 import asyncio
 import hashlib
 import logging
+import os
 import re
 import subprocess
+import uuid
 from pathlib import Path
 
 from app.config import DATA_DIR
@@ -54,7 +56,9 @@ def _run_sapi(text: str, out: Path) -> None:
     """Local Windows TTS via PowerShell System.Speech (blocking, offline)."""
     import tempfile
 
-    txt = Path(tempfile.mkstemp(suffix=".txt", prefix="wb-tts-")[1])
+    fd, name = tempfile.mkstemp(suffix=".txt", prefix="wb-tts-")
+    os.close(fd)
+    txt = Path(name)
     try:
         txt.write_text(text, encoding="utf-8")
         proc = subprocess.run(
@@ -100,7 +104,8 @@ async def synthesize(text: str, voice: str = "", engine: str = "edge") -> dict:
     if engine == "sapi":
         await asyncio.to_thread(_run_sapi, text, cache)
     else:
-        tmp = Path(str(cache) + ".part")
+        # 唯一临时名：并发合成同一文本时若共用同一个 .part 会交错写坏缓存
+        tmp = Path(f"{cache}.part-{uuid.uuid4().hex[:8]}")
         try:
             await _run_edge(text, voice, tmp)
             tmp.replace(cache)

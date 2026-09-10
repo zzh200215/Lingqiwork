@@ -125,10 +125,41 @@ async def report():
     except Exception:  # noqa: BLE001
         log.debug("tidy report failed", exc_info=True)
 
+    # 结构化输出（模型吐 JSON 的地方）的成功/降级/失败次数。这些调用此前失败
+    # 是静默的，这里让「抽取是不是一直在悄悄失败」变成可回答的问题。
+    structured: dict = {}
+    try:
+        from app.core import structured as st
+
+        structured = st.stats()
+    except Exception:  # noqa: BLE001
+        log.debug("structured stats failed", exc_info=True)
+
+    # 提示词注册中心：数量 + 登记漂移（某模块 import 失败 / 常量缺失）。
+    prompts: dict = {}
+    try:
+        from app.core import prompts as pr
+
+        prompts = pr.summary()
+    except Exception:  # noqa: BLE001
+        log.debug("prompts summary failed", exc_info=True)
+
+    # 成本预算护栏：月度预算状态（0 预算 = 未启用，零成本返回）。
+    cost: dict = {}
+    try:
+        from app.core import cost as cost_core
+
+        cost = await cost_core.monthly_budget_status()
+    except Exception:  # noqa: BLE001
+        log.debug("cost budget status failed", exc_info=True)
+
     return {
         "self": base,
         "backups": backups,
         "kb": kb,
         "tasks_failing": tasks_failing,
         "tidy": tidy,
+        "structured": structured,
+        "prompts": prompts,
+        "cost": cost,
     }

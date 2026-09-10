@@ -11,13 +11,14 @@ changing top_k can be compared after the fact.
 import asyncio
 import json
 import logging
-import re
 import time
 from datetime import datetime
 
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 
 from app.core.llm import ProviderInfo, stream_chat
+from app.core.structured import extract_json
 from app.core.prefs import load_config
 from app.db import SessionLocal
 from app.models import EvalItem, EvalRun
@@ -69,6 +70,28 @@ async def _complete(info: ProviderInfo, model: str, messages: list[dict]) -> str
     return "".join([c async for c in stream_chat(info, model, messages)]).strip()
 
 
+class JudgeVerdict(BaseModel):
+    """RAG 评审判定。score 越界由调用方钳制到 0-5；非数字按 0 记。"""
+
+    score: float = 0.0
+    reason: str = ""
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def _score(cls, v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _reason(cls, v):
+        if v is None or isinstance(v, (list, dict)):
+            return ""
+        return str(v).strip()
+
+
 async def _answer_and_judge(
     info: ProviderInfo, model: str, question: str, hits: list[dict]
 ) -> tuple[str, int | None, str]:
@@ -84,7 +107,7 @@ async def _answer_and_judge(
     if not answer:
         return "", None, "模型返回空回答"
 
-    raw = await _complete(
+    obj, meta = await extract_json(
         info,
         model,
         [
@@ -94,16 +117,15 @@ async def _answer_and_judge(
                 "content": f"问题：{question}\n\n检索片段：\n{context}\n\n候选回答：\n{answer}",
             },
         ],
+        JudgeVerdict,
     )
-    m = re.search(r"\{.*\}", raw, re.S)
-    if not m:
-        return answer[:_ANSWER_CAP], None, f"判分未返回 JSON：{raw[:60]}"
-    try:
-        data = json.loads(m.group(0))
-        score = int(round(float(data.get("score"))))
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return answer[:_ANSWER_CAP], None, f"判分解析失败：{raw[:60]}"
-    return answer[:_ANSWER_CAP], max(0, min(5, score)), str(data.get("reason") or "").strip()[:100]
+    if obj is None:
+        return answer[:_ANSWER_CAP], None, f"判分未返回 JSON：{meta.error[:60]}"
+    return (
+        answer[:_ANSWER_CAP],
+        max(0, min(5, int(round(obj.score)))),
+        obj.reason.strip()[:100],
+    )
 
 
 # ---------- batch run ----------
@@ -212,5 +234,136 @@ async def run_eval(top_k: int | None = None, judge: bool = True) -> dict:
         **agg,
         "labelled": len(labelled),
         "detail": results,
+    }
+
+
+# ---------- regression compare ----------
+
+_METRICS = ("hit1", "hit3", "hitk", "mrr", "faithfulness")
+
+
+def _run_dict(r: EvalRun) -> dict:
+    """EvalRun → 可对比的扁平字典（core 层不依赖 router 的 _run_out）。"""
+    return {
+        "id": r.id,
+        "created_at": r.created_at.astimezone().isoformat(timespec="seconds") if r.created_at else None,
+        "top_k": r.top_k,
+        "hybrid": r.hybrid,
+        "rerank": r.rerank,
+        "full_context": r.full_context,
+        "judge_model": r.judge_model,
+        "total": r.total,
+        "hit1": r.hit1,
+        "hit3": r.hit3,
+        "hitk": r.hitk,
+        "mrr": r.mrr,
+        "faithfulness": r.faithfulness,
+        "seconds": r.seconds,
+    }
+
+
+def _compare_two(newer: dict, older: dict, eps: float = 1e-6) -> dict:
+    """两个 run 的指标差值。newer - older；正值=变好，负值=变差。跳过任一为 None 的指标。"""
+    deltas: dict[str, float] = {}
+    for m in _METRICS:
+        a, b = newer.get(m), older.get(m)
+        if a is None or b is None:
+            continue
+        d = round((a - b), 4)
+        if abs(d) > eps:
+            deltas[m] = d
+    return {
+        "deltas": deltas,
+        "regressions": sorted(m for m, d in deltas.items() if d < 0),
+        "improvements": sorted(m for m, d in deltas.items() if d > 0),
+    }
+
+
+async def compare_history(limit: int = 2) -> dict:
+    """对比最近 N 次评测运行，回答「这次比上次好了还是坏了」。
+
+    只读，不跑模型、不写库。limit < 2 时没有可比对象，返回结论说明。
+    """
+    n = max(2, min(limit, 50))
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(select(EvalRun).order_by(EvalRun.id.desc()).limit(n))
+        ).scalars().all()
+
+    runs = [_run_dict(r) for r in rows]
+    if len(runs) < 2:
+        return {
+            "runs": runs,
+            "comparison": None,
+            "conclusion": "至少需要两次运行才能对比（先跑一次评测，改完再跑一次）",
+        }
+
+    # 相邻两两对比，最新对上次为主结论，其余作为近期趋势
+    comparisons = []
+    for i in range(len(runs) - 1):
+        newer, older = runs[i], runs[i + 1]
+        comparisons.append(
+            {
+                "newer_id": newer["id"],
+                "older_id": older["id"],
+                **_compare_two(newer, older),
+            }
+        )
+
+    latest_cmp = comparisons[0]
+    if latest_cmp["regressions"]:
+        conclusion = (
+            f"相比上次（run#{latest_cmp['older_id']}），本次（run#{latest_cmp['newer_id']}）"
+            f"变差：{', '.join(latest_cmp['regressions'])}。改了什么值得回看。"
+        )
+    elif latest_cmp["deltas"]:
+        conclusion = (
+            f"相比上次（run#{latest_cmp['older_id']}），本次（run#{latest_cmp['newer_id']}）"
+            f"变好：{', '.join(latest_cmp['improvements'])}。"
+        )
+    else:
+        conclusion = "与上次相比指标无变化。"
+
+    return {
+        "runs": runs,
+        "comparison": latest_cmp,
+        "history": comparisons,
+        "conclusion": conclusion,
+    }
+
+
+async def eval_health() -> dict:
+    """评测集健康度诊断：条数、标注覆盖率、区分度。
+
+    核心是戳破「全满分」的假象——评测集太简单时，分数恒为 1.0，改坏了检索也测不出。
+    """
+    async with SessionLocal() as db:
+        items = (await db.execute(select(EvalItem))).scalars().all()
+        latest = (
+            await db.execute(select(EvalRun).order_by(EvalRun.id.desc()).limit(1))
+        ).scalars().first()
+
+    total = len(items)
+    labelled = sum(1 for i in items if i.expected_source.strip())
+    warnings: list[str] = []
+    if total == 0:
+        warnings.append("评测集为空——先添加至少一条「问题 + 期望源」")
+    elif total < 5:
+        warnings.append(f"评测集只有 {total} 条，区分度有限，建议扩充到 10+ 条")
+    if total and labelled < total:
+        warnings.append(f"{total - labelled} 条没有期望源，只测忠实度、不测检索排序")
+
+    if latest is not None and latest.hit1 == 1.0 and latest.hit3 == 1.0 and total >= 3:
+        warnings.append(
+            "最近一次检索全满分（hit@1=hit@3=1.0）——评测集太简单，测不出回归。"
+            "建议加入「多个文件都可能相关」的竞争性问题"
+        )
+
+    return {
+        "total": total,
+        "labelled": labelled,
+        "unlabelled": total - labelled,
+        "latest_run_id": latest.id if latest else None,
+        "warnings": warnings,
     }
 

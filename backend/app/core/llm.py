@@ -7,12 +7,16 @@ until the model answers without tools, or the round budget is exhausted.
 OpenAI-compatible protocol covers openai/deepseek/qwen/moonshot/ollama/
 openrouter — same client, different base_url.
 """
+import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
+
+log = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
 
@@ -89,29 +93,32 @@ async def _openai_round(
     text_parts: list[str] = []
     finish_reason = None
 
-    async for chunk in stream:
-        _absorb_usage(usage_out, getattr(chunk, "usage", None))
-        if not chunk.choices:
-            continue
-        choice = chunk.choices[0]
-        finish_reason = choice.finish_reason
-        delta = choice.delta
-        if delta is None:
-            continue
-        if delta.content:
-            text_parts.append(delta.content)
-            emit_text(delta.content)
-        if delta.tool_calls:
-            for tc in delta.tool_calls:
-                if tc.index is None:
-                    continue
-                acc = calls_by_index.setdefault(tc.index, {"id": "", "name": "", "args": ""})
-                if tc.id:
-                    acc["id"] = tc.id
-                if tc.function and tc.function.name:
-                    acc["name"] += tc.function.name
-                if tc.function and tc.function.arguments:
-                    acc["args"] += tc.function.arguments
+    try:
+        async for chunk in stream:
+            _absorb_usage(usage_out, getattr(chunk, "usage", None))
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            finish_reason = choice.finish_reason
+            delta = choice.delta
+            if delta is None:
+                continue
+            if delta.content:
+                text_parts.append(delta.content)
+                emit_text(delta.content)
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.index is None:
+                        continue
+                    acc = calls_by_index.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                    if tc.id:
+                        acc["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        acc["name"] += tc.function.name
+                    if tc.function and tc.function.arguments:
+                        acc["args"] += tc.function.arguments
+    finally:
+        await stream.close()
 
     calls: list[ToolCall] = []
     if finish_reason == "tool_calls":
@@ -143,7 +150,7 @@ async def _anthropic_round(
     async with client.messages.stream(
         model=model,
         max_tokens=8192,
-        system="\n\n".join(system_parts) or ...,
+        system="\n\n".join(system_parts) or None,
         messages=chat,
         tools=tools or None,
     ) as stream:
@@ -224,6 +231,7 @@ async def run_agentic_chat(
     max_rounds: int = MAX_TOOL_ROUNDS,
     on_round: Callable[[int], None] | None = None,
     usage: dict | None = None,
+    parallel_tools: bool = True,
 ) -> str:
     """Chat with optional tool calling. Returns the final assistant text.
 
@@ -241,25 +249,39 @@ async def run_agentic_chat(
     use_tools = bool(tools)
     tool_param = tools if use_tools else None
 
+    # 跟踪本轮是否已经吐过字：降级重试只在「第一轮、且一个字没吐」时允许。
+    # 已开始输出再报错（网络中断等）不能当成「不支持工具」从零重试——会重复输出。
+    emitted_any = False
+
+    def _emit(t: str) -> None:
+        nonlocal emitted_any
+        if t:
+            emitted_any = True
+        emit_text(t)
+
     for round_no in range(1, max_rounds + 1):
         if on_round:
             on_round(round_no)
         round_usage: dict = {}
+        client = None
         try:
             if provider.kind == "anthropic":
                 client = AsyncAnthropic(api_key=provider.api_key)
                 a_tools = [_flatten_tool_spec(t) for t in tool_param] if tool_param else None
-                text, calls = await _anthropic_round(client, model, msgs, a_tools, emit_text, round_usage)
+                text, calls = await _anthropic_round(client, model, msgs, a_tools, _emit, round_usage)
             else:
                 client = _openai_client(provider)
-                text, calls = await _openai_round(client, model, msgs, tool_param, emit_text, round_usage)
+                text, calls = await _openai_round(client, model, msgs, tool_param, _emit, round_usage)
         except Exception:
-            if use_tools:
+            if use_tools and round_no == 1 and not emitted_any:
                 # provider likely doesn't support tools — retry once, plain
                 use_tools = False
                 tool_param = None
                 continue
             raise
+        finally:
+            if client is not None:
+                await client.close()
         if usage is not None:
             usage["input"] = usage.get("input", 0) + round_usage.get("input", 0)
             usage["output"] = usage.get("output", 0) + round_usage.get("output", 0)
@@ -267,17 +289,26 @@ async def run_agentic_chat(
         if not calls:
             return text or ""
 
-        outputs: list[tuple[ToolCall, str]] = []
+        # 先把所有工具调用按顺序发出（UI 顺序稳定），再执行。
         for tc in calls:
             emit_tool(tc.name, tc.arguments)
+
+        async def _run_one(tc: ToolCall) -> tuple[ToolCall, str]:
             try:
                 result = await run_tool(tc.name, tc.arguments)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - 单个工具失败不拖垮整轮
                 result = f"[tool error] {type(e).__name__}: {e}"
             result = str(result)
             if len(result) > 8000:
                 result = result[:8000] + "\n...[工具输出过长已截断]"
-            outputs.append((tc, result))
+            return (tc, result)
+
+        # 模型一次返回多个 tool_calls 时，语义就是「可并行」，独立工具同时跑省时；
+        # gather 保持输入顺序，_append_tool_round 的输出对应关系不变。单工具自然串行。
+        if parallel_tools and len(calls) > 1:
+            outputs = list(await asyncio.gather(*(_run_one(tc) for tc in calls)))
+        else:
+            outputs = [await _run_one(tc) for tc in calls]
 
         msgs = _append_tool_round(msgs, provider.kind, text, outputs)
 
@@ -298,15 +329,18 @@ async def stream_chat(
         client = AsyncAnthropic(api_key=provider.api_key)
         system_parts = [m["content"] for m in messages if m["role"] == "system"]
         chat = [m for m in messages if m["role"] != "system"]
-        async with client.messages.stream(
-            model=model,
-            max_tokens=8192,
-            system="\n\n".join(system_parts) or ...,
-            messages=chat,
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
-            _absorb_usage(usage, getattr(await stream.get_final_message(), "usage", None))
+        try:
+            async with client.messages.stream(
+                model=model,
+                max_tokens=8192,
+                system="\n\n".join(system_parts) or None,
+                messages=chat,
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+                _absorb_usage(usage, getattr(await stream.get_final_message(), "usage", None))
+        finally:
+            await client.close()
     else:
         client = _openai_client(p=provider)
         kwargs: dict = dict(model=model, messages=messages, stream=True)
@@ -326,11 +360,14 @@ async def stream_chat(
         try:
             async for chunk in stream:
                 _absorb_usage(usage, getattr(chunk, "usage", None))
-                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if not chunk.choices or chunk.choices[0].delta is None:
+                    continue
+                delta = chunk.choices[0].delta.content
                 if delta:
                     yield delta
         finally:
             await stream.close()
+            await client.close()
 
 
 async def stream_chat_fallback(
@@ -365,3 +402,93 @@ async def stream_chat_fallback(
             last = e
     if last is not None:
         raise last
+
+
+# ---------- structured output (JSON) ----------
+
+_JSON_HINT = "只输出 JSON，不要解释、不要代码块。"
+
+
+def _ensure_json_hint(messages: list[dict]) -> list[dict]:
+    """部分 OpenAI 兼容实现要求 prompt 里出现 JSON 字样才接受 json_object。"""
+    blob = " ".join(str(m.get("content") or "") for m in messages)
+    if "json" in blob.lower():
+        return messages
+    return [*messages, {"role": "system", "content": _JSON_HINT}]
+
+
+async def _openai_structured(
+    provider: ProviderInfo, model: str, messages: list[dict], usage: dict | None
+) -> str:
+    client = _openai_client(provider)
+    try:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=_ensure_json_hint(messages),
+            response_format={"type": "json_object"},
+        )
+        _absorb_usage(usage, getattr(resp, "usage", None))
+        return resp.choices[0].message.content or ""
+    finally:
+        await client.close()
+
+
+async def _anthropic_structured(
+    provider: ProviderInfo,
+    model: str,
+    messages: list[dict],
+    json_schema: dict | None,
+    usage: dict | None,
+) -> str:
+    """Anthropic 没有 JSON mode：用 tool_choice 强制模型填一个工具来拿到结构化结果。"""
+    client = AsyncAnthropic(api_key=provider.api_key)
+    try:
+        system_parts = [m["content"] for m in messages if m["role"] == "system"]
+        chat = [m for m in messages if m["role"] != "system"]
+        tool = {
+            "name": "emit_result",
+            "description": "按给定的 schema 输出结构化结果。",
+            "input_schema": json_schema or {"type": "object"},
+        }
+        resp = await client.messages.create(
+            model=model,
+            max_tokens=8192,
+            system="\n\n".join(system_parts) or None,
+            messages=chat,
+            tools=[tool],
+            tool_choice={"type": "tool", "name": "emit_result"},
+        )
+        _absorb_usage(usage, getattr(resp, "usage", None))
+        for block in resp.content:
+            if getattr(block, "type", "") == "tool_use":
+                return json.dumps(block.input, ensure_ascii=False)
+        return "".join(
+            getattr(b, "text", "") for b in resp.content if getattr(b, "type", "") == "text"
+        )
+    finally:
+        await client.close()
+
+
+async def structured_chat(
+    provider: ProviderInfo,
+    model: str,
+    messages: list[dict],
+    *,
+    json_schema: dict | None = None,
+    usage: dict | None = None,
+) -> str | None:
+    """非流式结构化输出：想直接拿到 JSON 文本时用这个。
+
+    与 `stream_chat` 平级并存，不改动现有流式路径。优先用 provider 原生能力：
+      - OpenAI 兼容：`response_format={"type": "json_object"}`
+      - Anthropic：无 JSON mode，改为 tool_choice 强制调用 `emit_result`
+    任一环节不支持（本地模型、部分兼容层的常见情况）都返回 None，由调用方
+    降级到「prompt 约束 + 清洗提取」——见 core/structured.py。
+    """
+    try:
+        if provider.kind == "anthropic":
+            return await _anthropic_structured(provider, model, messages, json_schema, usage)
+        return await _openai_structured(provider, model, messages, usage)
+    except Exception as e:  # noqa: BLE001 - 不支持就是不支持，交给调用方降级
+        log.info("structured_chat unsupported (%s %s): %s", provider.kind, model, e)
+        return None

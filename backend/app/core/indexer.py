@@ -39,6 +39,10 @@ EXTERNAL_PREFIXES = (REPO_SOURCE_PREFIX, DIR_SOURCE_PREFIX)  # not owned by vaul
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
     chunk_overlap=CHUNK_OVERLAP,
+    # 只切到二级/三级标题（\n## \n###）：vault 笔记的一级标题是「文档标题」而非
+    # 「章节」，一个文档只有一个，不需要按它切。刻意不加 \n# —— 加了反而会在
+    # 正文接近 chunk_size 时把标题孤立成一个 8 字符的小块（标题+正文 > chunk_size
+    # 无法合并），检索价值更低。
     separators=["\n## ", "\n### ", "\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""],
 )
 
@@ -70,8 +74,28 @@ def _chunk_id(rel_path: str, idx: int) -> str:
     return f"{rel_path}::{idx}"
 
 
+def _is_orphan_heading(chunk: str) -> bool:
+    """只有标题、没有正文的孤立小块——切分器用 \\n\\n 把标题从正文剥离开的产物。"""
+    return chunk.startswith("#") and len(chunk) < 60
+
+
 def chunk_text(text: str) -> list[str]:
-    return [c.strip() for c in _splitter.split_text(text) if c.strip()]
+    raw = [c.strip() for c in _splitter.split_text(text) if c.strip()]
+    # 合并孤立的标题 chunk：RecursiveCharacterTextSplitter 用 \n\n 切分时会把
+    # 「## 标题」从正文剥离开；当正文接近 chunk_size 时，标题（很短）无法合并
+    # 回去，孤立成一个只有标题的小块——它和正文分离，检索时语义不完整。这里把
+    # 孤立标题并回下一个 chunk 作为前缀，恢复「标题 + 正文」的完整性。
+    out: list[str] = []
+    i = 0
+    while i < len(raw):
+        cur = raw[i]
+        if _is_orphan_heading(cur) and i + 1 < len(raw) and not _is_orphan_heading(raw[i + 1]):
+            out.append(cur + "\n" + raw[i + 1])
+            i += 2
+        else:
+            out.append(cur)
+            i += 1
+    return out
 
 
 def index_file(path: Path, root: Path = VAULT_DIR, source_prefix: str = "") -> int:
@@ -91,12 +115,12 @@ def index_file(path: Path, root: Path = VAULT_DIR, source_prefix: str = "") -> i
         delete_source(rel)
         return 0
 
-    # remove any previous chunks of this file (count may have changed)
-    col.delete(where={"source": rel})
-
     vectors = embedder.embed(chunks)
+    new_ids = [_chunk_id(rel, i) for i in range(len(chunks))]
+    # 先 upsert 再清残留：delete 放到 upsert 之后，并发检索看到的中间态是
+    # 「新旧并存」而非「整文件缺失」——最多读到旧内容，不会漏掉整个文件。
     col.upsert(
-        ids=[_chunk_id(rel, i) for i in range(len(chunks))],
+        ids=new_ids,
         documents=chunks,
         metadatas=[
             {
@@ -109,6 +133,14 @@ def index_file(path: Path, root: Path = VAULT_DIR, source_prefix: str = "") -> i
         ],
         embeddings=vectors,
     )
+    # 文件 chunk 数变少时，确定性 id 覆盖不到多出来的旧 chunk，这里清掉
+    try:
+        existing = col.get(where={"source": rel}, include=["metadatas"])
+        stale = [i for i in (existing.get("ids") or []) if i not in set(new_ids)]
+        if stale:
+            col.delete(ids=stale)
+    except Exception:  # noqa: BLE001 - 清理残留失败不影响本次索引
+        log.warning("clean stale chunks failed for %s", rel, exc_info=True)
     log.info("indexed %s -> %d chunks", rel, len(chunks))
     notify_index_change()
     return len(chunks)

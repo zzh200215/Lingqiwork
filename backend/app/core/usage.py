@@ -71,7 +71,6 @@ async def open_days(days: int = 7) -> list[str]:
     from sqlalchemy import text as sql
 
     from app.db import SessionLocal
-    from app.models import UsageVisit
 
     rows = []
     try:

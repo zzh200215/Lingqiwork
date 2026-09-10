@@ -733,7 +733,7 @@ export interface TodayNext {
   action: { kind: 'settings' | 'review' | 'make_card' | 'none'; label: string }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
@@ -968,7 +968,12 @@ export const api = {
   deleteSkill: (name: string) =>
     request<{ ok: boolean; name: string }>(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   readSkill: (name: string) =>
-    request<{ name: string; content: string }>(`/api/skills/content?name=${encodeURIComponent(name)}`),
+    request<{ name: string; content: string; raw: string }>(`/api/skills/content?name=${encodeURIComponent(name)}`),
+  updateSkill: (name: string, content: string) =>
+    request<{ name: string; description: string; chars: number }>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
 
   globalSearch: async (q: string): Promise<SearchHit[]> => {
     const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
@@ -1039,6 +1044,18 @@ export const api = {
       '/api/roundtable/podcast',
       { method: 'POST', body: JSON.stringify({ file }) }
     ),
+
+  /** 研究（学习闭环的中间两跳）：把上一次的报告落成 vault/research/ 里的一篇 md 并进索引 */
+  researchSave: (payload: {
+    title: string
+    sections: { heading: string; body: string }[]
+    used: number[]
+    sources: { n: number; kind: string; title: string; ref: string }[]
+  }) =>
+    request<{ filename: string; title: string; chunks: number }>('/api/research/save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   listRepos: () => request<RepoList>('/api/repos'),
   cloneRepo: (url: string, name?: string) =>

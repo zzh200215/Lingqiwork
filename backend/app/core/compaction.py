@@ -4,8 +4,6 @@ When chat history exceeds a character budget, the oldest half is summarized
 by the current model into a compact digest. The digest is cached per
 conversation keyed by the transcript content, so edits naturally invalidate.
 """
-import asyncio
-
 from app.core.llm import ProviderInfo, stream_chat
 
 # ~24k chars of history before we compress (roughly 8-12k tokens for zh/en mix)

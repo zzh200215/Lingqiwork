@@ -50,6 +50,9 @@ _DEFAULTS: dict[str, Any] = {
     "image_provider": "",  # provider name whose key/base_url to use; "" = first enabled
     "image_model": "qwen-image-3.0",
     "image_size": "1024*1024",
+    # --- 联网搜索（web_search 工具的引擎选择）---
+    "websearch_api": "",  # "" = 免费爬取 Bing/DDG（无需 key）；"keenable" = Keenable 搜索 API
+    "websearch_api_key": "",  # Keenable 的 X-API-Key，随 data/config.json 落盘（不入 git）
     "repos": [],  # cloned git repos: {"name","url","files","chunks","last_synced"}
     "watch_dirs": [],  # external indexed folders: {"name","path","enabled","files","chunks",...}
     "feeds": [],  # rss subs: {"name","url","title","enabled","new","last_synced"}
@@ -78,6 +81,12 @@ _DEFAULTS: dict[str, Any] = {
     # 后台可信：逐模型探测结果 {"provider/model": {ok, code, message, at, ms}}。
     # 不是开关，是缓存——default_model_id() 用它跳过已知打不通的模型。
     "provider_health": {},
+    # --- 成本与配额（opt-in，默认关）---
+    # model_id → {"input": 每百万 token 价, "output": 每百万 token 价}。
+    # 单位由用户自定（USD/CNY 均可），成本输出的币种与所填价格一致。空 = 只显示 token。
+    "model_prices": {},
+    # 月度预算（与 model_prices 同币种），0 = 不设限。超了在体检报告标出，不硬性拦停。
+    "monthly_budget_usd": 0,
 }
 
 

@@ -22,6 +22,7 @@ from app.routers import (
     cards,
     chat,
     conversations,
+    cost,
     dashboard,
     dirs,
     evals,
@@ -37,6 +38,7 @@ from app.routers import (
     podcast,
     prompts,
     repos,
+    research,
     roundtable,
     search,
     settings as settings_router,
@@ -147,6 +149,7 @@ app.include_router(settings_router.router)
 app.include_router(agents.router)
 app.include_router(conversations.router)
 app.include_router(chat.router)
+app.include_router(cost.router)
 app.include_router(kb.router)
 app.include_router(notes.router)
 app.include_router(dashboard.router)
@@ -155,6 +158,7 @@ app.include_router(skills.router)
 app.include_router(search.router)
 app.include_router(beliefs.router)
 app.include_router(roundtable.router)
+app.include_router(research.router)
 app.include_router(arena.router)
 app.include_router(backup.router)
 app.include_router(tasks.router)

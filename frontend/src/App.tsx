@@ -169,7 +169,11 @@ const MessageRow = React.memo(function MessageRow({
                   <li key={j} className="border-l-2 border-violet-300 pl-2 dark:border-violet-700">
                     <div className="flex items-center justify-between gap-2 text-neutral-500">
                       <span className="min-w-0 truncate">
-                        [{j + 1}] {s.source} · score {s.score}
+                        [{j + 1}] {s.source}
+                        {s.chunk != null && (
+                          <span className="text-neutral-400"> · 第 {s.chunk + 1} 段</span>
+                        )}
+                        {' · '}score {s.score}
                         {s.channels?.includes('full') && (
                           <span className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
                             全文

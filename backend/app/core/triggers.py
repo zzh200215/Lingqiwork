@@ -68,7 +68,7 @@ class TaskTriggerWatcher:
             try:
                 rows = conn.execute(
                     "SELECT id, watch_path FROM tasks "
-                    "WHERE enabled = 1 AND trigger_kind = 'watch' AND watch_path != ''"
+                    "WHERE enabled = 1 AND trigger_kind = 'watch'"
                 ).fetchall()
             finally:
                 conn.close()

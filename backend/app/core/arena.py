@@ -35,12 +35,24 @@ async def run(prompt: str) -> list[dict]:
         t0 = time.monotonic()
         try:
             chunks: list[str] = []
-            async for delta in stream_chat(info, model, [{"role": "user", "content": prompt}]):
-                chunks.append(delta)
+
+            async def _collect() -> None:
+                async for delta in stream_chat(info, model, [{"role": "user", "content": prompt}]):
+                    chunks.append(delta)
+
+            await asyncio.wait_for(_collect(), timeout=PER_CALL_TIMEOUT)
             text = "".join(chunks).strip()
             if not text:
                 return {"label": label, "ok": False, "error": "模型返回空内容", "seconds": round(time.monotonic() - t0, 1)}
             return {"label": label, "ok": True, "text": text, "seconds": round(time.monotonic() - t0, 1)}
+        except asyncio.TimeoutError:
+            log.warning("arena: %s timed out after %ss", label, PER_CALL_TIMEOUT)
+            return {
+                "label": label,
+                "ok": False,
+                "error": f"超时未响应（>{PER_CALL_TIMEOUT}s）",
+                "seconds": round(time.monotonic() - t0, 1),
+            }
         except Exception as e:  # noqa: BLE001 - 一家挂了不影响其他家的成绩
             log.warning("arena: %s failed", label, exc_info=True)
             code = providers.error_code(e) if hasattr(providers, "error_code") else type(e).__name__

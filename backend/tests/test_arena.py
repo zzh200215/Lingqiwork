@@ -12,7 +12,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, ".")
 
@@ -36,7 +35,7 @@ from sqlalchemy import delete  # noqa: E402
 
 from app.core import arena as core  # noqa: E402
 from app.db import SessionLocal, engine  # noqa: E402
-from app.models import Base, Memory, ProviderConfig  # noqa: E402
+from app.models import Base, Memory  # noqa: E402
 from app.routers import health as health_router  # noqa: E402
 
 
@@ -112,7 +111,8 @@ async def test_health_report_aggregates_and_survives_breakage(monkeypatch):
         await db.commit()
 
     r = await health_router.report()
-    assert set(r) == {"self", "backups", "kb", "tasks_failing", "tidy"}
+    # 断言「包含关键字段」而非「等于完整集合」——以后加字段不会破这个测试
+    assert {"self", "backups", "kb", "tasks_failing", "tidy", "structured", "prompts", "cost"} <= set(r)
     assert r["self"]["jobs_total"] >= 0 and isinstance(r["tasks_failing"], list)
 
     # 备份列表挂掉：体检不 500，该块退化为空

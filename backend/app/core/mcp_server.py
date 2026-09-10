@@ -44,9 +44,11 @@ async def search_knowledge(query: str, limit: int = 5) -> list[dict]:
     返回 [{text, source, score}]，score 是 0-1 的相似度。想了解「他收藏过/
     笔记里写过什么」时用这个。
     """
+    import asyncio
+
     from app.core.indexer import search_auto
 
-    hits = search_auto(query, top_k=max(1, min(limit, MAX_LIMIT)))
+    hits = await asyncio.to_thread(search_auto, query, max(1, min(limit, MAX_LIMIT)))
     return [{"text": h["text"], "source": h.get("source"), "score": h.get("score")} for h in hits]
 
 

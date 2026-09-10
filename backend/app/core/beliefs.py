@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.core import memory
 from app.db import SessionLocal
-from app.models import Memory
+from app.models import Memory, iso_utc
 
 log = logging.getLogger(__name__)
 
@@ -63,8 +63,8 @@ async def threads() -> list[dict]:
             out.append(
                 {
                     "label": members[-1].content[:80],
-                    "first_at": members[0].created_at.isoformat() if members[0].created_at else None,
-                    "last_at": members[-1].created_at.isoformat() if members[-1].created_at else None,
+                    "first_at": iso_utc(members[0].created_at),
+                    "last_at": iso_utc(members[-1].created_at),
                     "items": [
                         {"id": m.id, "content": m.content, "kind": m.kind} for m in members
                     ],

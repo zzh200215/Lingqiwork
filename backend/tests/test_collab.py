@@ -1,11 +1,7 @@
 """V14 collab tests: step planning, prompt composition, and the full run
 event stream over a fake LLM. No network, no provider.
 """
-import atexit
 import asyncio
-import shutil
-import tempfile
-from pathlib import Path
 
 import pytest
 
