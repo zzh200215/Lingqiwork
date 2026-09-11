@@ -14,6 +14,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# --- API token (PLAN §10.1 #6): the smoke scripts are exactly the kind of
+# external caller the guard exists for, so they present a token. Children
+# inherit it because env dicts spread os.environ. ---
+_WB_TOKEN = os.environ.setdefault("WB_API_TOKEN", "smoke-token")
+_WB_HEADERS = {"Content-Type": "application/json", "X-WB-Token": _WB_TOKEN}
+
 BACKEND = Path("D:/TP/A/backend")
 SCRATCH = BACKEND / ".smoke20"
 BASE = "http://127.0.0.1:8772"
@@ -28,10 +34,10 @@ def req(method: str, path: str, body: dict | None = None, form: tuple[str, bytes
             f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
             f"Content-Type: application/octet-stream\r\n\r\n"
         ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
-        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        headers = {**_WB_HEADERS, "Content-Type": f"multipart/form-data; boundary={boundary}"}
     else:
         data = json.dumps(body).encode() if body is not None else None
-        headers = {"Content-Type": "application/json"}
+        headers = _WB_HEADERS
     r = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
     with urllib.request.urlopen(r, timeout=60) as resp:
         return json.loads(resp.read())

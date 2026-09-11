@@ -26,7 +26,7 @@ _TMP = Path(tempfile.mkdtemp(prefix="wb-backup-", dir=Path(__file__).parent))
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
 from app.config import settings  # noqa: E402
-from app.core import backup  # noqa: E402
+from app.core import backup, secrets  # noqa: E402
 
 _NON_ASCII = "notes/项目笔记.md"  # vault names are Chinese in practice — zip flags matter
 _N = 0  # one vault + one backup dir per test, so retention counts stay isolated
@@ -135,6 +135,23 @@ def test_manifest_spells_out_what_is_not_in_the_archive(live):
     assert all(v.strip() for v in manifest["not_included"].values()), "每一条都要说清丢了会怎样"
     assert any("死链" in v for v in manifest["not_included"].values())
     assert any("chroma" in k for k in manifest["not_included"])
+    assert "DPAPI" in manifest["secrets"], "密钥入包的形态必须写进 manifest"
+
+
+@pytest.mark.skipif(not secrets._load(), reason="DPAPI unavailable off Windows")
+def test_archive_carries_secrets_only_as_ciphertext(live):
+    """This zip is the thing you hand-carry between machines — that is exactly the
+    'once copied out it never comes back' case in PLAN §10.1 #5. A working key
+    must not be inside it, even though the config file is."""
+    from app.core.prefs import save_config
+
+    save_config({"smtp_password": "hunter2-not-in-the-zip"})
+    info = backup.create_backup("test")
+
+    with zipfile.ZipFile(backup.resolve(info["name"])) as z:
+        raw = z.read(f"data/{Path(settings.config_path).name}").decode("utf-8")
+    assert "hunter2-not-in-the-zip" not in raw
+    assert secrets.is_sealed(json.loads(raw)["smtp_password"])
 
 
 def test_restore_round_trip_is_byte_identical(live):

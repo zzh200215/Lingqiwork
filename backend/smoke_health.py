@@ -15,6 +15,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# --- API token (PLAN §10.1 #6): the smoke scripts are exactly the kind of
+# external caller the guard exists for, so they present a token. Children
+# inherit it because env dicts spread os.environ. ---
+_WB_TOKEN = os.environ.setdefault("WB_API_TOKEN", "smoke-token")
+_WB_HEADERS = {"Content-Type": "application/json", "X-WB-Token": _WB_TOKEN}
+
 BACKEND = Path("D:/TP/A/backend")
 SCRATCH = BACKEND / ".smoke_health"
 BASE = "http://127.0.0.1:8785"
@@ -26,7 +32,7 @@ def req(method: str, path: str, body: dict | None = None, timeout: int = 120):
     r = urllib.request.Request(
         BASE + path,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=_WB_HEADERS,
         method=method,
     )
     try:
@@ -53,7 +59,7 @@ def expect_error(method: str, path: str, body: dict | None, code: int, needle: s
     r = urllib.request.Request(
         BASE + path,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=_WB_HEADERS,
         method=method,
     )
     try:
@@ -89,14 +95,17 @@ def main() -> None:
         # ---- 作业报告：关掉的功能也必须出现，不能凭空消失 ----
         jobs = {j["job_id"]: j for j in req("GET", "/api/health/jobs")["jobs"]}
         for known in ("daily_digest", "auto_backup", "feeds_sync", "memory_tidy",
-                      "pet_morning", "pet_evening", "cards_remind", "cards_remediate"):
+                      "pet_morning", "pet_evening"):
             assert known in jobs, f"{known} 不在报告里"
             assert jobs[known]["enabled_by"], known
-        # scratch config = defaults: digest/backup/feeds/tidy off, cards/pet on
+        # scratch config = defaults: digest/backup/feeds/tidy off, pet on
         assert jobs["daily_digest"]["disabled"] is True, jobs["daily_digest"]
-        assert jobs["cards_remind"]["disabled"] is False, jobs["cards_remind"]
-        assert jobs["cards_remind"]["registered"] is True, jobs["cards_remind"]
+        assert jobs["pet_morning"]["disabled"] is False, jobs["pet_morning"]
+        assert jobs["pet_morning"]["registered"] is True, jobs["pet_morning"]
         assert jobs["daily_digest"]["registered"] is False, jobs["daily_digest"]
+        # 卡片方向封存后 cards_remind / cards_remediate 被 cards.reschedule() prune，
+        # 报告里本就不该出现 —— 断言「不出现」，而不是把这条检查丢掉。
+        assert "cards_remind" not in jobs and "cards_remediate" not in jobs, list(jobs)
         print("job report ok（已关 vs 应跑未注册 分得开）")
 
         # ---- 自检：还没有 provider ----

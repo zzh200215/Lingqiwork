@@ -3,12 +3,14 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import BASE_DIR, settings
-from app.core import mcp_server  # mount 在模块级跑，必须先于 lifespan 导入
+from app.core import auth, mcp_server  # mount 在模块级跑，必须先于 lifespan 导入
 from app.db import engine
 from app.models import Base
 from app.routers import (
@@ -105,6 +107,15 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await _migrate()
+    # One-time, idempotent: seal any secret still sitting in plaintext (config.json
+    # and provider api_key rows) so existing installs inherit the encryption.
+    from app.core import secrets as secretbox
+    from app.db import SessionLocal
+
+    secretbox.migrate_config()
+    async with SessionLocal() as _db:
+        await secretbox.migrate_providers(_db)
+
     from app.core import indexer, retriever
     from app.core import mcp_server
     from app.core.mcp import mcp_manager
@@ -141,6 +152,28 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+
+async def _auth_guard(request: Request, call_next):
+    """Require the API token on /api/* and /mcp, and hand the page its cookie.
+
+    Registered *before* CORSMiddleware so CORS stays the outermost layer: a 401
+    from here still carries the CORS headers the cross-origin dev page needs in
+    order to read it. The cookie carries the token for same-origin loads that
+    cannot set a header (`<img>`/`<audio>` sources, the backup download link).
+    """
+    if auth.is_protected(request.url.path) and not auth.request_ok(
+        request.headers.get(auth.HEADER), request.cookies.get(auth.COOKIE)
+    ):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    response = await call_next(request)
+    if request.cookies.get(auth.COOKIE) != auth.token():
+        response.set_cookie(auth.COOKIE, auth.token(), path="/", httponly=True, samesite="strict")
+    return response
+
+
+app.add_middleware(BaseHTTPMiddleware, dispatch=_auth_guard)
 
 app.add_middleware(
     CORSMiddleware,

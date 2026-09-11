@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from app.core.secrets import seal, unseal
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -79,9 +81,20 @@ class ProviderConfig(Base):
     name: Mapped[str] = mapped_column(String(50), unique=True)  # display key
     kind: Mapped[str] = mapped_column(String(20), default="openai")  # openai | anthropic
     base_url: Mapped[str] = mapped_column(String(500), default="")
-    api_key: Mapped[str] = mapped_column(String(500), default="")
+    # Ciphertext at rest (core/secrets.py). Read/write via the `api_key` property
+    # below; the column keeps its original name so existing rows need no migration.
+    api_key_enc: Mapped[str] = mapped_column("api_key", String(1000), default="")
     models: Mapped[list] = mapped_column(JSON, default=list)  # ["deepseek-chat", ...]
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    @property
+    def api_key(self) -> str:
+        """Plaintext key. Every reader (llm, cards, _mask, …) keeps using this."""
+        return unseal(self.api_key_enc)
+
+    @api_key.setter
+    def api_key(self, value: str) -> None:
+        self.api_key_enc = seal(value or "")
 
 
 class Memory(Base):

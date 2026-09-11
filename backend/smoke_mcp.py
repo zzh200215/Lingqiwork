@@ -21,6 +21,12 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+# --- API token (PLAN §10.1 #6): the smoke scripts are exactly the kind of
+# external caller the guard exists for, so they present a token. Children
+# inherit it because env dicts spread os.environ. ---
+_WB_TOKEN = os.environ.setdefault("WB_API_TOKEN", "smoke-token")
+_WB_HEADERS = {"Content-Type": "application/json", "X-WB-Token": _WB_TOKEN}
+
 BACKEND = Path("D:/TP/A/backend")
 SCRATCH = BACKEND / ".smoke_mcp"
 BASE = "http://127.0.0.1:8790"
@@ -33,7 +39,7 @@ def req(method: str, path: str, body: dict | None = None, timeout: int = 120):
     r = urllib.request.Request(
         BASE + path,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=_WB_HEADERS,
         method=method,
     )
     try:
@@ -75,39 +81,44 @@ async def mcp_drill() -> None:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    async with streamable_http_client(BASE + "/mcp") as streams:
-        read_stream, write_stream = streams[0], streams[1]
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-            print("mcp initialize ok（真实 lifespan 下的 session manager 活着）")
+    # /mcp 现在也要 token（PLAN §10.1 #6）：真实 MCP 客户端连进来同样得带 header。
+    # SDK 只在 http_client 上收 header，所以要自己包一个带 header 的 client。
+    import httpx2
 
-            tools = await session.list_tools()
-            names = {t.name for t in tools.tools}
-            expected = {
-                "search_knowledge",
-                "search_history",
-                "get_user_memory",
-                "get_learning_profile",
-                "get_today_briefing",
-            }
-            assert expected <= names, f"缺工具: {expected - names}"
-            print("mcp list_tools ok:", " · ".join(sorted(names)))
+    async with httpx2.AsyncClient(headers={"X-WB-Token": _WB_TOKEN}) as http_client:
+        async with streamable_http_client(BASE + "/mcp", http_client=http_client) as streams:
+            read_stream, write_stream = streams[0], streams[1]
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                print("mcp initialize ok（真实 lifespan 下的 session manager 活着）")
 
-            res = await session.call_tool("get_user_memory", {"limit": 10})
-            assert res.is_error is False, res
-            rows = _payload(res)
-            assert any(r["content"] == MEMO for r in rows), f"HTTP 写的记忆 MCP 读不到: {rows}"
-            print("mcp call_tool ok：HTTP 写 → MCP 读 跨界往返成立")
+                tools = await session.list_tools()
+                names = {t.name for t in tools.tools}
+                expected = {
+                    "search_knowledge",
+                    "search_history",
+                    "get_user_memory",
+                    "get_learning_profile",
+                    "get_today_briefing",
+                }
+                assert expected <= names, f"缺工具: {expected - names}"
+                print("mcp list_tools ok:", " · ".join(sorted(names)))
 
-            res = await session.call_tool("get_today_briefing", {})
-            assert res.is_error is False and "text" in _payload(res), res
+                res = await session.call_tool("get_user_memory", {"limit": 10})
+                assert res.is_error is False, res
+                rows = _payload(res)
+                assert any(r["content"] == MEMO for r in rows), f"HTTP 写的记忆 MCP 读不到: {rows}"
+                print("mcp call_tool ok：HTTP 写 → MCP 读 跨界往返成立")
 
-            res = await session.call_tool("search_history", {"q": "一个不存在的检索词xyz"})
-            assert res.is_error is False and _payload(res) == [], res
+                res = await session.call_tool("get_today_briefing", {})
+                assert res.is_error is False and "text" in _payload(res), res
 
-            res = await session.call_tool("search_knowledge", {"query": "协程", "limit": 3})
-            assert res.is_error is False and isinstance(_payload(res), list), res
-            print("mcp 其余工具 ok（briefing / 空库 search_history / 空索引 search_knowledge）")
+                res = await session.call_tool("search_history", {"q": "一个不存在的检索词xyz"})
+                assert res.is_error is False and _payload(res) == [], res
+
+                res = await session.call_tool("search_knowledge", {"query": "协程", "limit": 3})
+                assert res.is_error is False and isinstance(_payload(res), list), res
+                print("mcp 其余工具 ok（briefing / 空库 search_history / 空索引 search_knowledge）")
 
 
 def journal_roundtrip() -> None:

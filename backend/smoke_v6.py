@@ -4,12 +4,19 @@ Skills: drop a temp folder into skills/, verify list/content/tool-spec, clean up
 Tasks: list includes running flag; dashboard exposes token/task stats; prefs
 round-trip desktop_notify.
 """
+import os
 import json
 import shutil
 import sys
 import time
 import urllib.request
 from pathlib import Path
+
+# --- API token (PLAN §10.1 #6): the smoke scripts are exactly the kind of
+# external caller the guard exists for, so they present a token. Children
+# inherit it because env dicts spread os.environ. ---
+_WB_TOKEN = os.environ.setdefault("WB_API_TOKEN", "smoke-token")
+_WB_HEADERS = {"Content-Type": "application/json", "X-WB-Token": _WB_TOKEN}
 
 BASE = "http://127.0.0.1:8769"
 SKILL_DIR = Path("D:/TP/A/skills/__smoke_v6__")
@@ -31,7 +38,7 @@ def req(method: str, path: str, body: dict | None = None) -> dict:
     r = urllib.request.Request(
         BASE + p + (("?" + qs) if qs else ""),
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=_WB_HEADERS,
         method=method,
     )
     with urllib.request.urlopen(r, timeout=60) as resp:

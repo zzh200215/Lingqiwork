@@ -13,6 +13,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# --- API token (PLAN §10.1 #6): the smoke scripts are exactly the kind of
+# external caller the guard exists for, so they present a token. Children
+# inherit it because env dicts spread os.environ. ---
+_WB_TOKEN = os.environ.setdefault("WB_API_TOKEN", "smoke-token")
+_WB_HEADERS = {"Content-Type": "application/json", "X-WB-Token": _WB_TOKEN}
+
 BACKEND = Path("D:/TP/A/backend")
 SCRATCH = BACKEND / ".smoke26"
 BASE = "http://127.0.0.1:8783"
@@ -23,7 +29,7 @@ def req(method: str, path: str, body: dict | None = None, timeout: int = 60):
     r = urllib.request.Request(
         BASE + path,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=_WB_HEADERS,
         method=method,
     )
     with urllib.request.urlopen(r, timeout=timeout) as resp:
@@ -35,7 +41,7 @@ def post_sse(path: str, body: dict, timeout: int = 120) -> list[tuple[str, dict]
     r = urllib.request.Request(
         BASE + path,
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=_WB_HEADERS,
         method="POST",
     )
     with urllib.request.urlopen(r, timeout=timeout) as resp:
@@ -69,7 +75,7 @@ def expect_error(method: str, path: str, body: dict | None, code: int, needle: s
     r = urllib.request.Request(
         BASE + path,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=_WB_HEADERS,
         method=method,
     )
     try:

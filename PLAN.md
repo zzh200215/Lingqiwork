@@ -255,13 +255,37 @@ save           → 落 vault/decisions/ + 进索引（手动存，不是自成�
 
 **已知限制**：视觉粒度跟着 provider 的流式分块走——一次 `read()` 若到了好几帧，React 会批到一起渲染。后端发多少帧是确定的（`_PARTIAL_EVERY = 24` 字符一帧），页面上一屏能看到几步，取决于模型吐字速度与网络分包。
 
+### 验证节奏（T0 / T1 / T2）—— 2026-09-11
+
+**为什么改。** 此前每完成一小块都跑一遍全套测试 + 真机 drill，成本按天算；开发时的时间大半花在等测试上。改成按批次：开发中只跑秒级的 T0，到一个 block 边界才跑一次「大测试」——开发时快，测的时候一次把跨模块的问题也翻出来。
+
+| 层 | 何时 | 跑什么 | 成本 |
+| --- | --- | --- | --- |
+| **T0** | 每次改动 | 只跑被改动的测试文件 +（前端改动时）`tsc` | 秒级 |
+| **T1** | 每个波次 / 2–3 个相关项 | `backend/.venv/Scripts/python.exe verify.py` —— `run_tests.py` 全套 + 前端 `tsc`/`vitest`/`build`，**不调真模型** | 1–2 分钟 |
+| **T2** | 每个 §10.4 block 边界 | `verify.py drill` —— 真机 drill（真 provider、端到端）+ **跨模块联调** `smoke_integration.py`（认证守卫 → 剪藏 → 检索 → 研究 → 存回 → 再检索 → 备份） | 分钟级 |
+
+**一个 block = 一个 T2 闸口**：§10.4 的每一步做完，`verify.py drill` 必须绿，再进下一步。默认只跑仍有效的几个 drill；`verify.py drill --all` 会把所有 `smoke_*.py` 也带上（历史波次的老 drill 有些随方向封存已过期，不该默认拖慢闸口）。
+
+### 本地面的认证与密钥落盘 —— 已做（2026-09-11）
+
+**为什么是它。** 第 10.1 节第 6、5 条，也是清单里唯一「不可逆」的两条：#6 是唯一一个**别人能动你**的面（本机任何进程都能 `POST /api/kb/upload` 写库、`POST /api/artifacts/run` 执行代码、经 `/mcp` 读全部记忆）；#5 是唯一一个**一旦拷出去就收不回**的东西（`config.json` 与 SQLite 里的密钥是明文，而备份 zip 打包的正是这两样）。
+
+**认证（#6）。** 启动时生成 token（`data/api_token`；测试与冒烟用 `WB_API_TOKEN` 覆盖），`/api/*` 与 `/mcp` 全部要它，`/api/health` 豁免（桌面壳用它探活）。令牌收两条通道：`X-WB-Token` header，或后端下发的 `wb_token` cookie（`SameSite=Strict` + `HttpOnly`）。cookie 那条是给**同源页面里加不了 header 的加载**用的——`<img src>`、`<audio src>`、`/api/backup/download/...`。同源页面（127.0.0.1:8000 与 pywebview 壳）因此**一行前端都不用改**；vite dev 跨源，交给 dev 代理在转发时注入 header（`vite.config.ts` 的 `server.proxy.configure`），子资源一并覆盖。中间件注册在 CORS **之前**，所以 401 也带 CORS 头。MCP 客户端要连就得带 header（`/mcp` 不再是裸面）。
+
+**密钥（#5）。** 落盘即密文——`core/secrets.py` 用 Windows DPAPI（`ctypes` 调 `crypt32`，零新依赖）封 `config.json` 的三个秘密键，以及 SQLite 的 `provider_configs.api_key`（**列名不变**，存密文；ORM 上 `api_key` 变 property，读解封、写封存，所以 `llm.py`/`cards.py` 那些读点一行没动）。备份 zip 里因此是密文，**拷到别处解不开**；换机器/账户恢复备份时密钥读作「未设置」并告警，而不是启动即崩。`prefs.load_config` 透明解封，mailer / kg / websearch 无感。启动时跑一次幂等迁移把既有明文封上。
+
+**顺手修掉的既有泄漏**：`GET /api/settings/prefs` 此前只 mask `smtp_password` / `kg_password`，**把 `websearch_api_key` 明文发给了浏览器**。
+
+**已知上限（写进 `core/auth.py`，不假装解决）**：同账户的本机进程仍能读 `data/api_token`。它挡的是浏览器跨源（CSRF / DNS-rebind）与误调用；同用户隔离要 OS 级凭据，超出本机工具范围。
+
 ---
 
 ## 10. 下一批（工程债 + 新模块）—— 2026-09-11 盘点
 
 **这一节的来历，写在最前面**：下面这份清单来自上一轮的「发散分析」（架构缺陷 / 该升级的 / 值得新做的模块）。它当时**只活在对话里**——第 5 节那四条是**产品线**，这一份是**工程线**，两条线不重叠。结果是它一条都没进计划，我只挑了其中一件（F）就往下走了，也没说清其余的没排期。
 
-现在落盘，并如实标状态：**已做 1 / 25**（F 输出质量闭环），**只落地基 1 项**（C：方案层把决策落进了 `vault/decisions/`，但没有信心值、没有回看、没有校准分）。下面的「现状」一栏写的是**当前代码里的事实**，不是意向。
+现在落盘，并如实标状态：**已做 5 / 25**（F 输出质量闭环；#1 质量标尺、#8 流式渲染、#5 密钥落盘、#6 HTTP 认证），**只落地基 1 项**（C：方案层把决策落进了 `vault/decisions/`，但没有信心值、没有回看、没有校准分）。下面的「现状」一栏写的是**当前代码里的事实**，不是意向。
 
 ### 10.1 架构缺陷（按严重度，9 条）
 
@@ -271,8 +295,8 @@ save           → 落 vault/decisions/ + 进索引（手动存，不是自成�
 | 2 | **索引与真相源没有版本契约**。chunk 元数据只存 `mtime`（`indexer.py:130`），**不存内容哈希**；collection 写死叫 `workbench_kb`（`indexer.py:34`），**不带 embedding 模型版本戳**。哪天真换了 bge-small-zh、或改了 `chunk_text` 的切法，1039 个 chunk 全部静默过期，没有任何东西会告诉你；`reindex_all` 还得手点。 | ❌ 未做 |
 | 3 | **多存储无一致性边界**。SQLite / ChromaDB / Neo4j / vault / `config.json` / 各模块自己的 JSON（`memory_tidy.json`、`feeds_seen.json` …）各自 best-effort 写，崩在中间就漂移。现在的对策是 `_prune_missing` + watcher 重扫 + `delete_source`——**用补偿逻辑代替了一个 job 表 + 幂等 worker**。 | ❌ 未做 |
 | 4 | **降级链的安全边界在 agentic 场景下是错的**。「零输出才换家」对纯文本成立；但工具已经跑过之后再换家 = **重复副作用**（`core/tasks.py` 的 agent 路径就带着 `served` 走 `stream_chat_fallback`）。`served` 确实记了（`llm.py:377`），但只用来回填 `model_id`，**没拿它做长期成功率淘汰**——一个能说会道但胡说的 provider 永远逃不掉。 | ❌ 未做 |
-| 5 | **明文密钥，而且跟着备份跑**。`data/config.json` 里是 `websearch_api_key` / `smtp_password` / `kg_password`，SQLite 的 `provider_configs` 里是各家 key。而 `core/backup.py` 打包的就是 **`vault/` + SQLite 快照 + `config.json`**——zip 里就是全套密钥，拷到别处就跟着走。Windows 有 DPAPI / Credential Manager。 | ❌ 未做 |
-| 6 | **HTTP 面完全没有认证**。绑 127.0.0.1 + CORS 只放一个源，但 **CORS 拦不住非浏览器客户端**。本机任何进程都能 `POST /api/kb/upload` 往库里写文件、`POST /api/artifacts/run` 执行代码、经 MCP server 读你全部记忆。`/api/*` 上没有任何 token（`main.py` grep 过：零）。本地工具也该有一个启动时生成的 token。 | ❌ 未做 |
+| 5 | **明文密钥，而且跟着备份跑**。`data/config.json` 里是 `websearch_api_key` / `smtp_password` / `kg_password`，SQLite 的 `provider_configs` 里是各家 key。而 `core/backup.py` 打包的就是 **`vault/` + SQLite 快照 + `config.json`**——zip 里就是全套密钥，拷到别处就跟着走。Windows 有 DPAPI / Credential Manager。 | ✅ 已做（2026-09-11，见第 9 节末） |
+| 6 | **HTTP 面完全没有认证**。绑 127.0.0.1 + CORS 只放一个源，但 **CORS 拦不住非浏览器客户端**。本机任何进程都能 `POST /api/kb/upload` 往库里写文件、`POST /api/artifacts/run` 执行代码、经 MCP server 读你全部记忆。`/api/*` 上没有任何 token（`main.py` grep 过：零）。本地工具也该有一个启动时生成的 token。 | ✅ 已做（2026-09-11，见第 9 节末） |
 | 7 | **MPA + 无路由库，把「跨模块」锁死了**。`?session=` `?path=` `?clip=` `?new=&repo=`——每个深链都是某个页面 effect 里手写的解析（今天刚在这层又打过一个补丁）。更根本的是**两个模块无法同屏**：教学旁边开取材、复盘旁边开笔记，都做不到。产品叙事是「一条链」，UI 结构是六个互不相通的页面。 | ❌ 未做 |
 | 8 | **结构化输出全是「先流完再解析」**。研究 / 产出 / 复盘 / 方案的报告都是「转圈 → 整篇蹦出来」——SSE 都铺好了，却没用流式 JSON 边生成边渲染。**最便宜的体验升级，没有之一**。 | ✅ 已做（2026-09-11，见第 9 节末） |
 | 9 | **幂等与并发没管**。两个客户端同时点复盘 = 两次真模型调用 + 两次写同一个文件（同一个 `run` 还都落 `recap/YYYY-MM-DD.md`）。前端只有 `if (rcBusy) return` 这种就近防护，**后端一处都没有**。`run_tests.py` 每文件一进程绕开跨文件串库，也是用测试脚手架掩盖真实的隔离缺口。 | ❌ 未做 |
@@ -306,7 +330,7 @@ save           → 落 vault/decisions/ + 进索引（手动存，不是自成�
 ### 10.4 建议顺序（不排期，理由写在这）
 
 1. **#1 质量标尺 —— ✅ 已做（2026-09-11）**；**#8 流式渲染 —— ✅ 已做（2026-09-11）**。两条都见第 9 节末。选 #1 的理由不是「重要」，是**第 4 个引擎刚接到同一条脊梁上，回归的爆炸半径又大了一格**——四个功能共用一份提示词，一次改动同时打穿四个，而下面没有网。先有标尺，后面所有改动才可判；#8 顺路做，因为标尺得先看得见输出。
-2. **#6 + #5 安全**。这两条是清单里唯一「不可逆」的：#6 是唯一一个**别人能动你**的面；#5 是唯一一个**一旦拷出去就收不回**的东西。都不大，加起来一个波次。
+2. **#6 + #5 安全**。这两条是清单里唯一「不可逆」的：#6 是唯一一个**别人能动你**的面；#5 是唯一一个**一旦拷出去就收不回**的东西。都不大，加起来一个波次。 —— **✅ 已做（2026-09-11，见第 9 节末）**
 3. **B 跨源冲突检测**。你自己判的「最有独特价值」，而且**不需要新基建**——四路取材、引用编号、judge 都现成。
 4. **C 的校准分 + A 时间机器**。它们和 B 吃同一批时间戳数据，一起做省一遍；C 的地基（决策落盘）已经在了。
 5. 其余（D / E / G / H / I / J、10.2 全部）看使用情况再说——第 3 节的结论还没变：**缺的不是功能**。

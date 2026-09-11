@@ -4,10 +4,17 @@ Verifies over real HTTP: task CRUD round-trips new fields, /tasks/tools,
 manual agent run (error path, run row), run-history endpoint, and the
 watch trigger firing on a vault file change.
 """
+import os
 import json
 import sys
 import time
 import urllib.request
+
+# --- API token (PLAN §10.1 #6): the smoke scripts are exactly the kind of
+# external caller the guard exists for, so they present a token. Children
+# inherit it because env dicts spread os.environ. ---
+_WB_TOKEN = os.environ.setdefault("WB_API_TOKEN", "smoke-token")
+_WB_HEADERS = {"Content-Type": "application/json", "X-WB-Token": _WB_TOKEN}
 
 BASE = "http://127.0.0.1:8765"
 VAULT_FILE = "D:/TP/A/vault/smoke-trigger-dir/hello.md"
@@ -17,7 +24,7 @@ def req(method: str, path: str, body: dict | None = None) -> dict:
     r = urllib.request.Request(
         BASE + path,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=_WB_HEADERS,
         method=method,
     )
     with urllib.request.urlopen(r, timeout=120) as resp:

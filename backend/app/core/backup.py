@@ -34,6 +34,9 @@ NOT_INCLUDED = {
     "data/repos": "克隆的仓库，可重新克隆",
     "data/feeds_seen.json": "订阅去重状态，丢了最多重复推一次旧条目",
     "data/artifacts + images + podcasts + tts": "生成物，不可重建；DB 里的引用会变死链",
+    # 有意排除，不是遗漏：令牌属于本机（PLAN §10.1 #6），跟着备份走到另一台机器
+    # 没有意义（那边首启会自己生成一个），而且它本就不该出现在任何可拷走的包里。
+    "data/api_token": "启动令牌，本机首启自动生成；有意不入包，恢复后重生成",
 }
 
 
@@ -126,6 +129,10 @@ def create_backup(reason: str = "manual") -> dict:
                         "config": cfg.exists(),
                         "index_included": False,
                         "not_included": NOT_INCLUDED,
+                        "secrets": (
+                            "密钥（config.json 与 SQLite）以 Windows DPAPI 密文入包："
+                            "换机器/账户不可解，恢复后需重填"
+                        ),
                         "restore": "停止服务 → 解压覆盖项目根目录的 vault/ 与 data/ → 重启 → KB 页重建索引",
                     },
                     ensure_ascii=False,

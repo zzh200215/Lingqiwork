@@ -8,6 +8,7 @@ import threading
 from typing import Any
 
 from app.config import settings as app_settings
+from app.core.secrets import SECRET_KEYS, seal, unseal
 
 _lock = threading.Lock()
 
@@ -102,12 +103,22 @@ def load_config() -> dict[str, Any]:
             data = json.loads(_path().read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return dict(_DEFAULTS)
-    return {**_DEFAULTS, **data}
+    cfg = {**_DEFAULTS, **data}
+    # Secrets are ciphertext on disk (core/secrets.py); hand every reader the
+    # plaintext, so mailer/kg/websearch need no knowledge of the sealing.
+    for key in SECRET_KEYS:
+        if isinstance(cfg.get(key), str):
+            cfg[key] = unseal(cfg[key])
+    return cfg
 
 
 def save_config(update: dict[str, Any]) -> dict[str, Any]:
-    current = load_config()
+    current = load_config()  # plaintext
     current.update({k: v for k, v in update.items() if k in _DEFAULTS})
+    # Seal only what lands on disk; return the plaintext view to the caller.
+    on_disk = {
+        k: (seal(v) if k in SECRET_KEYS and isinstance(v, str) else v) for k, v in current.items()
+    }
     with _lock:
-        _path().write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+        _path().write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
     return current

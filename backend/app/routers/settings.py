@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.mcp import mcp_manager
 from app.core.prefs import load_config, save_config
+from app.core.secrets import SECRET_KEYS
 from app.db import get_db
 from app.models import ProviderConfig
 
@@ -26,7 +27,7 @@ MASK = "••••••••"
 @router.get("/prefs")
 async def get_prefs():
     cfg = load_config()
-    for secret in ("smtp_password", "kg_password"):
+    for secret in SECRET_KEYS:
         if cfg.get(secret):
             cfg = {**cfg, secret: MASK}  # never ship real secrets to the browser
     return cfg
@@ -173,21 +174,20 @@ class PrefsIn(BaseModel):
 @router.put("/prefs")
 async def update_prefs(body: PrefsIn):
     update = {k: v for k, v in body.model_dump().items() if v is not None}
-    pw = update.get("smtp_password")
     # the browser echoes the masked value back; treat any all-mask string as
     # "unchanged" (some clients mangle the bullet chars into ?/*) and keep the
-    # stored password instead of overwriting it with placeholder glyphs
-    if pw is not None and pw.strip() and set(pw.strip()) <= set("•*?●"):
-        del update["smtp_password"]
-    kg_pw = update.get("kg_password")
-    if kg_pw is not None and kg_pw.strip() and set(kg_pw.strip()) <= set("•*?●"):
-        del update["kg_password"]
+    # stored secret instead of overwriting it with placeholder glyphs
+    for secret in SECRET_KEYS:
+        v = update.get(secret)
+        if isinstance(v, str) and v.strip() and set(v.strip()) <= set("•*?●"):
+            del update[secret]
     result = save_config(update)
     from app.core import scheduler as jobs
 
     jobs.reschedule_all()
-    if result.get("smtp_password"):
-        result = {**result, "smtp_password": MASK}
+    for secret in SECRET_KEYS:
+        if result.get(secret):
+            result = {**result, secret: MASK}
     return result
 
 
