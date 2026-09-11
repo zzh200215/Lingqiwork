@@ -25,6 +25,7 @@ from app.core.llm import ProviderInfo, stream_chat
 from app.core.prefs import load_config
 from app.db import SessionLocal
 from app.models import Memory
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -250,6 +251,7 @@ async def _tidy_pass() -> dict:
     return report
 
 
+@usage_ledger.traced("tidy")
 async def run_tidy() -> dict:
     """一晚上的活：先合并去重（_tidy_pass），再睡眠期反思（reflect）。
 

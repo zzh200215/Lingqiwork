@@ -58,15 +58,31 @@ def _openai_client(p: ProviderInfo) -> AsyncOpenAI:
 # ---------- one model round (streaming) ----------
 
 
-def _absorb_usage(usage_out: dict | None, raw) -> None:
-    """Merge a provider usage object into the caller's accumulator."""
-    if usage_out is None or raw is None:
+def _absorb_usage(usage_out: dict | None, raw, model: str = "") -> None:
+    """Merge a provider usage object into the caller's accumulator.
+
+    调用方**没有自己的账本**时（除了聊天与定时任务，其余路径都是这样），用量记进
+    `core/usage_ledger` 的当前 span。`note()` 在 span 外是空操作，所以那两条自己有列的
+    路径绝不会被重复记一次。
+    """
+    if raw is None:
         return
     try:
-        usage_out["input"] = usage_out.get("input", 0) + int(getattr(raw, "input_tokens", 0) or getattr(raw, "prompt_tokens", 0) or 0)
-        usage_out["output"] = usage_out.get("output", 0) + int(getattr(raw, "output_tokens", 0) or getattr(raw, "completion_tokens", 0) or 0)
+        tin = int(
+            getattr(raw, "input_tokens", 0) or getattr(raw, "prompt_tokens", 0) or 0
+        )
+        tout = int(
+            getattr(raw, "output_tokens", 0) or getattr(raw, "completion_tokens", 0) or 0
+        )
     except (TypeError, ValueError):
-        pass
+        return
+    if usage_out is not None:
+        usage_out["input"] = usage_out.get("input", 0) + tin
+        usage_out["output"] = usage_out.get("output", 0) + tout
+        return
+    from app.core import usage_ledger
+
+    usage_ledger.note(model, tin, tout)
 
 
 async def _openai_round(
@@ -79,7 +95,10 @@ async def _openai_round(
 ) -> tuple[str, list[ToolCall]]:
     """One model round: stream text via emit_text; return (text, tool_calls)."""
     kwargs: dict = dict(model=model, messages=messages, tools=tools or None, stream=True)
-    if usage_out is not None:
+    from app.core import usage_ledger
+
+    # 有账本要填才要 usage：兼容流式响应默认不回 usage 字段
+    if usage_out is not None or usage_ledger.active():
         kwargs["stream_options"] = {"include_usage": True}
     try:
         stream = await client.chat.completions.create(**kwargs)
@@ -95,7 +114,7 @@ async def _openai_round(
 
     try:
         async for chunk in stream:
-            _absorb_usage(usage_out, getattr(chunk, "usage", None))
+            _absorb_usage(usage_out, getattr(chunk, "usage", None), model)
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
@@ -160,7 +179,7 @@ async def _anthropic_round(
             emit_text(part)
         msg = await stream.get_final_message()
 
-    _absorb_usage(usage_out, getattr(msg, "usage", None))
+    _absorb_usage(usage_out, getattr(msg, "usage", None), model)
 
     calls: list[ToolCall] = []
     if msg.stop_reason == "tool_use":
@@ -338,7 +357,7 @@ async def stream_chat(
             ) as stream:
                 async for text in stream.text_stream:
                     yield text
-                _absorb_usage(usage, getattr(await stream.get_final_message(), "usage", None))
+                _absorb_usage(usage, getattr(await stream.get_final_message(), "usage", None), model)
         finally:
             await client.close()
     else:
@@ -359,7 +378,7 @@ async def stream_chat(
         # anthropic 分支的 `async with` 已是确定性关闭，这里补齐对等行为。
         try:
             async for chunk in stream:
-                _absorb_usage(usage, getattr(chunk, "usage", None))
+                _absorb_usage(usage, getattr(chunk, "usage", None), model)
                 if not chunk.choices or chunk.choices[0].delta is None:
                     continue
                 delta = chunk.choices[0].delta.content
@@ -427,7 +446,7 @@ async def _openai_structured(
             messages=_ensure_json_hint(messages),
             response_format={"type": "json_object"},
         )
-        _absorb_usage(usage, getattr(resp, "usage", None))
+        _absorb_usage(usage, getattr(resp, "usage", None), model)
         return resp.choices[0].message.content or ""
     finally:
         await client.close()
@@ -458,7 +477,7 @@ async def _anthropic_structured(
             tools=[tool],
             tool_choice={"type": "tool", "name": "emit_result"},
         )
-        _absorb_usage(usage, getattr(resp, "usage", None))
+        _absorb_usage(usage, getattr(resp, "usage", None), model)
         for block in resp.content:
             if getattr(block, "type", "") == "tool_use":
                 return json.dumps(block.input, ensure_ascii=False)

@@ -17,6 +17,7 @@ from app.config import VAULT_DIR
 from app.core import indexer
 from app.db import SessionLocal
 from app.models import ProviderConfig
+from app.core import usage_ledger
 
 router = APIRouter(prefix="/api/notes", tags=["notes"])
 
@@ -280,7 +281,7 @@ async def ai_write(body: AiAction):
             yield sse("error", {"message": f"{type(e).__name__}: {e}"})
 
     return StreamingResponse(
-        gen(),
+        usage_ledger.wrap_stream("notes", body.action, gen()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

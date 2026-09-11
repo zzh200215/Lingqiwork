@@ -19,6 +19,7 @@ import re
 from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -727,6 +728,7 @@ async def _older_block(session_id: int, history: list[dict], model_id: str) -> s
     return format_older(summary, uncovered)
 
 
+@usage_ledger.traced("tutor")
 async def say(session_id: int, text: str):
     """Yield ("recall" | "sources" | "delta" | "done" | "error", data) for one exchange.
 

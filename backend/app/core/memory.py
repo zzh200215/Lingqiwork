@@ -20,6 +20,7 @@ from sqlalchemy import delete, select
 from app.core.llm import ProviderInfo, stream_chat
 from app.db import SessionLocal
 from app.models import Memory
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -331,6 +332,7 @@ class AutoMemories(BaseModel):
     items: list[AutoMemory] = Field(default_factory=list)
 
 
+@usage_ledger.traced("memory")
 async def auto_extract(info: ProviderInfo, model: str, user_text: str, answer_text: str) -> list[str]:
     """After one exchange, ask the model which durable facts to keep.
 

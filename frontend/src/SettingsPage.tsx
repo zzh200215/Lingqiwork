@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import Layout from './Layout'
-import { api, type AgentPreset, type ArenaResult, type BackupList, type EngineEvalLatest, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
+import { api, type AgentPreset, type ArenaResult, type BackupList, type CostSummary, type EngineEvalLatest, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
 
 /** 四个成文引擎的展示顺序（与 core/engine_eval.ENGINES 一致）。 */
 const ENGINE_ORDER = ['research', 'compose', 'recap', 'decide', 'conflict'] as const
@@ -944,6 +944,14 @@ export default function SettingsPage() {
     if (section !== 'agents' || engineEval) return
     api.engineEvalLatest().then(setEngineEval).catch(() => {})
   }, [section, engineEval])
+
+  // 用量与成本：以前只有聊天与定时任务记账，其余路径一点都看不见（PLAN §10.2「成本」）
+  const [cost, setCost] = useState<CostSummary | null>(null)
+
+  useEffect(() => {
+    if (section !== 'models' || cost) return
+    api.costSummary(30).then(setCost).catch(() => {})
+  }, [section, cost])
 
   async function runEngineEval() {
     if (engineEvalBusy) return
@@ -2206,6 +2214,80 @@ export default function SettingsPage() {
       )}
 
       {/* Existing providers */}
+      {section === 'models' && cost && (
+        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold">
+            <span>💸</span> 用量与成本
+          </h2>
+          <p className="mb-4 text-xs leading-relaxed text-neutral-500">
+            最近 {cost.days} 天。聊天与定时任务各自记账；其余路径（研究 / 产出 / 复盘 / 方案 /
+            对质 / 教学 / 圆桌 / 播客 / 卡片 / 记忆整理）走统一账本——以前它们一点都看不见。
+            填了模型价格才会给金额，否则只显示 token。
+          </p>
+          <div className="flex flex-wrap items-end gap-x-8 gap-y-3 pb-4">
+            <div>
+              <p className="text-2xl font-bold text-neutral-800 dark:text-neutral-100">
+                {cost.total_tokens.toLocaleString()}
+              </p>
+              <p className="text-xs text-neutral-500">总 token</p>
+            </div>
+            <div>
+              <p className="text-lg font-semibold text-neutral-700 dark:text-neutral-200">
+                {cost.total_tokens_in.toLocaleString()} / {cost.total_tokens_out.toLocaleString()}
+              </p>
+              <p className="text-xs text-neutral-500">输入 / 输出</p>
+            </div>
+            <div>
+              <p className="text-lg font-semibold text-neutral-700 dark:text-neutral-200">
+                {cost.chat_calls} · {cost.task_runs} · {cost.ledger_calls}
+              </p>
+              <p className="text-xs text-neutral-500">聊天 / 定时任务 / 其他路径</p>
+            </div>
+          </div>
+
+          {Object.keys(cost.by_kind).length > 0 ? (
+            <div className="pb-4">
+              <p className="pb-1 text-xs font-medium text-neutral-500">按操作（钱花在哪）</p>
+              <table className="w-full text-xs">
+                <tbody>
+                  {Object.entries(cost.by_kind)
+                    .sort((a, b) => b[1].in + b[1].out - (a[1].in + a[1].out))
+                    .map(([kind, r]) => (
+                      <tr key={kind} className="border-t border-neutral-100 dark:border-neutral-800">
+                        <td className="py-1 pr-3 text-neutral-600 dark:text-neutral-300">{kind}</td>
+                        <td className="py-1 pr-3 text-right">{r.calls} 次</td>
+                        <td className="py-1 text-right text-neutral-500">
+                          {(r.in + r.out).toLocaleString()} tok
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {cost.by_day.length > 0 ? (
+            <div>
+              <p className="pb-1 text-xs font-medium text-neutral-500">按天</p>
+              <div className="flex h-16 items-end gap-0.5">
+                {(() => {
+                  const days = cost.by_day.slice(-30)
+                  const peak = Math.max(...days.map(([, t]) => t), 1)
+                  return days.map(([day, tokens]) => (
+                    <div
+                      key={day}
+                      title={`${day}：${tokens.toLocaleString()} tok`}
+                      className="min-w-0 flex-1 rounded-t bg-violet-400 dark:bg-violet-500"
+                      style={{ height: `${Math.max(2, (tokens / peak) * 100)}%` }}
+                    />
+                  ))
+                })()}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      )}
+
       {section === 'models' && (
       <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
         <h2 className="flex items-center gap-2 font-semibold"><span>🧠</span> 模型 Provider</h2>

@@ -12,6 +12,7 @@ from app.config import VAULT_DIR
 from app.core import ingest
 from app.core.llm import ProviderInfo, stream_chat
 from app.core.prefs import load_config
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ def _build_prompt(files: list[Path]) -> str:
     )
 
 
+@usage_ledger.traced("digest")
 async def generate_digest() -> dict:
     """Run one digest generation. Returns status info."""
     model_id = _resolve_model_id()

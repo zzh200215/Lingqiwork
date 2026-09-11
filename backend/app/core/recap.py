@@ -27,6 +27,7 @@ from app.core.report import (
     resolve as _resolve,
     to_markdown,
 )
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -233,6 +234,7 @@ async def save(rep: Report, sources: list[dict]) -> dict:
 # ---------- orchestration ----------
 
 
+@usage_ledger.traced("recap")
 async def run(*, days: int = DAYS, stream_fn=None, native_fn=None, **gather_kw):
     """Yield (event, data)：gathering / sources / writing / report / saved / error.
 

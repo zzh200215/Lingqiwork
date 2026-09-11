@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import VAULT_DIR
 from app.db import get_db
 from app.models import Conversation, Memory, Message, ScheduledTask, TaskRun
+from app.core import usage_ledger
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -201,6 +202,7 @@ def _narrative_block(daily_msgs, daily_tokens, vault_files):
 
 
 @router.get("/briefing")
+@usage_ledger.traced("briefing")
 async def dashboard_briefing(db: AsyncSession = Depends(get_db)):
     """零柒口吻的「今日要点」：基于真实数据 + LLM，带 5 分钟 TTL 缓存，
     无 provider 时降级模板。"""

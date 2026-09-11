@@ -18,6 +18,7 @@ from pathlib import Path
 from app.config import DATA_DIR, VAULT_DIR
 from app.core import ingest
 from app.core.llm import ProviderInfo, stream_chat
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -222,6 +223,7 @@ def _new_id() -> str:
     return f"pod-{now}-{tail}"
 
 
+@usage_ledger.traced("podcast")
 async def generate(
     paths: list[str], host_voice: str = "", guest_voice: str = "", title: str = ""
 ) -> dict:
@@ -246,6 +248,7 @@ async def generate_from_blocks(
     return final or {"ok": False, "error": "播客生成中途终止"}
 
 
+@usage_ledger.traced("podcast")
 async def generate_from_blocks_iter(
     blocks: list[tuple[str, str]],
     host_voice: str = "",

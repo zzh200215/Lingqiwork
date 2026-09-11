@@ -19,6 +19,7 @@ from datetime import datetime
 from app.config import VAULT_DIR, settings
 from app.core import notify
 from app.core.prefs import load_config
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -223,6 +224,7 @@ def status() -> dict:
     return out
 
 
+@usage_ledger.traced("pet")
 async def greeting(mode: str = "morning") -> str:
     """One LLM-composed line in 零柒's voice; template fallback if no provider."""
     st = status()

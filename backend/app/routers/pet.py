@@ -9,6 +9,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from app.core import usage_ledger
 
 router = APIRouter(prefix="/api/pet", tags=["pet"])
 
@@ -104,4 +105,4 @@ async def pet_chat(body: PetChatIn):
         except Exception as e:  # noqa: BLE001
             yield _sse("error", {"message": f"{type(e).__name__}: {e}"})
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(usage_ledger.wrap_stream("pet", "", gen()), media_type="text/event-stream")

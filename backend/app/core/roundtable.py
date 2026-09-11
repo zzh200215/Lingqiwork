@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import VAULT_DIR
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ def _prompt(topic: str, context: str, turns: list[dict]) -> str:
     )
 
 
+@usage_ledger.traced("roundtable")
 async def run(topic: str, context: str = "", rounds: int = ROUNDS) -> dict:
     """开一场圆桌：串行两轮 × 三个 persona，纪要落盘。模型部分走降级链。
 

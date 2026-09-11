@@ -37,6 +37,7 @@ from app.core.llm import ProviderInfo
 from app.core.structured import extract_json
 from app.db import SessionLocal
 from app.models import EngineEvalRun
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -482,6 +483,7 @@ async def _run_one_engine(
     return {**agg, "detail": results}
 
 
+@usage_ledger.traced("eval")
 async def run(engine: str | None = None, *, judge: bool = True, stream_fn=None, native_fn=None) -> dict:
     """跑一个引擎（或全部）的 golden set，每个引擎存一行 run。
 

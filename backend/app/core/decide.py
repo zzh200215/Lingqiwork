@@ -37,6 +37,7 @@ from app.core.report import (
     resolve as _resolve,
     to_markdown,
 )
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -326,6 +327,7 @@ async def save(rep: Report, sources: list[dict]) -> dict:
 # ---------- orchestration ----------
 
 
+@usage_ledger.traced("decide")
 async def run(
     topic: str,
     *,

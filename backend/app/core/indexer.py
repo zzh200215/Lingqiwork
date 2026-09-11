@@ -6,6 +6,7 @@ own metadata). Reindexing is idempotent — a file's chunks are replaced
 atomically by upsert with deterministic chunk ids derived from (path, index).
 """
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -31,6 +32,13 @@ def notify_index_change() -> None:
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 120
+MIN_CHUNK = 200  # 低于这个长度的块尽量并进邻居——太碎的块检索价值低
+# 合并时允许超出 CHUNK_SIZE，但不超过 CHUNK_SIZE + CHUNK_OVERLAP：那是既有测试
+# （`test_chunks_stay_within_budget`）已经认可的上界。
+CHUNK_SOFT_MAX = CHUNK_SIZE + CHUNK_OVERLAP
+# 切法一变就 +1。块元数据里带着它，对不上就是「这份索引是旧切法切的，该重建了」——
+# 这是第 10.1 节第 2 条要的版本契约里最小的一块（内容哈希与模型版本戳仍未做）。
+CHUNKER_VERSION = 2
 COLLECTION = "workbench_kb"
 REPO_SOURCE_PREFIX = "repos/"  # sources cloned from git live outside the vault
 DIR_SOURCE_PREFIX = "dirs/"  # registered external folders (core/dirs.py)
@@ -79,22 +87,59 @@ def _is_orphan_heading(chunk: str) -> bool:
     return chunk.startswith("#") and len(chunk) < 60
 
 
+def _is_noise(chunk: str) -> bool:
+    """只有分隔线/符号/空白的块。实测 1059 个块里有一批就是一行 `---`：占着索引名额、
+    还可能被检索到，但它不承载任何东西。Pure.
+
+    **标题不算噪音**——它交给「并进下一块」那一步（标题必须有正文跟着），否则
+    「## 标题」剥掉 `#` 只剩两三个字，会被这一条先丢掉。
+    """
+    if chunk.lstrip().startswith("#"):
+        return False
+    return len(re.sub(r"[\s\-_*#=`~>|+]+", "", chunk)) < 8
+
+
 def chunk_text(text: str) -> list[str]:
+    """结构感知的切分（PLAN §10.2「检索」的语义分块）。
+
+    三步：
+    1. **丢掉纯符号块**（`---` 这类）——它们不承载内容，只是占名额。
+    2. **孤立标题并进下一块**：标题必须和它的正文在一起（切分器用 `\\n\\n` 会把
+       「## 标题」从正文剥离开）；文档以标题结尾时并进上一块。
+    3. **太碎的块并进上一块**：零碎尾巴属于上一节。**以标题开头的块不并**——那是真的
+       一节（哪怕短），并进上一节就把章节边界切错了。
+    """
     raw = [c.strip() for c in _splitter.split_text(text) if c.strip()]
-    # 合并孤立的标题 chunk：RecursiveCharacterTextSplitter 用 \n\n 切分时会把
-    # 「## 标题」从正文剥离开；当正文接近 chunk_size 时，标题（很短）无法合并
-    # 回去，孤立成一个只有标题的小块——它和正文分离，检索时语义不完整。这里把
-    # 孤立标题并回下一个 chunk 作为前缀，恢复「标题 + 正文」的完整性。
+    raw = [c for c in raw if not _is_noise(c)]
+
+    merged: list[str] = []
+    pending = ""
+    for cur in raw:
+        if _is_orphan_heading(cur):
+            pending = f"{pending}\n{cur}" if pending else cur
+            continue
+        merged.append(f"{pending}\n{cur}" if pending else cur)
+        pending = ""
+    if pending:  # 文档以标题结尾
+        if merged:
+            merged[-1] = f"{merged[-1]}\n{pending}"
+        else:
+            merged.append(pending)
+
     out: list[str] = []
-    i = 0
-    while i < len(raw):
-        cur = raw[i]
-        if _is_orphan_heading(cur) and i + 1 < len(raw) and not _is_orphan_heading(raw[i + 1]):
-            out.append(cur + "\n" + raw[i + 1])
-            i += 2
+    for cur in merged:
+        if (
+            out
+            and len(cur) < MIN_CHUNK
+            and not cur.lstrip().startswith("#")
+            and len(out[-1]) + len(cur) + 1 <= CHUNK_SOFT_MAX
+        ):
+            out[-1] = f"{out[-1]}\n{cur}"
         else:
             out.append(cur)
-            i += 1
+    # 第一块太碎、又没有上一块可并 → 并进下一块
+    if len(out) > 1 and len(out[0]) < MIN_CHUNK and len(out[0]) + len(out[1]) + 1 <= CHUNK_SOFT_MAX:
+        out = [f"{out[0]}\n{out[1]}", *out[2:]]
     return out
 
 
@@ -128,6 +173,7 @@ def index_file(path: Path, root: Path = VAULT_DIR, source_prefix: str = "") -> i
                 "chunk": i,
                 "title": path.stem,
                 "mtime": path.stat().st_mtime,
+                "chunker": CHUNKER_VERSION,
             }
             for i in range(len(chunks))
         ],
@@ -239,9 +285,19 @@ def search(query: str, top_k: int = 5) -> list[dict]:
 
 
 def stats() -> dict:
+    """索引现状。`stale` = 用**旧切法**切出来的块数——不为 0 就说明该重建索引了
+    （切法一变，块的边界全变；旧块留在库里既检索不准，也让「这次改动有没有用」
+    没法判断）。见 PLAN §10.1 #2。"""
     col = get_collection()
-    files = {m["source"] for m in col.get(include=["metadatas"])["metadatas"]} if col.count() else set()
-    return {"chunks": col.count(), "files": len(files)}
+    if col.count() == 0:
+        return {"chunks": 0, "files": 0, "chunker": CHUNKER_VERSION, "stale": 0}
+    metas = col.get(include=["metadatas"])["metadatas"]
+    return {
+        "chunks": col.count(),
+        "files": len({m.get("source") for m in metas}),
+        "chunker": CHUNKER_VERSION,
+        "stale": sum(1 for m in metas if m.get("chunker") != CHUNKER_VERSION),
+    }
 
 
 def search_hybrid(query: str, top_k: int = 5) -> list[dict]:

@@ -8,6 +8,10 @@ interface KbStats {
   chunks: number
   files: number
   watcher: string
+  /** 当前切法版本；块元数据里带着它 */
+  chunker: number
+  /** 用旧切法切出来的块数。不为 0 就说明该重建索引了 */
+  stale: number
 }
 
 interface Hit {
@@ -571,6 +575,14 @@ export default function KbPage() {
             </span>
           </div>
         </div>
+
+        {stats && stats.stale > 0 ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+            有 {stats.stale} 个块是用旧切法切出来的——块的边界已经变了，旧块会和新块混在一起被检索到。
+            <br />
+            vault 里的：「全量重建索引」；repos / dirs 里的不会被它带上，要在下面各自那一行点「同步」。
+          </div>
+        ) : null}
 
         {overview && srcTotal > 0 && (
           <div className="mt-5 border-t border-neutral-200/70 pt-4 dark:border-neutral-700/50">

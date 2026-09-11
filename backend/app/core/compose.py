@@ -24,6 +24,7 @@ from app.core.report import (
     resolve as _resolve,
     to_markdown,
 )
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -165,6 +166,7 @@ async def save(rep: Report, sources: list[dict]) -> dict:
 # ---------- orchestration ----------
 
 
+@usage_ledger.traced("compose")
 async def run(
     topic: str, *, kb_fn=None, memory_fn=None, journal_fn=None, stream_fn=None, native_fn=None
 ):

@@ -13,6 +13,7 @@ v1 — collaboration multiplies token cost already.
 import logging
 
 from app.core.llm import stream_chat
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +111,7 @@ def build_rag_block(sources: list[dict]) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+@usage_ledger.traced("collab")
 async def run(
     goal: str,
     agents: list[dict],

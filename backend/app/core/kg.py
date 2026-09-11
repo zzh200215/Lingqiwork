@@ -22,6 +22,7 @@ from pathlib import Path
 
 from app.config import VAULT_DIR
 from app.core.prefs import load_config
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -286,6 +287,7 @@ def _file_text(p: Path) -> str:
     return text[:MAX_FILE_CHARS]
 
 
+@usage_ledger.traced("kg")
 async def build(max_files: int = 8) -> dict:
     """Incrementally extract+store up to max_files changed files. Returns a
     summary; safe to call repeatedly until everything is indexed."""

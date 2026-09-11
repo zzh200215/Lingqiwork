@@ -339,6 +339,33 @@ export interface DecisionLogView {
   calibration: Calibration
 }
 
+// ---------- 用量与成本 (PLAN §10.2) ----------
+
+export interface CostKindRow {
+  in: number
+  out: number
+  calls: number
+}
+
+export interface CostSummary {
+  days: number
+  total_tokens_in: number
+  total_tokens_out: number
+  total_tokens: number
+  /** 聊天消息条数（自己有一列，不走账本） */
+  chat_calls: number
+  /** 定时任务次数（同上） */
+  task_runs: number
+  /** 账本收下的调用次数：聊天与定时任务之外的**全部**路径 */
+  ledger_calls: number
+  by_model: Record<string, { in: number; out: number; total: number; calls: number }>
+  /** 按操作——「钱花在哪」的正答 */
+  by_kind: Record<string, CostKindRow>
+  by_day: [string, number][]
+  /** 填了模型价格才有；形状由后端 estimate_cost 决定 */
+  cost?: Record<string, unknown> | null
+}
+
 export interface NoteSearchHit {
   path: string
   count: number
@@ -1123,8 +1150,7 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   beliefThreads: () => request<{ threads: BeliefThread[] }>('/api/beliefs'),
 
   /** 决策日志 + 校准分：把判断与当时的把握钉下来，回看时才算得出校准 */
-  listDecisions: () => request<DecisionLogView>('/api/decisions'),
-  addDecision: (body: { text: string; basis?: string; topic?: string; confidence?: number }) =>
+  listDecisions: () => request<DecisionLogView>('/api/decisions'),  addDecision: (body: { text: string; basis?: string; topic?: string; confidence?: number }) =>
     request<DecisionEntry>('/api/decisions', { method: 'POST', body: JSON.stringify(body) }),
   reviewDecision: (id: number, outcome: DecisionOutcome, note = '') =>
     request<DecisionEntry>(`/api/decisions/${id}/review`, {
@@ -1133,6 +1159,9 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     }),
   deleteDecision: (id: number) =>
     request<{ ok: boolean }>(`/api/decisions/${id}`, { method: 'DELETE' }),
+
+  /** 用量与成本：最近 N 天的 token 花在哪些操作 / 模型上 */
+  costSummary: (days = 30) => request<CostSummary>(`/api/cost/summary?days=${days}`),
 
   /** 语音日记：转写文本按天落盘 vault/journal/（automemory 后台提取，best-effort） */
   journalAdd: (text: string) =>

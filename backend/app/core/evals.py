@@ -22,6 +22,7 @@ from app.core.structured import extract_json
 from app.core.prefs import load_config
 from app.db import SessionLocal
 from app.models import EvalItem, EvalRun
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +162,7 @@ async def _one_case(
     return out
 
 
+@usage_ledger.traced("rag_eval")
 async def run_eval(top_k: int | None = None, judge: bool = True) -> dict:
     """Run the whole eval set against the current retrieval config. Stores a run row."""
     prefs = load_config()

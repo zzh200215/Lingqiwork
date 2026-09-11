@@ -11,6 +11,7 @@ import logging
 import time
 
 from app.core.llm import stream_chat
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ MAX_PROMPT_CHARS = 4000
 PER_CALL_TIMEOUT = 90  # 秒；本地大模型可能慢，但不该无限等
 
 
+@usage_ledger.traced("arena")
 async def run(prompt: str) -> list[dict]:
     """所有已启用 provider 各答一次。永不抛异常——失败的算作该家 ok=False。"""
     from app.core import providers

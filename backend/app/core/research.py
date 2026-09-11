@@ -37,6 +37,7 @@ from app.core.report import (
     to_markdown,
     trim_total,
 )
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -437,6 +438,7 @@ async def save(report: ResearchReport, sources: list[dict]) -> dict:
 # ---------- orchestration ----------
 
 
+@usage_ledger.traced("research")
 async def run(
     topic: str, *, search_fn=None, fetch_fn=None, kb_fn=None, stream_fn=None, native_fn=None
 ):

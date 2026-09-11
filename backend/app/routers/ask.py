@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models import ProviderConfig
+from app.core import usage_ledger
 
 router = APIRouter(prefix="/api/ask", tags=["ask"])
 
@@ -115,7 +116,7 @@ async def ask(body: AskRequest):
             yield sse("error", {"message": f"{type(e).__name__}: {e}"})
 
     return StreamingResponse(
-        gen(),
+        usage_ledger.wrap_stream("ask", body.text, gen()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

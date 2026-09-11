@@ -21,6 +21,7 @@ import random
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
 
@@ -555,6 +556,7 @@ async def find_duplicates(
 # ---------- 生成（带进度） ----------
 
 
+@usage_ledger.traced("cards")
 async def generate_iter(
     source_path: str = "",
     text: str = "",

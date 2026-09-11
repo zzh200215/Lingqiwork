@@ -563,6 +563,30 @@ class DecisionLog(Base):
     note: Mapped[str] = mapped_column(Text, default="")  # 回看时记一句为什么算应验
 
 
+class ModelUsage(Base):
+    """一次**操作**的模型用量（按模型汇总成一行）：PLAN §10.2「成本」。
+
+    **为什么要有它。** `messages`（聊天）与 `task_runs`（定时任务）各记一条，但**其余
+    路径全都不记**——研究 / 产出 / 复盘 / 方案 / 对质 / 教学 / 圆桌 / 播客 / 卡片 /
+    记忆整理烧的 token，在「这个月钱花在哪」里一个字都看不到。研究刚从 1 次调用变成
+    ≥2 次、又多了一个引擎、取材还要多一次改写，账目反而更该看得清。
+
+    一行 = 一个操作 × 一个模型（一个研究跑 3 轮 + 成文，可能是一行，也可能是两行）。
+    `kind` 是操作名（research / conflict / tutor…），`ref` 是那次的线索（话题 / 文件）。
+    """
+
+    __tablename__ = "model_usage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    kind: Mapped[str] = mapped_column(String(20), index=True)
+    ref: Mapped[str] = mapped_column(String(120), default="")
+    model_id: Mapped[str] = mapped_column(String(120), default="")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+
+
 # The uniqueness is load-bearing, not decoration: it is what makes a double tick
 # idempotent (the router upserts on it). Expressed as a unique Index rather than a
 # UniqueConstraint because a bare UniqueConstraint() at module level attaches to no
@@ -573,3 +597,4 @@ Index("ix_usage_page_day", UsageVisit.page, UsageVisit.day, unique=True)
 Index("ix_tutor_turns_session", TutorTurn.session_id, TutorTurn.id)
 Index("ix_feedback_group", ArtifactFeedback.kind, ArtifactFeedback.prompt_sha, ArtifactFeedback.model_id)
 Index("ix_engine_eval_group", EngineEvalRun.engine, EngineEvalRun.prompt_sha, EngineEvalRun.model_id)
+Index("ix_model_usage_recent", ModelUsage.kind, ModelUsage.id)

@@ -92,6 +92,44 @@ async def usage_summary(days: int = 30) -> dict:
             total_out += tout
             task_runs += int(cnt or 0)
 
+        # 账本侧：聊天与定时任务之外的全部（研究 / 产出 / 复盘 / 方案 / 对质 / 教学 /
+        # 圆桌 / 播客 / 卡片 / 记忆整理…）。这两条腿各自有列，所以这里不会重复计。
+        rows = (
+            await db.execute(
+                sql(
+                    "SELECT COALESCE(model_id,''), SUM(tokens_in), SUM(tokens_out), SUM(calls) "
+                    "FROM model_usage WHERE created_at >= :since GROUP BY model_id"
+                ),
+                {"since": since},
+            )
+        ).all()
+        ledger_calls = 0
+        for model, tin, tout, cnt in rows:
+            tin, tout = int(tin or 0), int(tout or 0)
+            m = by_model.setdefault(model, {"in": 0, "out": 0, "total": 0, "calls": 0})
+            m["in"] += tin
+            m["out"] += tout
+            m["total"] += tin + tout
+            m["calls"] += int(cnt or 0)
+            total_in += tin
+            total_out += tout
+            ledger_calls += int(cnt or 0)
+
+        # 按操作：这才是「钱花在哪」的正答
+        rows = (
+            await db.execute(
+                sql(
+                    "SELECT kind, SUM(tokens_in), SUM(tokens_out), SUM(calls) "
+                    "FROM model_usage WHERE created_at >= :since GROUP BY kind"
+                ),
+                {"since": since},
+            )
+        ).all()
+        by_kind = {
+            str(kind): {"in": int(tin or 0), "out": int(tout or 0), "calls": int(cnt or 0)}
+            for kind, tin, tout, cnt in rows
+        }
+
         # 按天趋势（localtime，与 usage.open_days 同一纪律）
         rows = (
             await db.execute(
@@ -117,6 +155,17 @@ async def usage_summary(days: int = 30) -> dict:
         ).all()
         for day, total in rows:
             by_day[day] = by_day.get(day, 0) + int(total or 0)
+        rows = (
+            await db.execute(
+                sql(
+                    "SELECT date(created_at,'localtime') AS d, SUM(tokens_in + tokens_out) "
+                    "FROM model_usage WHERE created_at >= :since GROUP BY d"
+                ),
+                {"since": since},
+            )
+        ).all()
+        for day, total in rows:
+            by_day[day] = by_day.get(day, 0) + int(total or 0)
 
     return {
         "days": days,
@@ -125,7 +174,9 @@ async def usage_summary(days: int = 30) -> dict:
         "total_tokens": total_in + total_out,
         "chat_calls": chat_calls,
         "task_runs": task_runs,
+        "ledger_calls": ledger_calls,
         "by_model": by_model,
+        "by_kind": by_kind,
         "by_day": sorted(by_day.items()),
     }
 
