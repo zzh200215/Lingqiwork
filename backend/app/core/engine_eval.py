@@ -40,7 +40,7 @@ from app.models import EngineEvalRun
 
 log = logging.getLogger(__name__)
 
-ENGINES = ("research", "compose", "recap", "decide")
+ENGINES = ("research", "compose", "recap", "decide", "conflict")
 FIXTURE_DIR = BASE_DIR / "backend" / "evals" / "engines"
 
 _CONCURRENCY = 2  # 每个用例至少一次模型调用，别把并发拉高
@@ -68,6 +68,13 @@ def _engine_spec(engine: str):
         from app.core import decide as m
 
         return m, m._SYNTH_PROMPT, m._FRAME_PROMPT
+    if engine == "conflict":
+        from app.core import conflict as m
+
+        # 读题那步（`_FRAME_PROMPT`）不在这里评：它的产物是 `subject`，和 check_frame 要的
+        # decision/options/criteria 不是一回事，评它得另写一套判分。对质的结构判分靠
+        # `min_cites_per_section`（每处冲突必须两侧都引到）。
+        return m, m._SYNTH_PROMPT, None
     raise ValueError(f"unknown engine {engine!r}")
 
 
@@ -169,6 +176,21 @@ def check_report(report, sources: list[dict], expect: dict) -> list[dict]:
     for s in report.sections:
         if not s.body.strip():
             findings.append({"code": "empty_section", "detail": f"「{s.heading}」是空的"})
+
+    # 每节至少引几个来源——对质的提示词承诺「两侧都引原句」，而一处冲突本来就是两边的事，
+    # 只引一边等于没对质。别的引擎不声明这个键，默认 0 = 不查。
+    min_cites = int(expect.get("min_cites_per_section") or 0)
+    if min_cites:
+        for s in report.sections:
+            cites = {int(x) for x in _CITE.findall(s.body)}
+            if len(cites) < min_cites:
+                findings.append(
+                    {
+                        "code": "too_few_cites_per_section",
+                        "detail": f"「{s.heading}」只引了 {len(cites)} 个来源，"
+                        f"要求每节 ≥{min_cites}（一处冲突至少是两边的事）",
+                    }
+                )
 
     # 4) 明令禁止的话（复盘禁「建议」——它是镜子，不是任务清单）
     blob = "\n".join(s.body for s in report.sections)

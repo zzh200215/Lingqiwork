@@ -234,6 +234,7 @@ async def synthesize(
     stream_fn=None,
     native_fn=None,
     resolve_fn=None,
+    extra_user: str = "",
 ) -> Report | None:
     """材料 → 带引用的成文（None 表示模型不可用或输出解析不了）。
 
@@ -247,14 +248,23 @@ async def synthesize(
     if resolved is None:
         return None
     info, model = resolved
-    obj = await _extract(info, model, _messages(topic, sources, system_prompt), stream_fn, native_fn)
+    obj = await _extract(
+        info, model, _messages(topic, sources, system_prompt, extra_user), stream_fn, native_fn
+    )
     return _finalize(obj, sources) if obj is not None else None
 
 
-def _messages(topic: str, sources: list[dict], system_prompt: str) -> list[dict]:
+def _messages(
+    topic: str, sources: list[dict], system_prompt: str, extra_user: str = ""
+) -> list[dict]:
+    user = f"话题：{topic}\n\n材料：\n{format_sources(sources)}"
+    # `extra_user` 是给「对质」那种**先跑一步小调用、再把结论喂给写手**的引擎用的
+    # （它得知道哪几处已经被判定为冲突）。默认空串，另外四个引擎的字节不变。
+    if extra_user:
+        user += f"\n\n{extra_user}"
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"话题：{topic}\n\n材料：\n{format_sources(sources)}"},
+        {"role": "user", "content": user},
     ]
 
 
@@ -339,6 +349,7 @@ async def synthesize_streaming(
     stream_fn=None,
     native_fn=None,
     resolve_fn=None,
+    extra_user: str = "",
 ):
     """`synthesize` 的流式版：先 yield ("draft", {title, sections}) 若干次，最后 ("done", Report|None)。
 
@@ -355,7 +366,7 @@ async def synthesize_streaming(
         yield "done", None
         return
     info, model = resolved
-    messages = _messages(topic, sources, system_prompt)
+    messages = _messages(topic, sources, system_prompt, extra_user)
 
     # 回调不能 yield，所以走队列：生成在 task 里跑，draft 从这里漏出去。
     queue: asyncio.Queue = asyncio.Queue()

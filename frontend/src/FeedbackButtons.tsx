@@ -21,7 +21,7 @@ export default function FeedbackButtons({
   modelId,
   artifactRef,
 }: {
-  kind: 'research' | 'compose' | 'recap' | 'decide'
+  kind: 'research' | 'compose' | 'recap' | 'decide' | 'conflict'
   promptSha?: string
   modelId?: string
   artifactRef?: string

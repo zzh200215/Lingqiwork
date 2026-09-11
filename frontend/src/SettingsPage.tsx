@@ -3,7 +3,7 @@ import Layout from './Layout'
 import { api, type AgentPreset, type ArenaResult, type BackupList, type EngineEvalLatest, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
 
 /** 四个成文引擎的展示顺序（与 core/engine_eval.ENGINES 一致）。 */
-const ENGINE_ORDER = ['research', 'compose', 'recap', 'decide'] as const
+const ENGINE_ORDER = ['research', 'compose', 'recap', 'decide', 'conflict'] as const
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`

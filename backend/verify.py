@@ -25,7 +25,13 @@ FRONTEND = HERE.parent / "frontend"
 # The drills worth running at a block boundary: each starts its own scratch
 # server (or, for smoke_integration, needs one already up) and exercises a real
 # end-to-end path. Paths are relative to this file.
-DRILLS = ["smoke_health.py", "smoke_mcp.py", "smoke_restore.py", "smoke_integration.py"]
+DRILLS = [
+    "smoke_health.py",
+    "smoke_mcp.py",
+    "smoke_restore.py",
+    "smoke_conflict.py",
+    "smoke_integration.py",
+]
 
 
 def _venv_guard() -> bool:

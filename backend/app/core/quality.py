@@ -1,6 +1,6 @@
 """生成质量闭环：记录「这次我满意吗」，并按 (kind, prompt_sha, model_id) 聚合。
 
-**为什么需要它。** research / compose / recap / decide 都通过 `core/report.py` 成文，但
+**为什么需要它。** research / compose / recap / decide / conflict 都通过 `core/report.py` 成文，但
 **没有一处记录过用户满不满意**——只有聊天消息有 feedback、教学有自评。后果是：改了提示词、
 换了 provider，只能靠"看起来对不对"判断；而四个引擎共用一条脊梁，一次提示词回归
 同时打穿四个功能，**却没有任何网接着**。
@@ -23,7 +23,7 @@ from app.models import ArtifactFeedback
 
 log = logging.getLogger(__name__)
 
-KINDS = ("research", "compose", "recap", "decide")
+KINDS = ("research", "compose", "recap", "decide", "conflict")
 VERDICTS = ("good", "bad")
 REASON_CAP = 200
 RECENT_BAD = 10  # 最近几条差评连原因一起带出来——那才是能动手的部分

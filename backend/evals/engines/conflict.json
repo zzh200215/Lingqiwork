@@ -1,0 +1,120 @@
+{
+  "engine": "conflict",
+  "_note": "对质的 golden set。它和另外四个不同的地方在 `min_cites_per_section`：一处冲突本来就是两边的事，只引一侧等于没对质，所以每个小节至少要引 2 个不同来源——这是这条链路的结构性承诺，用它顶住了「模型把一处冲突写成一侧的自述」这种最可能的走样。第 1、3 条是 `engine_eval.health` 一直点名缺的「材料互相冲突」用例（它此前只有 happy path，接地分全顶格、区分度低）。第 4 条是「材料明显不足」——它的信号在接地判分（模型会不会从一条材料里编出一处冲突），结构判分对它没有意义，所以 expect 是空的。`_FRAME_PROMPT` 那步不进标尺（它的产物是 subject，不是 check_frame 要的 decision/options/criteria）。",
+  "cases": [
+    {
+      "id": "conflict-own-note-vs-docs",
+      "topic": "asyncio 里 await 到底把控制权交给了谁",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "kb",
+          "title": "我自己对 await 的理解",
+          "ref": "notes/asyncio-await.md",
+          "text": "await 是把控制权交回给**调用它的那个协程**，等那边处理完再回来接着跑。所以我一直理解成：是调用方在恢复执行。"
+        },
+        {
+          "n": 2,
+          "kind": "memory",
+          "title": "长期记忆",
+          "ref": "",
+          "text": "事实：我在用 asyncio 写一个小爬虫。偏好：解释尽量短，别铺垫。"
+        },
+        {
+          "n": 3,
+          "kind": "web",
+          "title": "asyncio 官方文档 — Awaitables",
+          "ref": "https://docs.python.org/3/library/asyncio-task.html",
+          "text": "await 会让出控制权给**事件循环（event loop）**，由事件循环在将来某个时刻恢复这个协程。恢复它的从来不是「调用方」，调用方早在它让出控制权的那一刻就返回了。"
+        }
+      ],
+      "expect": {
+        "min_sections": 1,
+        "min_used": 2,
+        "min_cites_per_section": 2,
+        "forbid": []
+      }
+    },
+    {
+      "id": "conflict-web-vs-web",
+      "topic": "Python 3.13 的 free-threading 现在能不能上生产",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "web",
+          "title": "Real Python — Python 3.13 一览",
+          "ref": "https://realpython.com/python313/",
+          "text": "free-threaded 构建在 3.13 仍是实验性的，单线程性能有 10-20% 的回退，官方明确不建议用于生产环境。"
+        },
+        {
+          "n": 2,
+          "kind": "web",
+          "title": "某工程博客：我们已经在生产用 3.13t 了",
+          "ref": "https://example.com/blog/313t-in-prod",
+          "text": "我们把一个 IO + 计算混合的服务迁到 3.13 free-threaded 跑了一个月：GIL 争用消失之后吞吐涨了三成，单线程回退那个位数我们完全能接受。结论是现在就值得上生产。"
+        },
+        {
+          "n": 3,
+          "kind": "web",
+          "title": "PEP 703",
+          "ref": "https://peps.python.org/pep-0703/",
+          "text": "free-threading 从 3.13 起可作为官方构建获得，标注为实验性；C 扩展需要显式声明对它的支持。"
+        }
+      ],
+      "expect": {
+        "min_sections": 1,
+        "min_used": 2,
+        "min_cites_per_section": 2
+      }
+    },
+    {
+      "id": "conflict-own-note-vs-own-memory",
+      "topic": "向量库选型：Chroma 还是 Qdrant",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "kb",
+          "title": "向量库选型 — 8 月的结论",
+          "ref": "notes/向量库选型.md",
+          "text": "结论（8 月 20 日）：先用 Chroma 就好，单机能跑，不折腾。反正数据量上不去。"
+        },
+        {
+          "n": 2,
+          "kind": "memory",
+          "title": "长期记忆",
+          "ref": "",
+          "text": "事实：8 月底把向量库换成了 Qdrant——Chroma 到 10 万 chunk 之后检索慢得没法用，重建索引也要十几分钟。"
+        },
+        {
+          "n": 3,
+          "kind": "web",
+          "title": "Qdrant 文档 — 部署",
+          "ref": "https://qdrant.tech/documentation/guides/installation/",
+          "text": "Qdrant 可以嵌入式运行，也可以单独起服务；默认使用 HNSW 索引，支持按 payload 过滤。"
+        }
+      ],
+      "expect": {
+        "min_sections": 1,
+        "min_used": 2,
+        "min_cites_per_section": 2
+      }
+    },
+    {
+      "id": "conflict-thin-material",
+      "topic": "Postgres 的 MVCC 算不算快照隔离",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "web",
+          "title": "PostgreSQL 并发控制",
+          "ref": "https://www.postgresql.org/docs/current/mvcc.html",
+          "text": "PostgreSQL 用多版本并发控制（MVCC）来提供读一致性：每个事务看到的是某个时间点上的快照，读不阻塞写、写不阻塞读。"
+        }
+      ],
+      "expect": {
+        "_why_empty": "只有一条材料，本就没有「两处」可对。这里要测的是接地判分：模型会不会为了一条材料硬造出一处冲突。结构判分对它没有可断言的东西。",
+        "min_used": 0
+      }
+    }
+  ]
+}

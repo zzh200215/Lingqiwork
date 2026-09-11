@@ -295,6 +295,50 @@ export interface BeliefThread {
   items: { id: number; content: string; kind: string }[]
 }
 
+// ---------- 决策日志 + 校准分 (PLAN §10.3 C) ----------
+
+export type DecisionOutcome = '' | 'hit' | 'miss' | 'unclear'
+
+export interface DecisionEntry {
+  id: number
+  text: string
+  basis: string
+  /** 领域标签，校准时分组用；空 = 不进榜 */
+  topic: string
+  /** 0-100：**判断当时**自己说的把握。这一栏是整件事的关键 */
+  confidence: number
+  created_at: string | null
+  reviewed_at: string | null
+  /** '' = 还没回看（没有任何东西会催它） */
+  outcome: DecisionOutcome
+  note: string
+}
+
+export interface CalibrationBucket {
+  bucket: string
+  hits: number
+  misses: number
+  sample: number
+  /** null = 样本不够，不给分 */
+  rate: number | null
+}
+
+export interface Calibration {
+  total: number
+  reviewed: number
+  /** 回看了但「还看不出」的，单独计数、不进命中率分母 */
+  unclear: number
+  pending: number
+  overall: { hits: number; misses: number; rate: number | null; min_sample: number }
+  by_topic: { topic: string; hits: number; misses: number; rate: number }[]
+  by_confidence: CalibrationBucket[]
+}
+
+export interface DecisionLogView {
+  entries: DecisionEntry[]
+  calibration: Calibration
+}
+
 export interface NoteSearchHit {
   path: string
   count: number
@@ -1078,6 +1122,18 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   /** 信念演化时间线：automemory 事实按语义聚成的「信念线」 */
   beliefThreads: () => request<{ threads: BeliefThread[] }>('/api/beliefs'),
 
+  /** 决策日志 + 校准分：把判断与当时的把握钉下来，回看时才算得出校准 */
+  listDecisions: () => request<DecisionLogView>('/api/decisions'),
+  addDecision: (body: { text: string; basis?: string; topic?: string; confidence?: number }) =>
+    request<DecisionEntry>('/api/decisions', { method: 'POST', body: JSON.stringify(body) }),
+  reviewDecision: (id: number, outcome: DecisionOutcome, note = '') =>
+    request<DecisionEntry>(`/api/decisions/${id}/review`, {
+      method: 'PUT',
+      body: JSON.stringify({ outcome, note }),
+    }),
+  deleteDecision: (id: number) =>
+    request<{ ok: boolean }>(`/api/decisions/${id}`, { method: 'DELETE' }),
+
   /** 语音日记：转写文本按天落盘 vault/journal/（automemory 后台提取，best-effort） */
   journalAdd: (text: string) =>
     request<JournalSaved>('/api/journal', { method: 'POST', body: JSON.stringify({ text }) }),
@@ -1138,9 +1194,21 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       body: JSON.stringify(payload),
     }),
 
+  /** 对质：把上一次的报告落成 vault/conflicts/ 里的一篇 md 并进索引 */
+  conflictSave: (payload: {
+    title: string
+    sections: { heading: string; body: string }[]
+    used: number[]
+    sources: { n: number; kind: string; title: string; ref: string }[]
+  }) =>
+    request<{ filename: string; title: string; chunks: number }>('/api/conflict/save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   /** 生成质量闭环：一次 👍/👎，挂在 (kind, 提示词版本, 模型) 上 */
   qualityFeedback: (payload: {
-    kind: 'research' | 'compose' | 'recap' | 'decide'
+    kind: 'research' | 'compose' | 'recap' | 'decide' | 'conflict'
     verdict: 'good' | 'bad'
     prompt_sha?: string
     model_id?: string

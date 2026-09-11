@@ -653,3 +653,82 @@ export async function streamDecide(
   }
   return done
 }
+
+// ---------- 跨源对质 (PLAN §10.3 B) ----------
+
+/** 一处对不上：两侧的来源编号 + 一句话说清哪一点撞上了。 */
+export interface ConflictPair {
+  a_n: number
+  b_n: number
+  basis: string
+}
+
+export interface ConflictSourceRef {
+  n: number
+  kind: string
+  title: string
+  ref: string
+}
+
+export interface ConflictReport {
+  title: string
+  sections: { heading: string; body: string }[]
+  /** 正文里真正引用到的来源编号 */
+  used: number[]
+  sources: ConflictSourceRef[]
+  model_id?: string
+  /** 这版成文提示词的指纹——质量闭环按它把评价分版本统计 */
+  prompt_sha?: string
+  /** 读题结果随报告一起回来——「这次比的是什么」在存进知识库之后还看得见 */
+  subject?: string
+  /** 判定对不上的编号对；空数组 = 材料里确实没找到对不上的（不是失败） */
+  pairs?: ConflictPair[]
+}
+
+export interface ConflictDone {
+  ok: boolean
+  error?: string
+  report?: ConflictReport
+}
+
+/** Progress stages: framing / frame / gathering / sources / finding / writing / draft（可多帧）. */
+export type ConflictStage = (event: string, data: Record<string, unknown>) => void
+
+/**
+ * One confrontation run（你自己的说法 vs 外部来源，看哪两处对不上）。
+ *
+ * Same shape as `streamDecide`, with one extra stage: `finding` fires after the
+ * material is in hand and before anything is written — the page says "在比对…"
+ * there. A run that finds nothing still terminates with a `report` (its title
+ * says so); that is a normal outcome, not an error.
+ */
+export async function streamConflict(
+  topic: string,
+  onStage: ConflictStage,
+  signal?: AbortSignal
+): Promise<ConflictDone> {
+  const res = await fetch('/api/conflict', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = `对质失败: ${res.status}`
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(detail)
+  }
+
+  let done: ConflictDone = { ok: false, error: '流提前结束' }
+  for await (const [event, data] of sseFrames(res)) {
+    if (event === 'report') done = { ok: true, report: data as unknown as ConflictReport }
+    else if (event === 'error')
+      done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
+    else onStage(event, data)
+  }
+  return done
+}

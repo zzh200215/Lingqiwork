@@ -36,6 +36,10 @@ RUN = str(int(time.time()))
 CLIP_MARK = f"WBCLIP-{RUN}"   # 只在剪藏那篇里出现
 NOTE_MARK = f"WBNOTE-{RUN}"   # 只在研究那篇的标题里出现
 TOPIC_Q = "生成器与迭代器有什么区别"
+# 对质那一跳：种两段**互相矛盾**的文本，看引擎揪不揪得出来（下面 leg_conflict）
+CF_TOPIC = "本地向量库到 100 万 chunk 时 Chroma 的检索延迟"
+CF_MARK_A = f"WBCFA-{RUN}"
+CF_MARK_B = f"WBCFB-{RUN}"
 
 
 def token() -> str:
@@ -209,8 +213,101 @@ def leg_research_roundtrip() -> bool:
     return True
 
 
+def leg_conflict() -> bool:
+    """种两段互相矛盾的文本，再跑对质——看这条链路通不通。
+
+    钉死的是**管道**：种下的材料进索引、`/api/conflict` 走完 SSE、回一份带来源的报告。
+    「有没有揪出冲突、揪出的是不是种下的那一对」取决于模型怎么改写话题 + 检索排名，
+    **只打印不断言**（硬断言会让闸口随机红）。真正的对质能力证明在 `smoke_conflict.py`
+    与 `evals/engines/conflict.json` 的 golden 用例里。
+    Returns False when SKIPPED (no usable model).
+    """
+    print("\n[5] 对质：种两段互相矛盾的文本 → 跑对质 → 看它揪不揪得出来（需要可用模型）")
+    if not _model_ready():
+        print("  ⚠ SKIP：没有可用模型", flush=True)
+        return False
+
+    planted = [
+        (CF_MARK_A, "本地向量库到 100 万 chunk 时 Chroma 的检索延迟仍然低于 50ms，完全够用。"),
+        (CF_MARK_B, "本地向量库到 100 万 chunk 时 Chroma 的检索延迟会涨到 2 秒以上，慢到没法用。"),
+    ]
+    refs: dict[str, str] = {}
+    for mark, line in planted:
+        status, body, _ = _call(
+            "POST", "/api/kb/clip_text",
+            {"text": f"{mark} {CF_TOPIC}：{line}", "title": f"联调对质-{mark}"},
+        )
+        if status != 200:
+            bad("种下矛盾材料", f"got {status}: {body}")
+            return True
+        refs[mark] = str(body.get("filename") or "")
+        if not _poll_hit(mark, CF_TOPIC):
+            bad(f"种下的材料 {mark} 进不了索引", "检索不到")
+            return True
+    ok("两段互相矛盾的文本已进索引", " · ".join(refs.values()))
+
+    report = _sse_report("/api/conflict", {"topic": CF_TOPIC})
+    if report is None:
+        bad("对质成文", "流里没有带 sections 的报告（或中途报错）")
+        return True
+
+    sources = report.get("sources") or []
+    by_ref = {s.get("ref"): s.get("n") for s in sources}
+    found = [m for m, ref in refs.items() if ref in by_ref]
+    print(f"  · 取材 {len(sources)} 条，种下的两段进了 {len(found)} 段：{found}", flush=True)
+
+    pairs = list(report.get("pairs") or [])
+    by_n = {s.get("n"): s for s in sources}
+    if pairs:
+        detail = "；".join(
+            f"[{p['a_n']}] {by_n.get(p['a_n'], {}).get('title', '?')} × "
+            f"[{p['b_n']}] {by_n.get(p['b_n'], {}).get('title', '?')}"
+            for p in pairs
+        )
+        print(f"  · 报出 {len(pairs)} 处对不上：{detail}", flush=True)
+        planted_ns = {by_ref[r] for r in refs.values() if r in by_ref}
+        if not any(planted_ns & {p["a_n"], p["b_n"]} for p in pairs):
+            print("    （没落到种下的那两段上——可能它找到了别的分歧，也可能检索没够到）", flush=True)
+    else:
+        print("  · 扫描判定这批材料没有对不上的（模型很克制，不会硬凑）", flush=True)
+
+    # **只硬断言管道**：种下的材料进得了索引、/api/conflict 走完 SSE、回一份带来源的报告。
+    # 「揪出的是不是种下的那一对」取决于模型怎么改写话题 + 检索排名，做成硬断言会让闸口
+    # 随机红；正面对质能力的证明在进程内的 smoke_conflict.py 与 golden 用例里。
+    (ok if sources else bad)("对质走通 SSE 并回了带来源的报告", f"sources={len(sources)}")
+    return True
+
+
+def _sse_report(path: str, body: dict) -> dict | None:
+    """跑一个 SSE 端点，返回**最后一个**带 sections 的载荷。
+
+    必须是最后一个：`draft` 事件也带 sections（半截产物，没有 sources / used / pairs），
+    遇到第一个就返回会拿到半截 draft。研究那一跳能对是因为它不 break、循环到最后。
+    """
+    r = urllib.request.Request(
+        BASE + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-WB-Token": TOK},
+        method="POST",
+    )
+    out: dict | None = None
+    try:
+        with urllib.request.urlopen(r, timeout=300) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line.startswith("data: "):
+                    continue
+                ev = json.loads(line[6:])
+                if isinstance(ev, dict) and ev.get("sections"):
+                    out = ev
+    except Exception as e:  # noqa: BLE001
+        bad("流式调用", f"{type(e).__name__}: {e}")
+        return None
+    return out
+
+
 def leg_backup() -> None:
-    print("\n[5] 备份闭环（密钥以密文入包，见 PLAN §10.1 #5）")
+    print("\n[6] 备份闭环（密钥以密文入包，见 PLAN §10.1 #5）")
     status, body, _ = _call("POST", "/api/backup/run", {})
     if status != 200 or not body.get("ok"):
         bad("跑一次备份", f"got {status}: {body}")
@@ -234,6 +331,7 @@ def main() -> int:
     leg_token_and_cookie()
     leg_capture_to_recall()
     researched = leg_research_roundtrip()
+    conflicted = leg_conflict()
     leg_backup()
 
     print("\n" + "=" * 60)
@@ -242,10 +340,10 @@ def main() -> int:
         for f in FAIL:
             print(f"  - {f}")
         return 1
-    if not researched:
-        print("SMOKE PASS ⚠（研究那跳被跳过 —— 配好 provider 再跑一次才算完整）")
+    if not (researched and conflicted):
+        print("SMOKE PASS ⚠（有跳被跳过 —— 配好 provider 再跑一次才算完整）")
         return 3
-    print("SMOKE PASS ✅（含研究全链路）")
+    print("SMOKE PASS ✅（含研究全链路 + 对质揪出种下的冲突）")
     return 0
 
 

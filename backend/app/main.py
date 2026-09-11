@@ -24,10 +24,12 @@ from app.routers import (
     cards,
     chat,
     compose,
+    conflict,
     conversations,
     cost,
     dashboard,
     decide,
+    decisions,
     dirs,
     evals,
     feeds,
@@ -199,6 +201,8 @@ app.include_router(research.router)
 app.include_router(compose.router)
 app.include_router(recap.router)
 app.include_router(decide.router)
+app.include_router(conflict.router)
+app.include_router(decisions.router)
 app.include_router(quality.router)
 app.include_router(arena.router)
 app.include_router(backup.router)

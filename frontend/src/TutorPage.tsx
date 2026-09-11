@@ -17,9 +17,11 @@ import {
   type TutorTurn,
 } from './api'
 import {
+  streamConflict,
   streamDecide,
   streamResearch,
   streamTutorSay,
+  type ConflictReport,
   type DecideFrame,
   type DecideReport,
   type ReportDraft,
@@ -174,6 +176,14 @@ export default function TutorPage() {
   const [dcFrame, setDcFrame] = useState<DecideFrame | null>(null)
   const [dcMsg, setDcMsg] = useState('')
   const [dcSaved, setDcSaved] = useState('')
+  // 对质（跨源冲突检测）：把你自己的说法和外部来源摆在一起，看哪两处对不上。同样是
+  // 拉取式——点「对质」才跑；材料里没有对不上的时它会直说没有，那不是失败。
+  const [cfBusy, setCfBusy] = useState(false)
+  const [cf, setCf] = useState<ConflictReport | null>(null)
+  const [cfDraft, setCfDraft] = useState<ReportDraft | null>(null)
+  const [cfSubject, setCfSubject] = useState('')
+  const [cfMsg, setCfMsg] = useState('')
+  const [cfSaved, setCfSaved] = useState('')
   const [stats, setStats] = useState<TutorStats | null>(null)
   // 开场建议（DeepTutor 参考项）：从记录里派生的就近入口，挂了就静默没有
   const [starters, setStarters] = useState<TutorStarter[]>([])
@@ -185,6 +195,8 @@ export default function TutorPage() {
   const rsAbortRef = useRef<AbortController | null>(null)
   // 方案同理
   const dcAbortRef = useRef<AbortController | null>(null)
+  // 对质同理
+  const cfAbortRef = useRef<AbortController | null>(null)
 
   const refreshRail = useCallback(() => {
     // best-effort: the rail is context, never a precondition for teaching
@@ -396,6 +408,86 @@ export default function TutorPage() {
     setDcBusy(false)
   }, [])
 
+  /** 换会话 / 再学一个 / 离开：同样的道理，别让上一场题的对质落到新会话上 */
+  const clearConflict = useCallback(() => {
+    cfAbortRef.current?.abort()
+    setCf(null)
+    setCfDraft(null)
+    setCfSubject('')
+    setCfMsg('')
+    setCfSaved('')
+    setCfBusy(false)
+  }, [])
+
+  // 对质（PLAN §10.3 B）：先出 `frame`（我理解要比的是什么），再取材，然后 `finding`
+  // 把「哪两处对不上」扫出来——一处都没有就直接给结论，不再烧一次长篇成文。
+  const runConflict = useCallback(async () => {
+    const t = topic.trim()
+    if (!t || cfBusy) return
+    cfAbortRef.current?.abort()
+    const ctl = new AbortController()
+    cfAbortRef.current = ctl
+    setCfBusy(true)
+    setCf(null)
+    setCfDraft(null)
+    setCfSubject('')
+    setCfSaved('')
+    setCfMsg('读题中…')
+    try {
+      const r = await streamConflict(
+        t,
+        (event, data) => {
+          if (event === 'frame') {
+            setCfSubject(String((data as { subject?: string }).subject ?? ''))
+            setCfMsg('去取材料…')
+          } else if (event === 'gathering') setCfMsg('检索知识库、长期记忆与外部来源…')
+          else if (event === 'sources')
+            setCfMsg(`取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，比对中…`)
+          else if (event === 'finding') setCfMsg('在比对哪两处对不上…')
+          else if (event === 'writing') setCfMsg('成文中…')
+          else if (event === 'draft') {
+            setCfDraft(data as unknown as ReportDraft)
+            setCfMsg('')
+          }
+        },
+        ctl.signal
+      )
+      if (r.ok && r.report) {
+        setCf(r.report)
+        setCfSubject(r.report.subject ?? '')
+        setCfMsg('')
+      } else {
+        setCfMsg(r.error ?? '对质失败')
+      }
+    } catch (e) {
+      // 主动掐断不算错误：换会话时不该冒出一条红字
+      if ((e as { name?: string })?.name !== 'AbortError') {
+        setCfMsg(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setCfBusy(false)
+    }
+  }, [topic, cfBusy])
+
+  const saveConflict = useCallback(async () => {
+    if (!cf || cfBusy || cfSaved) return
+    setCfBusy(true)
+    setCfMsg('')
+    try {
+      const r = await api.conflictSave({
+        title: cf.title,
+        sections: cf.sections,
+        used: cf.used,
+        sources: cf.sources,
+      })
+      setCfSaved(r.filename)
+    } catch (e) {
+      setCfMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCfBusy(false)
+    }
+  }, [cf, cfBusy, cfSaved])
+
   useEffect(() => refreshRail(), [refreshRail])
 
   // 开场建议只在开场屏有意义：挂载时拉一次，点一个就开会话，不轮询不催
@@ -559,7 +651,8 @@ export default function TutorPage() {
     setEnded(null)
     clearResearch()
     clearDecide()
-  }, [clearResearch, clearDecide])
+    clearConflict()
+  }, [clearResearch, clearDecide, clearConflict])
 
   return (
     <Layout page="tutor">
@@ -688,6 +781,14 @@ export default function TutorPage() {
                   className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 hover:text-violet-700 disabled:opacity-40 dark:text-violet-300 dark:hover:bg-violet-500/10"
                 >
                   {dcBusy ? '理清中…' : '🤔 帮我理清'}
+                </button>
+                <button
+                  onClick={() => void runConflict()}
+                  disabled={cfBusy || !topic.trim()}
+                  title="把你自己的说法和外部来源摆在一起，看哪两处对不上；一处都没有它会直说没有。成品可存进知识库"
+                  className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-teal-600 transition-colors hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 dark:text-teal-300 dark:hover:bg-teal-500/10"
+                >
+                  {cfBusy ? '对质中…' : '⚔️ 对质'}
                 </button>
                 <button
                   onClick={reset}
@@ -875,6 +976,98 @@ export default function TutorPage() {
                               promptSha={dc.prompt_sha}
                               modelId={dc.model_id}
                               artifactRef={dcSaved}
+                            />
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {/* 对质卡：先摆「这次比的是什么」，再出正文。零冲突时它直接给一句实话
+                      （标题就写着「没有对不上的」），那是正常结果不是失败。同一场会话的
+                      动作，不落右栏、不计数（第 2 节）。 */}
+                  {cf || cfSubject || cfDraft || cfBusy || cfMsg ? (
+                    <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-4 dark:border-teal-500/30 dark:bg-teal-500/10">
+                      <div className="flex items-center justify-between gap-2 pb-1">
+                        <p className="text-[11px] font-medium uppercase tracking-wider text-teal-700 dark:text-teal-300">
+                          ⚔️ 对质
+                        </p>
+                        {cf ? (
+                          <button
+                            onClick={() => void saveConflict()}
+                            disabled={cfBusy || !!cfSaved}
+                            className="rounded-full border border-teal-300 px-2 py-0.5 text-[10px] text-teal-700 transition-colors hover:bg-teal-100 disabled:opacity-40 dark:border-teal-500/40 dark:text-teal-300 dark:hover:bg-teal-500/20"
+                          >
+                            {cfSaved ? '已存进知识库' : cfBusy ? '保存中…' : '存进知识库'}
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {cfSubject ? (
+                        <div className="mb-2 rounded-lg border border-teal-200/70 bg-white/70 p-2.5 dark:border-teal-500/20 dark:bg-neutral-900/40">
+                          <p className="text-[11px] text-neutral-500">这次比的是</p>
+                          <p className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                            {cfSubject}
+                          </p>
+                          {cf && cf.pairs && cf.pairs.length > 0 ? (
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {cf.pairs.map((p) => (
+                                <span
+                                  key={`${p.a_n}-${p.b_n}`}
+                                  title={p.basis}
+                                  className="rounded-full bg-teal-100 px-2 py-0.5 text-[11px] text-teal-700 dark:bg-teal-500/20 dark:text-teal-300"
+                                >
+                                  [{p.a_n}] × [{p.b_n}]
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {cfMsg ? <p className="text-[11px] text-neutral-500">{cfMsg}</p> : null}
+
+                      {cf || cfDraft ? (
+                        <Markdown>{reportMarkdown(cf ?? cfDraft!)}</Markdown>
+                      ) : null}
+                      {cf ? (
+                        <>
+                          {cf.sources.length > 0 ? (
+                            <details className="mt-2 border-t border-teal-200/70 pt-2 dark:border-teal-500/20">
+                              <summary className="cursor-pointer text-[11px] text-neutral-500">
+                                来源 {cf.sources.length} 条（你的材料{' '}
+                                {cf.sources.filter((s) => s.kind === 'kb').length} 条 · 记忆{' '}
+                                {cf.sources.filter((s) => s.kind === 'memory').length} 条）
+                              </summary>
+                              <ul className="mt-1 space-y-0.5">
+                                {cf.sources.map((s) => (
+                                  <li key={s.n} className="text-[11px] leading-relaxed">
+                                    <span
+                                      className={
+                                        cf.used.includes(s.n)
+                                          ? 'font-medium text-neutral-800 dark:text-neutral-100'
+                                          : 'text-neutral-500 dark:text-neutral-400'
+                                      }
+                                    >
+                                      [{s.n}] {s.kind === 'kb' ? '📄' : s.kind === 'memory' ? '🧠' : '🌐'}{' '}
+                                      {s.title}
+                                    </span>
+                                    <span className="text-neutral-400"> — {s.ref}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          ) : null}
+                          {cfSaved ? (
+                            <p className="mt-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                              已存到 {cfSaved}，已进索引——下次相关话题的取材会先捞到它
+                            </p>
+                          ) : null}
+                          <div className="mt-2 border-t border-teal-200/70 pt-2 dark:border-teal-500/20">
+                            <FeedbackButtons
+                              kind="conflict"
+                              promptSha={cf.prompt_sha}
+                              modelId={cf.model_id}
+                              artifactRef={cfSaved}
                             />
                           </div>
                         </>

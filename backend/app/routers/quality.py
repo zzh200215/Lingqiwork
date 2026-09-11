@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 
 class FeedbackIn(BaseModel):
-    kind: str  # research | compose | recap
+    kind: str  # research | compose | recap | decide | conflict
     verdict: str  # good | bad
     prompt_sha: str = ""
     model_id: str = ""

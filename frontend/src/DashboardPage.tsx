@@ -4,7 +4,15 @@ import remarkGfm from 'remark-gfm'
 
 import FeedbackButtons from './FeedbackButtons'
 import Layout from './Layout'
-import { api, type BeliefThread, type DashboardStats, type JournalRecent, type TutorStats } from './api'
+import {
+  api,
+  type BeliefThread,
+  type DashboardStats,
+  type DecisionLogView,
+  type DecisionOutcome,
+  type JournalRecent,
+  type TutorStats,
+} from './api'
 import { streamRecap, type RecapReport, type RecapSaved, type ReportDraft } from './stream'
 
 // 仪表盘 — 零柒视角
@@ -54,6 +62,65 @@ export default function DashboardPage() {
 
   // 信念演化时间线（记忆时间轴主题）：纯拉取式的自我观察，没有就整块不渲染
   const [beliefs, setBeliefs] = useState<BeliefThread[] | null>(null)
+
+  // 决策日志 + 校准分（PLAN §10.3 C）：把「判断 + 依据 + 当时的把握」在**当时**钉下来，
+  // 几个月后回看才谈得上校准。拉取式——没有到期、没有队列、没有提醒（第 2 节）；
+  // `outcome` 空着就是还没回看，没有任何东西会催它。
+  const [decisions, setDecisions] = useState<DecisionLogView | null>(null)
+  const [dText, setDText] = useState('')
+  const [dBasis, setDBasis] = useState('')
+  const [dTopic, setDTopic] = useState('')
+  const [dConf, setDConf] = useState(70)
+  const [dBusy, setDBusy] = useState(false)
+  const [dMsg, setDMsg] = useState('')
+
+  const reloadDecisions = useCallback(() => {
+    api.listDecisions().then(setDecisions).catch(() => {})
+  }, [])
+
+  const addDecision = useCallback(async () => {
+    const t = dText.trim()
+    if (!t || dBusy) return
+    setDBusy(true)
+    setDMsg('')
+    try {
+      await api.addDecision({ text: t, basis: dBasis, topic: dTopic, confidence: dConf })
+      setDText('')
+      setDBasis('')
+      setDTopic('')
+      setDConf(70)
+      reloadDecisions()
+    } catch (e) {
+      setDMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDBusy(false)
+    }
+  }, [dText, dBasis, dTopic, dConf, dBusy, reloadDecisions])
+
+  const reviewDecision = useCallback(
+    async (id: number, outcome: DecisionOutcome) => {
+      setDMsg('')
+      try {
+        await api.reviewDecision(id, outcome)
+        reloadDecisions()
+      } catch (e) {
+        setDMsg(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [reloadDecisions]
+  )
+
+  const dropDecision = useCallback(
+    async (id: number) => {
+      try {
+        await api.deleteDecision(id)
+        reloadDecisions()
+      } catch (e) {
+        setDMsg(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [reloadDecisions]
+  )
 
   // 语音日记：麦克风→转写→可编辑→落盘 vault/journal（复用聊天页的录制链路）
   const [journalView, setJournalView] = useState<JournalRecent | null>(null)
@@ -127,6 +194,7 @@ export default function DashboardPage() {
     // swallowed on purpose: the dashboard must never blank out over one endpoint
     api.tutorStats().then(setTutor).catch(() => {})
     api.beliefThreads().then((r) => setBeliefs(r.threads)).catch(() => {})
+    reloadDecisions()
     refreshJournal()
     void refreshBriefing()
   }, [refreshBriefing, refreshJournal])
@@ -471,6 +539,188 @@ export default function DashboardPage() {
           </section>
         )}
 
+        {/* 决策日志 + 校准分：判断要**在做出的时候**连把握一起钉下来，否则回头只会记得
+            蒙对的那几次。拉取式、无提醒——回看是你自己决定何时（第 2 节）。 */}
+        {decisions && (
+          <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">决策日志 · 校准分</h2>
+              <span className="text-xs text-neutral-400">记下判断和当时的把握，回看才算得出准不准</span>
+            </div>
+
+            <div className="mt-3 space-y-2">
+              <input
+                value={dText}
+                onChange={(e) => setDText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void addDecision()
+                }}
+                placeholder="一条判断，例：先用 Chroma 就够了"
+                className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={dBasis}
+                  onChange={(e) => setDBasis(e.target.value)}
+                  placeholder="依据（当时凭什么这么判断）"
+                  className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                />
+                <input
+                  value={dTopic}
+                  onChange={(e) => setDTopic(e.target.value)}
+                  placeholder="领域"
+                  className="w-24 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                />
+                <label className="flex items-center gap-1 text-xs text-neutral-500">
+                  把握
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={dConf}
+                    onChange={(e) => setDConf(Number(e.target.value))}
+                    className="w-16 rounded-lg border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                  />
+                  %
+                </label>
+                <button
+                  onClick={() => void addDecision()}
+                  disabled={!dText.trim() || dBusy}
+                  className="rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:brightness-110 disabled:opacity-40 disabled:shadow-none"
+                >
+                  记下
+                </button>
+              </div>
+              {dMsg ? <p className="text-xs text-rose-600 dark:text-rose-400">{dMsg}</p> : null}
+            </div>
+
+            {/* 待回看：老的在前——它们最该已经见分晓 */}
+            {decisions.entries.filter((e) => !e.outcome).length > 0 ? (
+              <ul className="mt-4 space-y-2">
+                {decisions.entries
+                  .filter((e) => !e.outcome)
+                  .map((e) => (
+                    <li key={e.id} className="rounded-xl border border-neutral-100 p-3 dark:border-neutral-800">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-sm text-neutral-800 dark:text-neutral-100">{e.text}</span>
+                        <span className="shrink-0 text-[11px] text-neutral-400">
+                          {dayOf(e.created_at)} · 把握 {e.confidence}%
+                        </span>
+                      </div>
+                      {e.basis ? <p className="mt-1 text-[11px] text-neutral-500">依据：{e.basis}</p> : null}
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {e.topic ? (
+                          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800">
+                            {e.topic}
+                          </span>
+                        ) : null}
+                        <button
+                          onClick={() => void reviewDecision(e.id, 'hit')}
+                          className="rounded-full border border-emerald-300 px-2 py-0.5 text-[10px] text-emerald-700 transition-colors hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+                        >
+                          应验
+                        </button>
+                        <button
+                          onClick={() => void reviewDecision(e.id, 'miss')}
+                          className="rounded-full border border-rose-300 px-2 py-0.5 text-[10px] text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                        >
+                          没应验
+                        </button>
+                        <button
+                          onClick={() => void reviewDecision(e.id, 'unclear')}
+                          title="还看不出——不作数，也不进命中率的分母"
+                          className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                        >
+                          还说不好
+                        </button>
+                        <button
+                          onClick={() => void dropDecision(e.id)}
+                          title="删掉这条"
+                          className="ml-auto text-[10px] text-neutral-400 transition-colors hover:text-rose-600"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+              </ul>
+            ) : null}
+
+            {decisions.entries.filter((e) => e.outcome).length > 0 ? (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-[11px] text-neutral-500">
+                  已回看 {decisions.entries.filter((e) => e.outcome).length} 条
+                </summary>
+                <ul className="mt-2 space-y-1.5">
+                  {decisions.entries
+                    .filter((e) => e.outcome)
+                    .map((e) => (
+                      <li key={e.id} className="flex items-baseline gap-2 text-xs">
+                        <span
+                          className={`shrink-0 ${
+                            e.outcome === 'hit'
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : e.outcome === 'miss'
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : 'text-neutral-400'
+                          }`}
+                        >
+                          {e.outcome === 'hit' ? '✓ 应验' : e.outcome === 'miss' ? '✗ 没应验' : '— 还说不好'}
+                        </span>
+                        <span className="text-neutral-600 dark:text-neutral-300">{e.text}</span>
+                        <button
+                          onClick={() => void reviewDecision(e.id, '')}
+                          title="撤销回看，退回未回看"
+                          className="ml-auto shrink-0 text-[10px] text-neutral-400 transition-colors hover:text-violet-600"
+                        >
+                          撤销
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              </details>
+            ) : null}
+
+            <div className="mt-4 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-neutral-500">校准</span>
+                <span className="text-[11px] text-neutral-400">
+                  {decisions.calibration.overall.rate == null
+                    ? `已回看 ${decisions.calibration.reviewed} 条 · 满 ${decisions.calibration.overall.min_sample} 条才给命中率`
+                    : `全局 ${decisions.calibration.overall.hits}/${decisions.calibration.overall.hits + decisions.calibration.overall.misses}（${pct(decisions.calibration.overall.rate)}）`}
+                </span>
+              </div>
+              {decisions.calibration.by_topic.length > 0 ? (
+                <ul className="mt-1 space-y-0.5">
+                  {decisions.calibration.by_topic.map((t) => (
+                    <li key={t.topic} className="text-[11px] text-neutral-500">
+                      {t.topic} {t.hits}/{t.hits + t.misses}（{pct(t.rate)}）
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {/* 按信心分档才是「校准」本身：你说的把握准不准 */}
+              {decisions.calibration.by_confidence.filter((b) => b.sample > 0).length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                  {decisions.calibration.by_confidence
+                    .filter((b) => b.sample > 0)
+                    .map((b) => (
+                      <span key={b.bucket} className="text-[11px] text-neutral-500">
+                        把握 {b.bucket}：{b.rate == null ? `样本 ${b.sample} 条` : `${b.hits}/${b.sample}（${pct(b.rate)}）`}
+                      </span>
+                    ))}
+                </div>
+              ) : null}
+              {decisions.calibration.reviewed === 0 ? (
+                <p className="mt-1 text-[11px] text-neutral-400">
+                  还没有回看过的判断。攒够几条再来算——一两条算不出命中率。
+                </p>
+              ) : null}
+            </div>
+          </section>
+        )}
+
         <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">语音日记</h2>
@@ -607,6 +857,18 @@ function monthOf(iso: string | null): string {
   if (!iso) return '?'
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '?' : `${d.getMonth() + 1}月`
+}
+
+/** 0-1 → 百分比整数（校准分显示用） */
+function pct(r: number): string {
+  return `${Math.round(r * 100)}%`
+}
+
+/** ISO → M/D（决策日志里按天看就够） */
+function dayOf(iso: string | null): string {
+  if (!iso) return '?'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '?' : `${d.getMonth() + 1}/${d.getDate()}`
 }
 
 function NarrativeCard({

@@ -539,6 +539,30 @@ class EngineEvalRun(Base):
     detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐用例的 findings / 分数 / 理由
 
 
+class DecisionLog(Base):
+    """一条「判断 + 依据 + 信心」，以及事后回看的应验结果（PLAN §10.3 C：校准分）。
+
+    **为什么要写「信心」。** 判断做出的时候人心里是有个把握程度的，但过几个月回头，只会
+    记得蒙对的那几次。把信心在**当时**钉下来，才谈得上校准——「你当时说七成把握的那类事，
+    实际应验了几成」。这是这张表存在的唯一理由。
+
+    **回看是拉取式（第 2 节）**：没有到期时间、没有队列、没有提醒。`outcome` 空着就是
+    还没回看；没有任何东西会催它。`outcome` ∈ "" | hit | miss | unclear。
+    """
+
+    __tablename__ = "decision_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    text: Mapped[str] = mapped_column(Text)  # 判断本身，一句话
+    basis: Mapped[str] = mapped_column(Text, default="")  # 当时凭什么这么判断
+    topic: Mapped[str] = mapped_column(String(30), default="")  # 领域标签，校准时分组用
+    confidence: Mapped[int] = mapped_column(Integer, default=70)  # 0-100
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(10), default="")  # "" | hit | miss | unclear
+    note: Mapped[str] = mapped_column(Text, default="")  # 回看时记一句为什么算应验
+
+
 # The uniqueness is load-bearing, not decoration: it is what makes a double tick
 # idempotent (the router upserts on it). Expressed as a unique Index rather than a
 # UniqueConstraint because a bare UniqueConstraint() at module level attaches to no
