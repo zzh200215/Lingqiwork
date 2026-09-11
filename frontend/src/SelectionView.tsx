@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { api } from './api'
+import { asSingleUrl } from './capture'
 
 // Selection assistant popup (Cherry Studio 选中助手 style, ROADMAP V4.2).
 // desktop.py grabs the selected text via simulated Ctrl+C, then navigates this
@@ -79,9 +80,18 @@ export default function SelectionView() {
           hideWindow()
           window.pywebview?.api?.open_tutor?.(s.id)
         } else {
-          const r = await api.clipText(text.current, text.current.slice(0, 30))
+          // 选中的就是一个网址 → 去抓正文，并把来源 URL 一起留下（clip_text 存的是
+          // 那行字本身：既没正文，也没有出处）。
+          const url = asSingleUrl(text.current)
+          const r = url
+            ? await api.clipUrl(url)
+            : await api.clipText(text.current, text.current.slice(0, 30))
           setAnswered(true)
-          setAnswer(`已剪藏进知识库：${r.filename}（${r.chunks} 块）`)
+          setAnswer(
+            url
+              ? `已剪藏网页正文：${r.title} → ${r.filename}（${r.chars} 字 / ${r.chunks} 块）`
+              : `已剪藏进知识库：${r.filename}（${r.chunks} 块）`
+          )
           setBusy(false)
           setTimeout(() => hideWindow(), 1500)
         }
@@ -173,6 +183,9 @@ export default function SelectionView() {
     }
   }
 
+  // 选中的是网址时按钮说「剪藏网页」——它做的事和「把这段字存下来」不是一回事
+  const selIsUrl = !!asSingleUrl(text.current)
+
   return (
     <div className="flex h-screen flex-col bg-zinc-950 text-zinc-100">
       <div className="flex items-center gap-1.5 border-b border-zinc-800 px-3 py-2">
@@ -184,7 +197,7 @@ export default function SelectionView() {
             disabled={busy || !hasText}
             className="rounded-full border border-zinc-700 px-3 py-1 text-xs transition-colors hover:border-violet-500 hover:bg-violet-950 hover:text-violet-300 disabled:opacity-50"
           >
-            {a.label}
+            {a.key === 'clip' && selIsUrl ? '剪藏网页' : a.label}
           </button>
         ))}
         <button

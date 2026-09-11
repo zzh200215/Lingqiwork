@@ -477,6 +477,30 @@ class TutorTurn(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ArtifactFeedback(Base):
+    """One 👍/👎 on a generated document — the quality flywheel's raw material.
+
+    research / compose / recap 都通过 `core/report.py` 的脊梁成文，产物形状一致，也都
+    是「模型写给你看的东西」；此前只有聊天消息有 feedback、教学有自评，这三条链路
+    **没有任何地方记录过"这次我满意吗"**。没有它，每个模块只能靠"看起来对不对"判断。
+
+    关键的是 (kind, prompt_sha, model_id) 这三个字段——攒够之后才回答得了"哪版提示词
+    更好"和"哪个 provider 在本产品上更强"。`prompt_sha` 就是 `core/prompts.py` 里那份
+    指纹的同一个算法（sha256 前 12 位），所以提示词一改，反馈自然按版本分开统计。
+    """
+
+    __tablename__ = "artifact_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)  # research | compose | recap
+    prompt_sha: Mapped[str] = mapped_column(String(12), default="")
+    model_id: Mapped[str] = mapped_column(String(120), default="")
+    verdict: Mapped[str] = mapped_column(String(8))  # good | bad
+    reason: Mapped[str] = mapped_column(Text, default="")
+    ref: Mapped[str] = mapped_column(String(200), default="")  # vault 相对路径（若已落盘）
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # The uniqueness is load-bearing, not decoration: it is what makes a double tick
 # idempotent (the router upserts on it). Expressed as a unique Index rather than a
 # UniqueConstraint because a bare UniqueConstraint() at module level attaches to no
@@ -485,3 +509,4 @@ Index("ix_habit_logs_day", HabitLog.habit_id, HabitLog.day, unique=True)
 Index("ix_job_runs_recent", JobRun.job_id, JobRun.id)
 Index("ix_usage_page_day", UsageVisit.page, UsageVisit.day, unique=True)
 Index("ix_tutor_turns_session", TutorTurn.session_id, TutorTurn.id)
+Index("ix_feedback_group", ArtifactFeedback.kind, ArtifactFeedback.prompt_sha, ArtifactFeedback.model_id)

@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
+import FeedbackButtons from './FeedbackButtons'
 import Layout from './Layout'
 import { api, type BeliefThread, type DashboardStats, type JournalRecent, type TutorStats } from './api'
+import { streamRecap, type RecapReport, type RecapSaved } from './stream'
 
 // 仪表盘 — 零柒视角
 // 顶部 banner 用零柒 sprite + LLM 生成的今日一句话；
@@ -11,6 +15,23 @@ import { api, type BeliefThread, type DashboardStats, type JournalRecent, type T
 // 第二张卡原来是「今天到期 N 张 · 连续 N 天 · 习惯 x/y」，按 PLAN.md 第 3 节封存换掉了：
 // 到期数是那一版唯一还留在导航页上的债，第 2 节的判断标准就是它。换成「学」的记录 ——
 // 已经发生过的事，没有到期，也没有未完成计数。
+//
+// 「📋 复盘一下」是 PLAN.md 第 5 节第 3 条：信念线 / 学习画像 / 卡点 / 日记 / 最近动过的
+// 文件各管一摊，从没有一处把它们读成人话。复盘就是那一层——成文后自己落 vault/recap/
+// 进索引，所以它也是知识底座的一部分（下次教学取材能捞到）。
+
+/** 复盘正文 → markdown。刻意不引 CodeBlock：复盘是散文，仪表盘不该为它背上那 300KB。 */
+function RecapMarkdown({ children }: { children: string }) {
+  return (
+    <div className="prose prose-sm max-w-none dark:prose-invert">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+    </div>
+  )
+}
+
+function recapMarkdown(r: RecapReport): string {
+  return r.sections.map((s) => `## ${s.heading}\n\n${s.body}`).join('\n\n')
+}
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
@@ -41,6 +62,51 @@ export default function DashboardPage() {
   const [transcribing, setTranscribing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [journalMsg, setJournalMsg] = useState('')
+
+  // 复盘：pull-based——点它才跑，跑完自己落 vault/recap/ 并进索引
+  const [rcBusy, setRcBusy] = useState(false)
+  const [rc, setRc] = useState<RecapReport | null>(null)
+  const [rcSaved, setRcSaved] = useState<RecapSaved | null>(null)
+  const [rcMsg, setRcMsg] = useState('')
+  const rcAbortRef = useRef<AbortController | null>(null)
+
+  const runRecap = useCallback(async () => {
+    if (rcBusy) return
+    rcAbortRef.current?.abort()
+    const ctl = new AbortController()
+    rcAbortRef.current = ctl
+    setRcBusy(true)
+    setRc(null)
+    setRcSaved(null)
+    setRcMsg('在翻你的记录…')
+    try {
+      const r = await streamRecap((event, data) => {
+        if (event === 'sources') setRcMsg(`取到 ${(data.n as number) ?? 0} 条记录，成文中…`)
+        else if (event === 'writing') setRcMsg('成文中…')
+      }, ctl.signal)
+      if (!r.ok || !r.report) {
+        setRcMsg(r.error ?? '复盘失败')
+        return
+      }
+      setRc(r.report)
+      setRcSaved(r.saved ?? null)
+      setRcMsg('')
+    } catch (e) {
+      setRcMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRcBusy(false)
+    }
+  }, [rcBusy])
+
+  useEffect(() => () => rcAbortRef.current?.abort(), [])
+
+  const clearRecap = useCallback(() => {
+    rcAbortRef.current?.abort()
+    setRc(null)
+    setRcSaved(null)
+    setRcMsg('')
+    setRcBusy(false)
+  }, [])
   const recorderRef = useRef<MediaRecorder | null>(null)
   const micChunksRef = useRef<Blob[]>([])
 
@@ -190,10 +256,61 @@ export default function DashboardPage() {
                 >
                   换一句
                 </button>
+                <button
+                  onClick={() => (rc || rcMsg ? clearRecap() : void runRecap())}
+                  disabled={rcBusy}
+                  title="把信念线 / 学习画像 / 卡点 / 日记 / 最近动过的文件读成一篇「最近」"
+                  className="rounded-full border border-violet-300 px-2.5 py-0.5 text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                >
+                  {rcBusy ? '复盘中…' : rc || rcMsg ? '收起' : '📋 复盘一下'}
+                </button>
+                {rcMsg && <span className="text-neutral-500">{rcMsg}</span>}
               </div>
             </div>
           </div>
         </section>
+
+        {(rc || rcSaved) && (
+          <section className="mt-5 rounded-2xl border border-violet-200/70 bg-white/70 p-5 dark:border-violet-500/20 dark:bg-neutral-900/50">
+            <div className="mb-3 flex items-center gap-2">
+              <span>📋</span>
+              <h2 className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                {rc?.title || '复盘'}
+              </h2>
+              {rcSaved && (
+                <span className="ml-auto text-[11px] text-neutral-400">
+                  已存到 {rcSaved.filename}（{rcSaved.chunks} 段进索引）
+                </span>
+              )}
+            </div>
+            {rc && <RecapMarkdown>{recapMarkdown(rc)}</RecapMarkdown>}
+            {rc?.sources?.length ? (
+              <details className="mt-3 text-xs text-neutral-500">
+                <summary className="cursor-pointer select-none">
+                  看了 {rc.sources.length} 条记录
+                </summary>
+                <ul className="mt-2 space-y-0.5">
+                  {rc.sources.map((s) => (
+                    <li key={s.n}>
+                      [{s.n}] {s.title}
+                      {rc.used.includes(s.n) ? ' ✓' : ''}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            {rc && (
+              <div className="mt-3 border-t border-violet-200/60 pt-2 dark:border-violet-500/20">
+                <FeedbackButtons
+                  kind="recap"
+                  promptSha={rc.prompt_sha}
+                  modelId={rc.model_id}
+                  artifactRef={rcSaved?.filename ?? ''}
+                />
+              </div>
+            )}
+          </section>
+        )}
 
         <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
           <NarrativeCard

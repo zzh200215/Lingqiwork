@@ -16,6 +16,8 @@ router = APIRouter(prefix="/api/kb", tags=["kb"])
 
 _MAX_UPLOAD = 50 * 1024 * 1024  # 50MB per file
 _SAFE_NAME = re.compile(r"[^\w.\-]+", re.UNICODE)
+# 图片不是 ingest 能解析的文档，但截图是很常见的一种「材料」——它走 OCR 落成文字。
+_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 
 # indexing is CPU-bound (embedding); run in a thread to not block the loop
 
@@ -84,9 +86,13 @@ async def kb_files():
 
 @router.post("/upload")
 async def kb_upload(file: UploadFile):
-    """Save an uploaded document into the vault and index it immediately."""
+    """Save an uploaded document into the vault and index it immediately.
+
+    图片是例外：它本身进不了 RAG（embedding 的是文字），所以走 OCR 落成 md。
+    """
     original = Path(file.filename or "upload")
-    if not ingest.is_supported(original):
+    ext = original.suffix.lower()
+    if ext not in _IMAGE_EXT and not ingest.is_supported(original):
         raise HTTPException(400, f"unsupported file type: {original.suffix}")
 
     data = await file.read()
@@ -94,6 +100,9 @@ async def kb_upload(file: UploadFile):
         raise HTTPException(413, f"file too large (> {_MAX_UPLOAD // (1024**2)}MB)")
 
     safe_stem = _SAFE_NAME.sub("_", original.stem).strip("_") or "upload"
+    if ext in _IMAGE_EXT:
+        return await _ocr_into_vault(data, safe_stem)
+
     dest = VAULT_DIR / f"{safe_stem}-{uuid.uuid4().hex[:6]}{original.suffix}"
     dest.write_bytes(data)
 
@@ -108,6 +117,35 @@ async def kb_upload(file: UploadFile):
 
 _CLIP_DIR = VAULT_DIR / "clippings"
 _CLIP_MAX = 200_000  # chars of extracted text
+
+
+async def _ocr_into_vault(data: bytes, safe_stem: str) -> dict:
+    """图片 → 本地 OCR 文本 → `vault/clippings/<名>.md` + 索引。
+
+    截图是常见的一种材料，但图片本身进不了 RAG——所以落的是识别出来的字。
+    识别不出内容（或 OCR 依赖缺失）时给 422 一句人话，**不落空文件**：一个空 md
+    会一直躺在库里被检索到，比当场报错更烦人。
+    """
+    try:
+        text = (await asyncio.to_thread(ingest.ocr_bytes, data)).strip()
+    except Exception as e:  # noqa: BLE001 - 依赖缺失 / 图片坏了，都要变成一句人话
+        raise HTTPException(422, f"OCR 失败：{type(e).__name__}: {e}") from e
+    if not text:
+        raise HTTPException(422, "这张图里没识别出文字")
+
+    _CLIP_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _CLIP_DIR / f"{safe_stem}-{uuid.uuid4().hex[:6]}.md"
+    dest.write_text(
+        f"# {safe_stem}\n\n> 剪藏自图片 · {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{text}\n",
+        encoding="utf-8",
+    )
+    chunks = await asyncio.to_thread(indexer.index_file, dest)
+    return {
+        "filename": dest.relative_to(VAULT_DIR).as_posix(),
+        "size": len(data),
+        "chars": len(text),
+        "chunks": chunks,
+    }
 
 
 @router.post("/clip")

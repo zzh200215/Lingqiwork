@@ -12,19 +12,56 @@
     synthesize    → 只依据材料成文，每个论断带 [编号]
     save          → 落 vault/research/ + 进索引
 
+与「产出」（`core/compose.py`）共用 `core/report.py` 的脊梁（结构化 Report → 带 [编号]
+的 md → 落 vault + 进索引）；两者的区别只在**取材方向**：研究向外（搜网），产出向内
+（你自己的累积）。这里保留研究特有的提示词、检索式规划与取网正文。
+
 护栏（PLAN.md 第 2 节）：拉取式——点它才跑；没有定时、没有队列、没有设置开关。
 """
 
 import asyncio
 import logging
 import re
-from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import VAULT_DIR
+from app.core import report as _report
+from app.core.report import (
+    Report,
+    Section,
+    clean_report as _clean_report,
+    format_sources as _format_sources,
+    public_source as _public_source,
+    resolve as _resolve,
+    slug as _slug_base,
+    to_markdown,
+    trim_total,
+)
 
 log = logging.getLogger(__name__)
+
+# 沿用旧路径的名字：路由用 `ResearchReport`/`Section`，测试用下面这些下划线开头的内部名。
+# 脊梁搬去了 `core/report.py`，这里只是转出来。
+__all__ = [
+    "QueryPlan",
+    "Report",
+    "ResearchReport",
+    "Section",
+    "_clean_report",
+    "_format_sources",
+    "_public_source",
+    "_resolve",
+    "_slug",
+    "_trim_total",
+    "gather",
+    "plan_queries",
+    "run",
+    "save",
+    "synthesize",
+    "to_markdown",
+]
+
 
 RESEARCH_DIR = VAULT_DIR / "research"
 
@@ -73,91 +110,11 @@ class QueryPlan(BaseModel):
         return []
 
 
-class Section(BaseModel):
-    heading: str = ""
-    body: str = ""
-
-    @field_validator("heading", "body", mode="before")
-    @classmethod
-    def _as_text(cls, v):
-        if v is None or isinstance(v, (list, dict)):
-            return ""
-        return str(v).strip()
+# 报告模型来自共用脊梁（`core/report.py`）；研究这边保留旧名字，路由与测试都用它。
+ResearchReport = Report
 
 
-class ResearchReport(BaseModel):
-    """字段宽松是有意的（同 `tutor.TutorExtract`）：一次模型抖动不该丢掉整条记录。
-
-    类型不对一律当空/丢弃，由 `_clean_report` 与调用方决定降级——研究的产物是给人
-    看的，少一节比整个失败划算。
-    """
-
-    title: str = ""
-    sections: list[Section] = Field(default_factory=list)
-    used: list[int] = Field(default_factory=list)
-
-    @field_validator("title", mode="before")
-    @classmethod
-    def _title_text(cls, v):
-        if v is None or isinstance(v, (list, dict)):
-            return ""
-        return str(v).strip()
-
-    @field_validator("sections", mode="before")
-    @classmethod
-    def _sections_list(cls, v):
-        # `mode="before"` 收到的是原始输入：既可能是模型给的 dict 列表，也可能是
-        # 代码里已经构造好的 `Section` 实例（`_clean_report` 就是这么重建的）——
-        # 两者都要放行，只丢真正无用的东西（字符串、数字）。
-        if v is None:
-            return []
-        if isinstance(v, (dict, BaseModel)):
-            return [v]
-        if isinstance(v, (list, tuple)):
-            return [x for x in v if isinstance(x, (dict, BaseModel))]
-        return []
-
-    @field_validator("used", mode="before")
-    @classmethod
-    def _used_ints(cls, v):
-        if v is None:
-            return []
-        if not isinstance(v, (list, tuple)):
-            v = [v]
-        out: list[int] = []
-        for x in v:
-            try:
-                out.append(int(x))
-            except (TypeError, ValueError):
-                continue
-        return out
-
-
-# ---------- model resolution (same shape as tutor._extract) ----------
-
-
-async def _resolve(model_id: str = ""):
-    """默认 provider → (ProviderInfo, model)；解析不了返回 None。
-
-    照 `tutor._extract` 的做法用单个 provider + `structured.extract_json` 的三级
-    降级。研究是一次拉取式动作，模型挂了在开流之前就被路由拦下（PLAN 第 9 节）。
-    """
-    from app.core import providers
-    from app.core.llm import ProviderInfo
-    from app.routers.chat import resolve_model
-
-    mid = (model_id or "").strip() or (providers.default_model_id() or "")
-    if not mid:
-        return None
-    try:
-        resolved = await resolve_model(mid)
-    except Exception:  # noqa: BLE001 - 解析不了就当没有可用模型
-        log.warning("research resolve_model failed for %r", mid, exc_info=True)
-        return None
-    p = resolved.provider
-    return ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key), resolved.model
-
-
+# ---------- step 1: plan ----------
 # ---------- step 1: plan ----------
 
 
@@ -230,25 +187,8 @@ async def _default_kb(query: str, top_k: int) -> list[dict]:
 
 
 def _trim_total(sources: list[dict]) -> list[dict]:
-    """总量封顶：网络条从后往前丢，仍超就按比例截断剩下的（自己的材料优先）。Pure."""
-    def total(items: list[dict]) -> int:
-        return sum(len(s.get("text") or "") for s in items)
-
-    kept = [dict(s) for s in sources]
-    while total(kept) > TOTAL_CHARS:
-        idx = next(
-            (i for i in range(len(kept) - 1, -1, -1) if kept[i].get("kind") == "web"), None
-        )
-        if idx is None:
-            break
-        kept.pop(idx)
-    over = total(kept) - TOTAL_CHARS
-    if over > 0 and kept:
-        ratio = TOTAL_CHARS / total(kept)
-        for s in kept:
-            text = s.get("text") or ""
-            s["text"] = text[: max(1, int(len(text) * ratio))]
-    return kept
+    """总量封顶（自己的材料优先）。读 `TOTAL_CHARS` 这个模块全局——测试会 patch 它。"""
+    return trim_total(sources, TOTAL_CHARS)
 
 
 async def gather(
@@ -329,23 +269,6 @@ async def gather(
 # ---------- step 3: synthesize ----------
 
 
-def _format_sources(sources: list[dict]) -> str:
-    """来源 → 给成文调用的材料块。Pure."""
-    blocks = []
-    for s in sources:
-        label = "知识库" if s.get("kind") == "kb" else "网络"
-        blocks.append(f"[{s['n']}]（{label} · {s.get('ref', '')}）{s.get('title', '')}\n{s.get('text', '')}")
-    return "\n\n".join(blocks)
-
-
-def _clean_report(obj: ResearchReport) -> ResearchReport:
-    """按段裁剪、丢弃空段。引用编号的有效性在 synthesize 里按 sources 过滤。Pure."""
-    sections = [
-        Section(heading=s.heading[:80], body=s.body[:4000]) for s in obj.sections if s.body.strip()
-    ]
-    return ResearchReport(title=obj.title[:120].strip(), sections=sections, used=list(obj.used))
-
-
 async def synthesize(
     topic: str,
     sources: list[dict],
@@ -354,91 +277,40 @@ async def synthesize(
     stream_fn=None,
     native_fn=None,
 ) -> ResearchReport | None:
-    """材料 → 带引用的讲解（None 表示模型不可用或输出解析不了）。"""
-    if not sources:
-        return None
-    resolved = await _resolve(model_id)
-    if resolved is None:
-        return None
-    info, model = resolved
+    """材料 → 带引用的讲解（None 表示模型不可用或输出解析不了）。
 
-    from app.core.structured import extract_json
-
-    obj, meta = await extract_json(
-        info,
-        model,
-        [
-            {"role": "system", "content": _SYNTH_PROMPT},
-            {"role": "user", "content": f"话题：{topic}\n\n材料：\n{_format_sources(sources)}"},
-        ],
-        ResearchReport,
+    形状来自共用脊梁（`core/report.py`）；这里只把研究的提示词与模型解析钉进去
+    （`resolve_fn=_resolve` 保留研究自己的测试缝）。
+    """
+    return await _report.synthesize(
+        topic,
+        sources,
+        _SYNTH_PROMPT,
+        model_id,
         stream_fn=stream_fn,
         native_fn=native_fn,
+        resolve_fn=_resolve,
     )
-    if obj is None:
-        log.info("research synthesis unavailable: %s", meta.error)
-        return None
-
-    valid = {s["n"] for s in sources}
-    report = _clean_report(obj)
-    report.used = sorted({int(u) for u in report.used if isinstance(u, int) and u in valid})
-    return report if report.sections else None
 
 
 # ---------- step 4: the deliverable ----------
 
 
 def _slug(text: str) -> str:
-    s = re.sub(r"[^\w一-鿿-]+", "-", text or "")[:24].strip("-")
-    return s or "research"
-
-
-def to_markdown(report: ResearchReport, sources: list[dict]) -> str:
-    """报告 + 来源 → 一篇 md（自己写的格式自己读）。Pure."""
-    lines = [f"# {report.title or '研究笔记'}", ""]
-    for sec in report.sections:
-        lines.append(f"## {sec.heading}")
-        lines.append("")
-        lines.append(sec.body)
-        lines.append("")
-    if sources:
-        used = set(report.used)
-        lines.append("## 来源")
-        lines.append("")
-        for s in sources:
-            mark = " ✓" if s.get("n") in used else ""
-            ref = s.get("ref", "")
-            origin = "知识库" if s.get("kind") == "kb" else "网络"
-            lines.append(f"{s.get('n')}. {s.get('title', '')} — {ref}（{origin}）{mark}")
-        lines.append("")
-    return "\n".join(lines)
+    return _slug_base(text, "research")
 
 
 async def save(report: ResearchReport, sources: list[dict]) -> dict:
-    """落 vault/research/ 并进索引——「下次先捞你自己的」那一跳靠的就是这里。"""
-    RESEARCH_DIR.mkdir(parents=True, exist_ok=True)
-    dest = RESEARCH_DIR / f"{datetime.now():%Y-%m-%d}-{_slug(report.title)}.md"
-    dest.write_text(to_markdown(report, sources), encoding="utf-8")
-
-    from app.core import indexer
-
-    chunks = await asyncio.to_thread(indexer.index_file, dest)
-    return {
-        "filename": dest.relative_to(VAULT_DIR).as_posix(),
-        "title": report.title,
-        "chunks": chunks,
-    }
+    """落 `vault/research/` 并进索引——「下次先捞你自己的」那一跳靠的就是这里。"""
+    return await _report.save(report, sources, RESEARCH_DIR)
 
 
 # ---------- orchestration ----------
 
 
-def _public_source(s: dict) -> dict:
-    """来源 → 发给前端的形状（不带正文，正文只在服务端成文用）。"""
-    return {"n": s.get("n"), "kind": s.get("kind"), "title": s.get("title", ""), "ref": s.get("ref", "")}
-
-
-async def run(topic: str, *, search_fn=None, fetch_fn=None, kb_fn=None, stream_fn=None, native_fn=None):
+async def run(
+    topic: str, *, search_fn=None, fetch_fn=None, kb_fn=None, stream_fn=None, native_fn=None
+):
     """Yield (event, data)，事件：plan / gathering / sources / writing / report / error.
 
     与 `tutor.say` 同一形态，路由只做 SSE 包装。任何一步的失败都变成一条人话的
@@ -486,4 +358,5 @@ async def run(topic: str, *, search_fn=None, fetch_fn=None, kb_fn=None, stream_f
         "used": report.used,
         "sources": [_public_source(s) for s in sources],
         "model_id": model_id,
+        "prompt_sha": _report.prompt_sha(_SYNTH_PROMPT),
     }

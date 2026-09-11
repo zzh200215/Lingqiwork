@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Layout from './Layout'
 import { api, type DirItem, type EvalItem, type EvalRun, type KgRetrieval, type KgStatus, type RepoItem } from './api'
+import BookmarkletLink from './BookmarkletLink'
+import { buildBookmarklet, parseClipParams } from './capture'
 
 interface KbStats {
   chunks: number
@@ -65,6 +67,7 @@ export default function KbPage() {
   const [clipUrl, setClipUrl] = useState('')
   const [clipMsg, setClipMsg] = useState('')
   const [clipping, setClipping] = useState(false)
+  const [bmCopied, setBmCopied] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // --- repos tab ---
@@ -436,21 +439,51 @@ export default function KbPage() {
     }
   }
 
-  async function clip() {
-    const url = clipUrl.trim()
-    if (!url || clipping) return
+  async function runClip(url: string, title?: string): Promise<boolean> {
+    if (!url.trim() || clipping) return false
     setClipping(true)
     setClipMsg('')
     try {
-      const r = await api.clipUrl(url)
+      const r = await api.clipUrl(url.trim(), title)
       setClipMsg(`✅ ${r.title} → ${r.filename}（${r.chars} 字 / ${r.chunks} 块）`)
       setClipUrl('')
       await refresh()
+      return true
     } catch (e) {
       setClipMsg(`❌ ${String(e)}`)
+      return false
     } finally {
       setClipping(false)
     }
+  }
+
+  function clip() {
+    void runClip(clipUrl)
+  }
+
+  // 书签小工具打开的就是这个深链（`?clip=<url>&title=<t>`）：剪完自己关掉。
+  // 只有脚本开的窗口 close() 才有效——正是小工具的形态；若把链接粘进普通标签页，
+  // opener 为空，结果就留在页面上给人看。ref 守卫掉 StrictMode 的双次执行。
+  const deeplinkDone = useRef(false)
+  useEffect(() => {
+    if (deeplinkDone.current) return
+    const req = parseClipParams(window.location.search)
+    if (!req) return
+    deeplinkDone.current = true
+    window.history.replaceState({}, '', '/kb.html')
+    void runClip(req.url, req.title || undefined).then((ok) => {
+      if (ok && window.opener) window.setTimeout(() => window.close(), 3000)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const bookmarklet = buildBookmarklet(window.location.origin)
+
+  function copyBookmarklet() {
+    navigator.clipboard.writeText(bookmarklet).then(() => {
+      setBmCopied(true)
+      window.setTimeout(() => setBmCopied(false), 2000)
+    })
   }
 
   async function search() {
@@ -605,9 +638,11 @@ export default function KbPage() {
             <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
               {uploading ? '上传中…' : '拖拽文件到这里，或点击选择'}
             </p>
-            <p className="mt-1 text-xs text-neutral-400">PDF · Word · Markdown · TXT，自动分词入库</p>
+            <p className="mt-1 text-xs text-neutral-400">
+              PDF · Word · Markdown · TXT · 图片（截图走本地 OCR 提成文字）
+            </p>
             <div className="mt-3 flex flex-wrap justify-center gap-1.5 text-[11px]">
-              {['📕 PDF', '📘 Word', '📝 Markdown', '📄 TXT'].map((t) => (
+              {['📕 PDF', '📘 Word', '📝 Markdown', '📄 TXT', '🖼 截图'].map((t) => (
                 <span
                   key={t}
                   className="rounded-full bg-neutral-100 px-2 py-0.5 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
@@ -620,7 +655,7 @@ export default function KbPage() {
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".md,.markdown,.txt,.pdf,.docx"
+              accept=".md,.markdown,.txt,.pdf,.docx,.png,.jpg,.jpeg,.webp,.bmp,.gif"
               className="hidden"
               onChange={(e) => e.target.files && uploadFiles(e.target.files)}
             />
@@ -651,6 +686,24 @@ export default function KbPage() {
               </button>
             </div>
             {clipMsg && <p className="mt-2 whitespace-pre-wrap text-xs text-neutral-500">{clipMsg}</p>}
+
+            <div className="mt-3 rounded-lg border border-dashed border-violet-300 bg-violet-50/50 p-2.5 dark:border-violet-500/30 dark:bg-violet-500/5">
+              <p className="mb-2 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                把下面这个按钮<b className="font-medium">拖到书签栏</b>，以后在任意网页点它一下就能剪藏当前页（自动带 URL 和标题），不用再回来粘链接。
+              </p>
+              <div className="flex items-center gap-2">
+                <BookmarkletLink
+                  origin={window.location.origin}
+                  className="cursor-grab rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1 text-xs font-medium text-white active:cursor-grabbing"
+                />
+                <button
+                  onClick={copyBookmarklet}
+                  className="rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-500 transition-colors hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
+                >
+                  {bmCopied ? '已复制' : '复制代码'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

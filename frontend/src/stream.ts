@@ -379,6 +379,8 @@ export interface ResearchReport {
   used: number[]
   sources: ResearchSourceRef[]
   model_id?: string
+  /** 这版成文提示词的指纹——质量闭环按它把评价分版本统计 */
+  prompt_sha?: string
 }
 
 export interface ResearchDone {
@@ -420,6 +422,220 @@ export async function streamResearch(
   let done: ResearchDone = { ok: false, error: '流提前结束' }
   for await (const [event, data] of sseFrames(res)) {
     if (event === 'report') done = { ok: true, report: data as unknown as ResearchReport }
+    else if (event === 'error')
+      done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
+    else onStage(event, data)
+  }
+  return done
+}
+
+export interface ComposeSourceRef {
+  n: number
+  /** 'kb' = 你的知识库；'memory' = 长期记忆；'journal' = 日记 */
+  kind: 'kb' | 'memory' | 'journal' | string
+  title: string
+  /** vault 相对路径（kb）；记忆与日记没有单一路径，为空 */
+  ref: string
+}
+
+export interface ComposeReport {
+  title: string
+  sections: { heading: string; body: string }[]
+  /** 正文里真正引用到的来源编号 */
+  used: number[]
+  sources: ComposeSourceRef[]
+  model_id?: string
+  /** 这版成文提示词的指纹——质量闭环按它把评价分版本统计 */
+  prompt_sha?: string
+}
+
+export interface ComposeDone {
+  ok: boolean
+  error?: string
+  report?: ComposeReport
+}
+
+/** Progress stages the page renders as it goes: gathering / sources / writing. */
+export type ComposeStage = (event: string, data: Record<string, unknown>) => void
+
+/**
+ * One produce run (学习闭环的出口跳): 从你自己的材料成文。Same shape as
+ * `streamResearch` minus the `plan` stage — 产出不规划检索式，话题直接取自你。
+ */
+export async function streamCompose(
+  topic: string,
+  onStage: ComposeStage,
+  signal?: AbortSignal
+): Promise<ComposeDone> {
+  const res = await fetch('/api/compose', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = `产出失败: ${res.status}`
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(detail)
+  }
+
+  let done: ComposeDone = { ok: false, error: '流提前结束' }
+  for await (const [event, data] of sseFrames(res)) {
+    if (event === 'report') done = { ok: true, report: data as unknown as ComposeReport }
+    else if (event === 'error')
+      done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
+    else onStage(event, data)
+  }
+  return done
+}
+
+export interface RecapSourceRef {
+  n: number
+  /** belief = 信念线；teach = 学习画像；stuck = 卡点；journal = 日记；files = 最近动的文件 */
+  kind: 'belief' | 'teach' | 'stuck' | 'journal' | 'files' | string
+  title: string
+  ref: string
+}
+
+export interface RecapReport {
+  title: string
+  sections: { heading: string; body: string }[]
+  used: number[]
+  sources: RecapSourceRef[]
+  model_id?: string
+  /** 这版成文提示词的指纹——质量闭环按它把评价分版本统计 */
+  prompt_sha?: string
+}
+
+/** 复盘已落盘（`vault/recap/YYYY-MM-DD.md`）——它自成文就存，没有「先看再决定存不存」。 */
+export interface RecapSaved {
+  filename: string
+  title: string
+  chunks: number
+}
+
+export interface RecapDone {
+  ok: boolean
+  error?: string
+  report?: RecapReport
+  saved?: RecapSaved
+}
+
+/** Progress stages: gathering / sources / writing. */
+export type RecapStage = (event: string, data: Record<string, unknown>) => void
+
+/**
+ * One recap run: 把散落的记录合成一篇「最近」。Same shape as the research stream,
+ * plus a terminal `saved` event — recap writes itself to the vault, because there
+ * is nothing to decide before storing it.
+ */
+export async function streamRecap(
+  onStage: RecapStage,
+  signal?: AbortSignal
+): Promise<RecapDone> {
+  const res = await fetch('/api/recap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = `复盘失败: ${res.status}`
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(detail)
+  }
+
+  let done: RecapDone = { ok: false, error: '流提前结束' }
+  for await (const [event, data] of sseFrames(res)) {
+    if (event === 'report') done = { ...done, ok: true, report: data as unknown as RecapReport }
+    else if (event === 'saved') done = { ...done, ok: true, saved: data as unknown as RecapSaved }
+    else if (event === 'error')
+      done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
+    else onStage(event, data)
+  }
+  return done
+}
+
+export interface DecideSourceRef {
+  n: number
+  /** 'kb' = 你的知识库；'memory' = 长期记忆；'web' = 网络 */
+  kind: 'kb' | 'memory' | 'web' | string
+  title: string
+  /** vault 相对路径（kb）或 URL（web）；记忆没有单一路径，为空 */
+  ref: string
+}
+
+/**
+ * 读题结果。它是这一条独有的、**给人看的**中间产物：先摆出「我理解你要决定的是 X，
+ * 要比的是 A / B / C」，再去取材料。读错题是这类功能第一位的失败模式。
+ */
+export interface DecideFrame {
+  decision: string
+  /** 2-4 个真正的备选——你只提了一个，后端也会把别的补出来 */
+  options: string[]
+  /** 3-5 条真正会左右结果的判据 */
+  criteria: string[]
+}
+
+export interface DecideReport {
+  title: string
+  sections: { heading: string; body: string }[]
+  /** 正文里真正引用到的来源编号 */
+  used: number[]
+  sources: DecideSourceRef[]
+  model_id?: string
+  /** 这版成文提示词的指纹——质量闭环按它把评价分版本统计 */
+  prompt_sha?: string
+  /** 题面随报告一起回来，存进知识库之后还看得出这份方案在回答什么 */
+  frame?: DecideFrame
+}
+
+export interface DecideDone {
+  ok: boolean
+  error?: string
+  report?: DecideReport
+}
+
+/** Progress stages: framing / frame / gathering / sources / writing. */
+export type DecideStage = (event: string, data: Record<string, unknown>) => void
+
+/**
+ * One decision run（拿不准的事，理清楚再出方案）。Same shape as `streamResearch`,
+ * except `frame` is a stage the page renders rather than an internal step: 题读得对不对
+ * 只有人看得出来，所以在取材料之前就摆到屏幕上。
+ */
+export async function streamDecide(
+  topic: string,
+  onStage: DecideStage,
+  signal?: AbortSignal
+): Promise<DecideDone> {
+  const res = await fetch('/api/decide', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = `理清失败: ${res.status}`
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(detail)
+  }
+
+  let done: DecideDone = { ok: false, error: '流提前结束' }
+  for await (const [event, data] of sseFrames(res)) {
+    if (event === 'report') done = { ok: true, report: data as unknown as DecideReport }
     else if (event === 'error')
       done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
     else onStage(event, data)

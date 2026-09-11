@@ -872,6 +872,33 @@ export interface TutorStarter {
   note: string
 }
 
+/** 一条生成质量评价的聚合（按 kind + 提示词版本 + 模型切分）。 */
+export interface QualityGroup {
+  kind: string
+  prompt_sha: string
+  model_id: string
+  good: number
+  bad: number
+  total: number
+  rate: number
+}
+
+export interface QualitySummary {
+  days: number
+  total: number
+  good: number
+  bad: number
+  rate: number
+  groups: QualityGroup[]
+  recent_bad: {
+    kind: string
+    model_id: string
+    prompt_sha: string
+    reason: string
+    created_at: string | null
+  }[]
+}
+
 export const api = {
   listProviders: () => request<ProviderConfig[]>('/api/settings/providers'),
   createProvider: (p: Partial<ProviderConfig>) =>
@@ -1056,6 +1083,46 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  /** 产出（学习闭环的出口跳）：把上次的产出落成 vault/notes/ 里的一篇 md 并进索引 */
+  composeSave: (payload: {
+    title: string
+    sections: { heading: string; body: string }[]
+    used: number[]
+    sources: { n: number; kind: string; title: string; ref: string }[]
+  }) =>
+    request<{ filename: string; title: string; chunks: number }>('/api/compose/save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 分析 / 方案：把上一次的方案落成 vault/decisions/ 里的一篇 md 并进索引 */
+  decideSave: (payload: {
+    title: string
+    sections: { heading: string; body: string }[]
+    used: number[]
+    sources: { n: number; kind: string; title: string; ref: string }[]
+  }) =>
+    request<{ filename: string; title: string; chunks: number }>('/api/decide/save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 生成质量闭环：一次 👍/👎，挂在 (kind, 提示词版本, 模型) 上 */
+  qualityFeedback: (payload: {
+    kind: 'research' | 'compose' | 'recap' | 'decide'
+    verdict: 'good' | 'bad'
+    prompt_sha?: string
+    model_id?: string
+    reason?: string
+    ref?: string
+  }) =>
+    request<{ id: number; kind: string; verdict: string }>('/api/quality/feedback', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  qualitySummary: (days = 90) => request<QualitySummary>(`/api/quality/summary?days=${days}`),
 
   listRepos: () => request<RepoList>('/api/repos'),
   cloneRepo: (url: string, name?: string) =>

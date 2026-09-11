@@ -21,9 +21,11 @@ from app.routers import (
     beliefs,
     cards,
     chat,
+    compose,
     conversations,
     cost,
     dashboard,
+    decide,
     dirs,
     evals,
     feeds,
@@ -37,6 +39,8 @@ from app.routers import (
     pet,
     podcast,
     prompts,
+    quality,
+    recap,
     repos,
     research,
     roundtable,
@@ -159,6 +163,10 @@ app.include_router(search.router)
 app.include_router(beliefs.router)
 app.include_router(roundtable.router)
 app.include_router(research.router)
+app.include_router(compose.router)
+app.include_router(recap.router)
+app.include_router(decide.router)
+app.include_router(quality.router)
 app.include_router(arena.router)
 app.include_router(backup.router)
 app.include_router(tasks.router)

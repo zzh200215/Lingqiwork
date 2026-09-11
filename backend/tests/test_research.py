@@ -313,3 +313,7 @@ def test_run_happy_path(wired, monkeypatch):
     assert report["title"] == "R"
     assert report["used"] == [1]
     assert report["model_id"] == "test-model"
+    # 质量闭环的 join key：事件必须带上「这版提示词」的指纹，否则反馈没法按版本统计
+    from app.core import report as report_mod
+
+    assert report["prompt_sha"] == report_mod.prompt_sha(research._SYNTH_PROMPT)

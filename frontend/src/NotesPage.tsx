@@ -5,8 +5,9 @@ import rehypeHighlight from 'rehype-highlight'
 import Layout from './Layout'
 import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
+import FeedbackButtons from './FeedbackButtons'
 import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry } from './api'
-import { streamPodcastGenerate } from './stream'
+import { streamCompose, streamPodcastGenerate } from './stream'
 
 type AiAction = 'continue' | 'polish' | 'summarize' | 'rewrite'
 type ViewMode = 'edit' | 'split' | 'preview'
@@ -80,7 +81,16 @@ export default function NotesPage() {
   const [podScriptId, setPodScriptId] = useState<string | null>(null)
   const [podSources, setPodSources] = useState<string[]>([])
   const [podStage, setPodStage] = useState('')
+  const [composeBusy, setComposeBusy] = useState(false)
+  const [composeMsg, setComposeMsg] = useState('')
+  // 最近一次产出的来源信息——喂给质量闭环（这条链路此前没有任何地方记录过满不满意）
+  const [composeMeta, setComposeMeta] = useState<{
+    prompt_sha?: string
+    model_id?: string
+    filename: string
+  } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const composeAbortRef = useRef<AbortController | null>(null)
   const chatAbortRef = useRef<AbortController | null>(null)
   const saveTimer = useRef<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -213,6 +223,64 @@ export default function NotesPage() {
     await openNote(path)
   }
 
+  // 产出（学习闭环的出口）：从你自己的材料（知识库 + 长期记忆 + 近期日记）生成一篇
+  // 笔记，落 vault/notes/ 并进索引，然后直接在编辑器里打开——可改，改完照常自动回索引。
+  async function composeNote() {
+    if (composeBusy) return
+    const topic = window.prompt('从你自己的材料生成一篇笔记——想写什么话题？', '')
+    if (!topic?.trim()) return
+    composeAbortRef.current?.abort()
+    const ctl = new AbortController()
+    composeAbortRef.current = ctl
+    setComposeBusy(true)
+    setComposeMsg('在翻你自己的材料…')
+    setComposeMeta(null)
+    setError('')
+    try {
+      const r = await streamCompose(
+        topic.trim(),
+        (event, data) => {
+          if (event === 'sources')
+            setComposeMsg(
+              `取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，成文中…`
+            )
+          else if (event === 'writing') setComposeMsg('成文中…')
+        },
+        ctl.signal
+      )
+      if (!r.ok || !r.report) {
+        setError(r.error ?? '产出失败')
+        return
+      }
+      setComposeMsg('落盘…')
+      const saved = await api.composeSave({
+        title: r.report.title,
+        sections: r.report.sections,
+        used: r.report.used,
+        sources: r.report.sources.map((s) => ({
+          n: s.n,
+          kind: s.kind,
+          title: s.title,
+          ref: s.ref,
+        })),
+      })
+      await refreshFiles()
+      await openNote(saved.filename)
+      setComposeMeta({
+        prompt_sha: r.report.prompt_sha,
+        model_id: r.report.model_id,
+        filename: saved.filename,
+      })
+      setFlash(`已产出 ${saved.filename}（${saved.chunks} 段进索引）`)
+      window.setTimeout(() => setFlash(''), 6000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setComposeBusy(false)
+      setComposeMsg('')
+    }
+  }
+
   async function removeNote(path: string) {
     if (!confirm(`删除笔记「${path}」？此操作不可恢复。`)) return
     await api.deleteNote(path)
@@ -226,6 +294,9 @@ export default function NotesPage() {
       if (fs.length) void openNote(fs[0].path)
     }
   }
+
+  // 产出流在卸载时掐断
+  useEffect(() => () => composeAbortRef.current?.abort(), [])
 
   // debounced autosave
   useEffect(() => {
@@ -617,9 +688,19 @@ export default function NotesPage() {
               ＋ 新建
             </button>
           </div>
-          <p className="px-3 pb-2 text-[10px] leading-relaxed text-neutral-400">
-            vault 全部 .md · 自动进 RAG 索引
-          </p>
+          <div className="px-3 pb-2">
+            <button
+              onClick={() => void composeNote()}
+              disabled={composeBusy}
+              title="从你自己的材料（知识库 / 长期记忆 / 日记）生成一篇笔记"
+              className="w-full rounded-md border border-violet-300 px-2 py-1 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+            >
+              {composeBusy ? '🪄 生成中…' : '🪄 从我的材料生成'}
+            </button>
+            <p className="pt-1 text-[10px] leading-relaxed text-neutral-400">
+              {composeMsg || 'vault 全部 .md · 自动进 RAG 索引'}
+            </p>
+          </div>
           {briefing && (
             <p className="mx-3 mb-2 rounded-lg bg-violet-50/80 px-2.5 py-2 text-[11px] leading-relaxed text-violet-700 dark:bg-violet-500/10 dark:text-violet-300">
               {briefing}
@@ -732,6 +813,14 @@ export default function NotesPage() {
             >
               ☰ 大纲
             </button>
+            {composeMeta ? (
+              <FeedbackButtons
+                kind="compose"
+                promptSha={composeMeta.prompt_sha}
+                modelId={composeMeta.model_id}
+                artifactRef={composeMeta.filename}
+              />
+            ) : null}
             <span className="ml-auto shrink-0 text-[11px] text-neutral-400">
               {flash ? (
                 <span className="text-sky-600 dark:text-sky-300">{flash}</span>

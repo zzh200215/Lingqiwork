@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import Layout from './Layout'
-import { api, type AgentPreset, type ArenaResult, type BackupList, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile } from './api'
+import { api, type AgentPreset, type ArenaResult, type BackupList, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -923,6 +923,13 @@ export default function SettingsPage() {
     if (section !== 'agents' || health) return
     api.healthReport().then(setHealth).catch(() => {})
   }, [section, health])
+
+  const [quality, setQuality] = useState<QualitySummary | null>(null)
+
+  useEffect(() => {
+    if (section !== 'agents' || quality) return
+    api.qualitySummary().then(setQuality).catch(() => {})
+  }, [section, quality])
 
   async function runArena() {
     if (arenaBusy || !arenaPrompt.trim()) return
@@ -2362,6 +2369,70 @@ export default function SettingsPage() {
               </div>
             ))}
           </div>
+        )}
+      </section>
+
+      {/* 生成质量闭环：研究/产出/复盘/方案 每次成文后都能评一次，按「哪版提示词 + 哪个模型」聚合 */}
+      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <h2 className="flex items-center gap-2 font-semibold"><span>⭐</span> 生成质量</h2>
+        <p className="text-xs text-neutral-500">
+          研究 / 产出 / 复盘 / 方案 每次成文后，各自的卡片底部都有一次 👍/👎。评价按「哪版提示词 + 哪个模型」聚合——
+          改过提示词或换过 provider 之后，前后两版会分开统计，不用靠感觉判断。
+        </p>
+        {!quality ? (
+          <p className="text-xs text-neutral-400">正在统计…</p>
+        ) : quality.total === 0 ? (
+          <p className="text-xs text-neutral-400">还没有评价。生成一篇东西之后，卡片底部会有 👍/👎。</p>
+        ) : (
+          <>
+            <p className="text-xs text-neutral-600 dark:text-neutral-300">
+              近 {quality.days} 天评了 <b>{quality.total}</b> 次，满意率{' '}
+              <b className={quality.rate >= 0.7 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+                {Math.round(quality.rate * 100)}%
+              </b>
+              （👍 {quality.good} / 👎 {quality.bad}）
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="text-neutral-400">
+                  <tr>
+                    <th className="py-1 pr-3 font-normal">环节</th>
+                    <th className="py-1 pr-3 font-normal">提示词</th>
+                    <th className="py-1 pr-3 font-normal">模型</th>
+                    <th className="py-1 pr-3 font-normal">满意率</th>
+                    <th className="py-1 font-normal">样本</th>
+                  </tr>
+                </thead>
+                <tbody className="text-neutral-600 dark:text-neutral-300">
+                  {quality.groups.map((g) => (
+                    <tr key={`${g.kind}-${g.prompt_sha}-${g.model_id}`} className="border-t border-neutral-100 dark:border-neutral-800">
+                      <td className="py-1 pr-3">{g.kind}</td>
+                      <td className="py-1 pr-3 font-mono text-[10px] text-neutral-400">{g.prompt_sha || '—'}</td>
+                      <td className="max-w-[14rem] truncate py-1 pr-3" title={g.model_id}>{g.model_id || '—'}</td>
+                      <td className={`py-1 pr-3 ${g.rate >= 0.7 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                        {Math.round(g.rate * 100)}%
+                      </td>
+                      <td className="py-1 text-neutral-400">{g.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {quality.recent_bad.length > 0 && (
+              <details className="text-xs text-neutral-500">
+                <summary className="cursor-pointer select-none">
+                  最近 {quality.recent_bad.length} 条差评的原因
+                </summary>
+                <ul className="mt-1.5 space-y-0.5">
+                  {quality.recent_bad.map((b, i) => (
+                    <li key={i}>
+                      <span className="text-neutral-400">[{b.kind}]</span> {b.reason || '（没写原因）'}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </>
         )}
       </section>
 

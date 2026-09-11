@@ -15,6 +15,10 @@ _FINGERPRINTS = [
     ("app.core.tutor", "_SUMMARY_SYSTEM", "5618bcc46585"),
     ("app.core.research", "_PLAN_PROMPT", "b945ceb397e6"),
     ("app.core.research", "_SYNTH_PROMPT", "209cd89a1c70"),
+    ("app.core.compose", "_SYNTH_PROMPT", "a56f9bfba701"),
+    ("app.core.recap", "_SYNTH_PROMPT", "8adf1e6767e8"),
+    ("app.core.decide", "_FRAME_PROMPT", "d7722eebb9a9"),
+    ("app.core.decide", "_SYNTH_PROMPT", "afb0c6ccb4f3"),
     ("app.core.memory", "_AUTO_SYSTEM", "8f2821bef994"),
     ("app.core.memory_tidy", "_TIDY_SYSTEM", "2ddf30f42f85"),
     ("app.core.memory_tidy", "_REFLECT_SYSTEM", "56d6bed9fbdc"),
@@ -39,7 +43,7 @@ _FINGERPRINTS = [
 
 def test_inventory_count():
     items = inventory()
-    assert len(items) == 26
+    assert len(items) == 30
     assert len(items) == len(_FINGERPRINTS)
 
 
@@ -91,8 +95,11 @@ def test_inline_notes_registered():
 
 def test_summary_shape():
     s = summary()
-    assert s["count"] == 26
+    assert s["count"] == 30
     assert s["inline"] == 8
     assert s["missing"] == []
     assert s["by_module"]["app.core.tutor"] == 5
     assert s["by_module"]["app.core.research"] == 2
+    assert s["by_module"]["app.core.compose"] == 1
+    assert s["by_module"]["app.core.recap"] == 1
+    assert s["by_module"]["app.core.decide"] == 2

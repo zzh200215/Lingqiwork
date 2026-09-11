@@ -48,6 +48,13 @@ _SPECS: list[tuple[str, str, str, str]] = [
     # ---- 研究（学习闭环：学 → 研究 → 产出）----
     ("app.core.research", "_PLAN_PROMPT", "研究规划：把话题拆成 2-4 个互补的检索式", "system"),
     ("app.core.research", "_SYNTH_PROMPT", "研究成文：只依据材料、每个论断带 [编号] 引用", "system"),
+    # ---- 产出（学习闭环的出口：把学到的写成一篇东西）----
+    ("app.core.compose", "_SYNTH_PROMPT", "产出成文：只依据你自己的材料（知识库/记忆/日记）", "system"),
+    # ---- 复盘（把散落的记录合成一次「最近」）----
+    ("app.core.recap", "_SYNTH_PROMPT", "复盘成文：三段（关注什么/学到哪/卡在哪），不写建议", "system"),
+    # ---- 分析 / 方案（拿不准的事，理清楚再出方案）----
+    ("app.core.decide", "_FRAME_PROMPT", "方案读题：话题 → 一次决策（决策/选项/判据/检索式），选项必须补全", "system"),
+    ("app.core.decide", "_SYNTH_PROMPT", "方案成文：四节（决定什么/几个选项/我的判断/什么会推翻它）", "system"),
     # ---- 记忆系统 ----
     ("app.core.memory", "_AUTO_SYSTEM", "长期记忆自动抽取（preference/fact/habit 三分类，最多 2 条）", "system"),
     ("app.core.memory_tidy", "_TIDY_SYSTEM", "睡眠期记忆合并：相似记忆合一条或保留（不得编造）", "system"),

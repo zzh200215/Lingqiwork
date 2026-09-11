@@ -4,6 +4,7 @@ import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 
 import CodeBlock from './CodeBlock'
+import FeedbackButtons from './FeedbackButtons'
 import Layout from './Layout'
 import {
   api,
@@ -16,8 +17,11 @@ import {
   type TutorTurn,
 } from './api'
 import {
+  streamDecide,
   streamResearch,
   streamTutorSay,
+  type DecideFrame,
+  type DecideReport,
   type ResearchReport,
   type TutorMaterialSource,
   type TutorRecallHit,
@@ -57,8 +61,8 @@ function Markdown({ children }: { children: string }) {
   )
 }
 
-/** 研究报告 → markdown。正文里的 [n] 原样保留，对应来源在卡片的折叠区里。 */
-function reportMarkdown(r: ResearchReport): string {
+/** 成文（研究 / 方案同一形状）→ markdown。正文里的 [n] 原样保留，对应来源在卡片的折叠区里。 */
+function reportMarkdown(r: { title: string; sections: { heading: string; body: string }[] }): string {
   return (
     `## ${r.title}\n\n` +
     r.sections.map((s) => (s.heading ? `### ${s.heading}\n\n${s.body}` : s.body)).join('\n\n')
@@ -159,6 +163,13 @@ export default function TutorPage() {
   const [rs, setRs] = useState<ResearchReport | null>(null)
   const [rsMsg, setRsMsg] = useState('')
   const [rsSaved, setRsSaved] = useState('')
+  // 分析 / 方案（拿不准的事，理清楚再出方案）：拉取式——点「帮我理清」才跑。
+  // 和研究的区别在于先出 `frame`（我理解你要决定什么），那是给人看的。
+  const [dcBusy, setDcBusy] = useState(false)
+  const [dc, setDc] = useState<DecideReport | null>(null)
+  const [dcFrame, setDcFrame] = useState<DecideFrame | null>(null)
+  const [dcMsg, setDcMsg] = useState('')
+  const [dcSaved, setDcSaved] = useState('')
   const [stats, setStats] = useState<TutorStats | null>(null)
   // 开场建议（DeepTutor 参考项）：从记录里派生的就近入口，挂了就静默没有
   const [starters, setStarters] = useState<TutorStarter[]>([])
@@ -168,6 +179,8 @@ export default function TutorPage() {
   const abortRef = useRef<AbortController | null>(null)
   // 研究同样要能掐断：换会话 / 离开页面时中止，否则换完会话还会弹出上一场的研究卡
   const rsAbortRef = useRef<AbortController | null>(null)
+  // 方案同理
+  const dcAbortRef = useRef<AbortController | null>(null)
 
   const refreshRail = useCallback(() => {
     // best-effort: the rail is context, never a precondition for teaching
@@ -292,6 +305,80 @@ export default function TutorPage() {
     setRsBusy(false)
   }, [])
 
+  // 方案（拿不准的事，理清楚再出方案）：以本会话话题为输入，先读题、再取材料。
+  // `frame` 在取材料之前就渲染出来——读错题是这类功能第一位的失败模式，
+  // 题没读懂，后面写得再顺也没用。
+  const runDecide = useCallback(async () => {
+    const t = topic.trim()
+    if (!t || dcBusy) return
+    dcAbortRef.current?.abort()
+    const ctl = new AbortController()
+    dcAbortRef.current = ctl
+    setDcBusy(true)
+    setDc(null)
+    setDcFrame(null)
+    setDcSaved('')
+    setDcMsg('读题中…')
+    try {
+      const r = await streamDecide(
+        t,
+        (event, data) => {
+          if (event === 'frame') {
+            setDcFrame(data as unknown as DecideFrame)
+            setDcMsg('去取材料…')
+          } else if (event === 'gathering') setDcMsg('检索知识库、长期记忆与网络…')
+          else if (event === 'sources')
+            setDcMsg(`取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，成文中…`)
+          else if (event === 'writing') setDcMsg('成文中…')
+        },
+        ctl.signal
+      )
+      if (r.ok && r.report) {
+        setDc(r.report)
+        setDcFrame(r.report.frame ?? null)
+        setDcMsg('')
+      } else {
+        setDcMsg(r.error ?? '理清失败')
+      }
+    } catch (e) {
+      // 主动掐断不算错误：换会话时不该冒出一条红字
+      if ((e as { name?: string })?.name !== 'AbortError') {
+        setDcMsg(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setDcBusy(false)
+    }
+  }, [topic, dcBusy])
+
+  const saveDecide = useCallback(async () => {
+    if (!dc || dcBusy || dcSaved) return
+    setDcBusy(true)
+    setDcMsg('')
+    try {
+      const r = await api.decideSave({
+        title: dc.title,
+        sections: dc.sections,
+        used: dc.used,
+        sources: dc.sources,
+      })
+      setDcSaved(r.filename)
+    } catch (e) {
+      setDcMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDcBusy(false)
+    }
+  }, [dc, dcBusy, dcSaved])
+
+  /** 换会话 / 再学一个 / 离开：同样的道理，别让上一场题的方案落到新会话上 */
+  const clearDecide = useCallback(() => {
+    dcAbortRef.current?.abort()
+    setDc(null)
+    setDcFrame(null)
+    setDcMsg('')
+    setDcSaved('')
+    setDcBusy(false)
+  }, [])
+
   useEffect(() => refreshRail(), [refreshRail])
 
   // 开场建议只在开场屏有意义：挂载时拉一次，点一个就开会话，不轮询不催
@@ -303,11 +390,12 @@ export default function TutorPage() {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [turns.length, streaming])
 
-  // 卸载（切到其他页面）时掐断还在流式的回复 / 在跑的研究
+  // 卸载（切到其他页面）时掐断还在流式的回复 / 在跑的研究 / 在跑的方案
   useEffect(
     () => () => {
       abortRef.current?.abort()
       rsAbortRef.current?.abort()
+      dcAbortRef.current?.abort()
     },
     []
   )
@@ -357,6 +445,7 @@ export default function TutorPage() {
     setMode(m)
     setErr('')
     clearResearch()
+    clearDecide()
     try {
       const s = await api.tutorStart(t, repo, m)
       setSid(s.id)
@@ -370,7 +459,7 @@ export default function TutorPage() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
-  }, [busy, send, refreshRail, clearResearch])
+  }, [busy, send, refreshRail, clearResearch, clearDecide])
 
   const begin = useCallback(() => beginWith(topic), [beginWith, topic])
 
@@ -402,6 +491,7 @@ export default function TutorPage() {
   const open = useCallback(async (id: number) => {
     setErr('')
     clearResearch()
+    clearDecide()
     try {
       const d = await api.tutorSession(id)
       setSid(d.id)
@@ -414,20 +504,29 @@ export default function TutorPage() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
-  }, [clearResearch])
+  }, [clearResearch, clearDecide])
 
   // 全局搜索深链：/tutor.html?session=ID 直接打开那次会话（教学命中从聊天页跳过来）
   const deepLink = useRef(new URLSearchParams(window.location.search).get('session'))
+  // 深链只认一次。`beginWith` 的身份跟着 `busy` 变，于是这个 effect 会在每轮回答结束时
+  // 重跑一次、又开一场新会话（原来就有这个问题，只是要带深链才碰得到）；顺带它会
+  // 把半路在跑的方案/研究卡一起清掉。
+  const deepLinked = useRef(false)
   useEffect(() => {
+    if (deepLinked.current) return
     const s = Number(deepLink.current)
     if (Number.isFinite(s) && s > 0) {
+      deepLinked.current = true
       void open(s)
       return
     }
     // 知识库页「陪读」深链：?new=<话题>&repo=<仓库名> 直接开一场陪读会话
     const params = new URLSearchParams(window.location.search)
     const nt = params.get('new')
-    if (nt) void beginWith(nt, params.get('repo') || '')
+    if (nt) {
+      deepLinked.current = true
+      void beginWith(nt, params.get('repo') || '')
+    }
   }, [open, beginWith])
 
   const reset = useCallback(() => {
@@ -442,7 +541,8 @@ export default function TutorPage() {
     setVerdict('')
     setEnded(null)
     clearResearch()
-  }, [clearResearch])
+    clearDecide()
+  }, [clearResearch, clearDecide])
 
   return (
     <Layout page="tutor">
@@ -565,6 +665,14 @@ export default function TutorPage() {
                   {rsBusy ? '研究中…' : '🔍 深入研究'}
                 </button>
                 <button
+                  onClick={() => void runDecide()}
+                  disabled={dcBusy || !topic.trim()}
+                  title="把这个话题当成一次决策：先摆出「我理解你要决定的是什么」，再摆开选项、指出判据、给一个有条件的判断；成品可存进知识库"
+                  className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 hover:text-violet-700 disabled:opacity-40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                >
+                  {dcBusy ? '理清中…' : '🤔 帮我理清'}
+                </button>
+                <button
                   onClick={reset}
                   className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                 >
@@ -644,6 +752,108 @@ export default function TutorPage() {
                               已存到 {rsSaved}，已进索引——下次相关话题的取材会先捞到它
                             </p>
                           ) : null}
+                          <div className="mt-2 border-t border-sky-200/70 pt-2 dark:border-sky-500/20">
+                            <FeedbackButtons
+                              kind="research"
+                              promptSha={rs.prompt_sha}
+                              modelId={rs.model_id}
+                              artifactRef={rsSaved}
+                            />
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {/* 方案卡：先摆「我理解你要决定的是什么」再出正文——读错题是这类功能
+                      第一位的失败模式，题面必须在成文之前就看得见。同样是这一场会话的
+                      动作，不落右栏、不计数（第 2 节）。 */}
+                  {dc || dcFrame || dcBusy || dcMsg ? (
+                    <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 dark:border-violet-500/30 dark:bg-violet-500/10">
+                      <div className="flex items-center justify-between gap-2 pb-1">
+                        <p className="text-[11px] font-medium uppercase tracking-wider text-violet-700 dark:text-violet-300">
+                          🤔 方案
+                        </p>
+                        {dc ? (
+                          <button
+                            onClick={() => void saveDecide()}
+                            disabled={dcBusy || !!dcSaved}
+                            className="rounded-full border border-violet-300 px-2 py-0.5 text-[10px] text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/20"
+                          >
+                            {dcSaved ? '已存进知识库' : dcBusy ? '保存中…' : '存进知识库'}
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {dcFrame ? (
+                        <div className="mb-2 rounded-lg border border-violet-200/70 bg-white/70 p-2.5 dark:border-violet-500/20 dark:bg-neutral-900/40">
+                          <p className="text-[11px] text-neutral-500">我理解你要决定的是</p>
+                          <p className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                            {dcFrame.decision}
+                          </p>
+                          {dcFrame.options.length > 0 ? (
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {dcFrame.options.map((o) => (
+                                <span
+                                  key={o}
+                                  className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
+                                >
+                                  {o}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {dcFrame.criteria.length > 0 ? (
+                            <p className="mt-1.5 text-[11px] text-neutral-500">
+                              会比：{dcFrame.criteria.join(' · ')}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {dcMsg ? <p className="text-[11px] text-neutral-500">{dcMsg}</p> : null}
+
+                      {dc ? (
+                        <>
+                          <Markdown>{reportMarkdown(dc)}</Markdown>
+                          {dc.sources.length > 0 ? (
+                            <details className="mt-2 border-t border-violet-200/70 pt-2 dark:border-violet-500/20">
+                              <summary className="cursor-pointer text-[11px] text-neutral-500">
+                                来源 {dc.sources.length} 条（你的材料{' '}
+                                {dc.sources.filter((s) => s.kind === 'kb').length} 条 · 记忆{' '}
+                                {dc.sources.filter((s) => s.kind === 'memory').length} 条）
+                              </summary>
+                              <ul className="mt-1 space-y-0.5">
+                                {dc.sources.map((s) => (
+                                  <li key={s.n} className="text-[11px] leading-relaxed">
+                                    <span
+                                      className={
+                                        dc.used.includes(s.n)
+                                          ? 'font-medium text-neutral-800 dark:text-neutral-100'
+                                          : 'text-neutral-500 dark:text-neutral-400'
+                                      }
+                                    >
+                                      [{s.n}] {s.kind === 'kb' ? '📄' : s.kind === 'memory' ? '🧠' : '🌐'}{' '}
+                                      {s.title}
+                                    </span>
+                                    <span className="text-neutral-400"> — {s.ref}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          ) : null}
+                          {dcSaved ? (
+                            <p className="mt-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                              已存到 {dcSaved}，已进索引——下次相关话题的取材会先捞到它
+                            </p>
+                          ) : null}
+                          <div className="mt-2 border-t border-violet-200/70 pt-2 dark:border-violet-500/20">
+                            <FeedbackButtons
+                              kind="decide"
+                              promptSha={dc.prompt_sha}
+                              modelId={dc.model_id}
+                              artifactRef={dcSaved}
+                            />
+                          </div>
                         </>
                       ) : null}
                     </div>
