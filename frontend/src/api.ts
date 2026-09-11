@@ -899,8 +899,38 @@ export interface QualitySummary {
   }[]
 }
 
-export const api = {
-  listProviders: () => request<ProviderConfig[]>('/api/settings/providers'),
+/** 某个成文引擎跑一遍 golden set 的自动得分（结构与人工反馈共用同一个 prompt_sha）。 */
+export interface EngineEvalRun {
+  id: number
+  engine: string
+  created_at: string | null
+  prompt_sha: string
+  model_id: string
+  total: number
+  /** 无 finding 的用例占比 0-1（确定性判分，不花模型钱） */
+  structural: number
+  /** 接地判分 0-5 均值；null = 这次只跑了结构判分 */
+  grounded: number | null
+  seconds: number
+}
+
+export interface EngineEvalLatest {
+  by_engine: Record<string, EngineEvalRun | null>
+  /** 每个引擎的 golden set 有几条用例 */
+  coverage: Record<string, number>
+  /** 标尺自身的健康度提醒：全顶格（区分度低）、用例偏少 */
+  warnings: string[]
+}
+
+export interface EngineEvalRunResult {
+  runs: EngineEvalRun[]
+  skipped: string[]
+  judge_model: string
+  judged: boolean
+  coverage: Record<string, number>
+}
+
+export const api = {  listProviders: () => request<ProviderConfig[]>('/api/settings/providers'),
   createProvider: (p: Partial<ProviderConfig>) =>
     request<ProviderConfig>('/api/settings/providers', { method: 'POST', body: JSON.stringify(p) }),
   updateProvider: (id: number, p: Partial<ProviderConfig>) =>
@@ -1123,6 +1153,16 @@ export const api = {
     }),
 
   qualitySummary: (days = 90) => request<QualitySummary>(`/api/quality/summary?days=${days}`),
+
+  /** 成文引擎的自动标尺：每个引擎最近一次的得分 + golden set 覆盖 */
+  engineEvalLatest: () => request<EngineEvalLatest>('/api/evals/engines/latest'),
+
+  /** 在真模型上跑一遍 golden set（每个用例至少一次模型调用，可能要几分钟） */
+  engineEvalRun: (engine?: string) =>
+    request<EngineEvalRunResult>('/api/evals/engines/run', {
+      method: 'POST',
+      body: JSON.stringify(engine ? { engine } : {}),
+    }),
 
   listRepos: () => request<RepoList>('/api/repos'),
   cloneRepo: (url: string, name?: string) =>

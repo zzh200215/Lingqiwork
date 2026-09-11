@@ -291,14 +291,18 @@ def test_run_happy_path_saves_and_reports(wired, indexed, monkeypatch):
         stream_fn=stream,
     )
 
-    assert [e for e, _ in events] == ["gathering", "sources", "writing", "report", "saved"]
-    report = events[3][1]
+    kinds = [e for e, _ in events]
+    # 流式：正文边生成边发 draft；滤掉它之后仍是原来的五步，且 draft 必在 report 之前
+    assert [k for k in kinds if k != "draft"] == ["gathering", "sources", "writing", "report", "saved"]
+    assert kinds.index("draft") < kinds.index("report")
+    by_event = dict(events)
+    report = by_event["report"]
     assert report["title"] == "最近" and report["used"] == [1]
     # 质量闭环的 join key：事件必须带上「这版提示词」的指纹，否则反馈没法按版本统计
     from app.core import report as report_mod
 
     assert report["prompt_sha"] == report_mod.prompt_sha(recap._SYNTH_PROMPT)
-    saved = events[4][1]
+    saved = by_event["saved"]
     assert saved["filename"].startswith("recap/")
     assert saved["chunks"] == 5
     assert indexed  # 落盘之后确实进了索引

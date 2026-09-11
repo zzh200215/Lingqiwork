@@ -116,6 +116,74 @@ def clean_json(text: str) -> str | None:
     return _TRAILING_COMMA_RE.sub(r"\1", cand)
 
 
+# ---------- 截断前缀的修补（流式渲染用） ----------
+
+
+def repair_prefix(prefix: str) -> str | None:
+    """把一段**被截断的** JSON 前缀补成合法 JSON（不解析，只补字符）。Pure.
+
+    补三样东西：没闭合的字符串补引号（悬着的反斜杠先丢掉，那是不完整的转义）、
+    没闭合的 `{` / `[` 按栈逆序补右括号。括号不配对（多了右括号）返回 None。
+    """
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for ch in prefix:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if not stack:
+                return None
+            stack.pop()
+
+    out = prefix
+    if in_str:
+        if esc:
+            out = out[:-1]  # 悬着的 `\` 是不完整的转义，留着反而会把补的引号吃掉
+        out += '"'
+    out += "".join("}" if c == "{" else "]" for c in reversed(stack))
+    return out
+
+
+def partial_json(text: str, *, backoff: int = 120) -> Any | None:
+    """从**还在生成中的**文本里尽量解析出对象/数组；解析不出返回 None。Pure.
+
+    做法是「补全 + 解析」：先按原样补，失败了再从尾部丢掉一个字符重试（`backoff` 次
+    封顶）。要丢是因为尾巴可能停在半个 key / 半个数字上——那种状态补什么都非法，而
+    丢掉那几个字符就回到了最近一个合法位置。**先不丢**是有意的：正文正写到一半时
+    那一截是要显示的，不该为了合法而把它切掉。
+
+    调用方拿到 None 就当「还不够，再等等」——它只是渲染用的近似，最终产物仍以完整
+    解析为准。
+    """
+    s = (text or "").lstrip()
+    start = s.find("{")
+    if start < 0:
+        return None
+    s = s[start:]
+    for k in range(min(backoff, len(s))):
+        cand = repair_prefix(s[: len(s) - k])
+        if cand is None:
+            continue
+        try:
+            obj = json.loads(_TRAILING_COMMA_RE.sub(r"\1", cand))
+        except ValueError:
+            continue
+        if isinstance(obj, (dict, list)):
+            return obj
+    return None
+
+
 def _loads(blob: str) -> Any | None:
     try:
         return json.loads(blob)

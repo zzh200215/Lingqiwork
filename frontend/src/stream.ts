@@ -372,6 +372,17 @@ export interface ResearchSourceRef {
   ref: string
 }
 
+/**
+ * 流式过程中的**半截**报告——只有 title 与 sections，最后一段正文可能还在写。
+ *
+ * 四个引擎都发这个（`draft` 事件，可能连着好几帧），页面据此边生成边渲染；
+ * `used` / `sources` / `model_id` 这些只有最终产物才准的东西不在这里。
+ */
+export interface ReportDraft {
+  title: string
+  sections: { heading: string; body: string }[]
+}
+
 export interface ResearchReport {
   title: string
   sections: { heading: string; body: string }[]
@@ -389,7 +400,7 @@ export interface ResearchDone {
   report?: ResearchReport
 }
 
-/** Progress stages the page renders as it goes: plan / gathering / sources / writing. */
+/** Progress stages: plan / gathering / sources / writing / draft（可多帧）. */
 export type ResearchStage = (event: string, data: Record<string, unknown>) => void
 
 /**
@@ -455,7 +466,7 @@ export interface ComposeDone {
   report?: ComposeReport
 }
 
-/** Progress stages the page renders as it goes: gathering / sources / writing. */
+/** Progress stages: gathering / sources / writing / draft（可多帧）. */
 export type ComposeStage = (event: string, data: Record<string, unknown>) => void
 
 /**
@@ -525,7 +536,7 @@ export interface RecapDone {
   saved?: RecapSaved
 }
 
-/** Progress stages: gathering / sources / writing. */
+/** Progress stages: gathering / sources / writing / draft（可多帧）. */
 export type RecapStage = (event: string, data: Record<string, unknown>) => void
 
 /**
@@ -604,7 +615,7 @@ export interface DecideDone {
   report?: DecideReport
 }
 
-/** Progress stages: framing / frame / gathering / sources / writing. */
+/** Progress stages: framing / frame / gathering / sources / writing / draft（可多帧）. */
 export type DecideStage = (event: string, data: Record<string, unknown>) => void
 
 /**

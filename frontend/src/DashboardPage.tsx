@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import FeedbackButtons from './FeedbackButtons'
 import Layout from './Layout'
 import { api, type BeliefThread, type DashboardStats, type JournalRecent, type TutorStats } from './api'
-import { streamRecap, type RecapReport, type RecapSaved } from './stream'
+import { streamRecap, type RecapReport, type RecapSaved, type ReportDraft } from './stream'
 
 // 仪表盘 — 零柒视角
 // 顶部 banner 用零柒 sprite + LLM 生成的今日一句话；
@@ -29,7 +29,7 @@ function RecapMarkdown({ children }: { children: string }) {
   )
 }
 
-function recapMarkdown(r: RecapReport): string {
+function recapMarkdown(r: { sections: { heading: string; body: string }[] }): string {
   return r.sections.map((s) => `## ${s.heading}\n\n${s.body}`).join('\n\n')
 }
 
@@ -66,6 +66,8 @@ export default function DashboardPage() {
   // 复盘：pull-based——点它才跑，跑完自己落 vault/recap/ 并进索引
   const [rcBusy, setRcBusy] = useState(false)
   const [rc, setRc] = useState<RecapReport | null>(null)
+  // 成文是流式的：draft 一帧帧来，正文边生成边渲染，`rc` 到了才算数
+  const [rcDraft, setRcDraft] = useState<ReportDraft | null>(null)
   const [rcSaved, setRcSaved] = useState<RecapSaved | null>(null)
   const [rcMsg, setRcMsg] = useState('')
   const rcAbortRef = useRef<AbortController | null>(null)
@@ -77,12 +79,17 @@ export default function DashboardPage() {
     rcAbortRef.current = ctl
     setRcBusy(true)
     setRc(null)
+    setRcDraft(null)
     setRcSaved(null)
     setRcMsg('在翻你的记录…')
     try {
       const r = await streamRecap((event, data) => {
         if (event === 'sources') setRcMsg(`取到 ${(data.n as number) ?? 0} 条记录，成文中…`)
         else if (event === 'writing') setRcMsg('成文中…')
+        else if (event === 'draft') {
+          setRcDraft(data as unknown as ReportDraft)
+          setRcMsg('')
+        }
       }, ctl.signal)
       if (!r.ok || !r.report) {
         setRcMsg(r.error ?? '复盘失败')
@@ -103,6 +110,7 @@ export default function DashboardPage() {
   const clearRecap = useCallback(() => {
     rcAbortRef.current?.abort()
     setRc(null)
+    setRcDraft(null)
     setRcSaved(null)
     setRcMsg('')
     setRcBusy(false)
@@ -270,12 +278,12 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {(rc || rcSaved) && (
+        {(rc || rcDraft || rcSaved) && (
           <section className="mt-5 rounded-2xl border border-violet-200/70 bg-white/70 p-5 dark:border-violet-500/20 dark:bg-neutral-900/50">
             <div className="mb-3 flex items-center gap-2">
               <span>📋</span>
               <h2 className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
-                {rc?.title || '复盘'}
+                {(rc ?? rcDraft)?.title || '复盘'}
               </h2>
               {rcSaved && (
                 <span className="ml-auto text-[11px] text-neutral-400">
@@ -283,7 +291,10 @@ export default function DashboardPage() {
                 </span>
               )}
             </div>
-            {rc && <RecapMarkdown>{recapMarkdown(rc)}</RecapMarkdown>}
+            {/* draft 先渲染（边生成边看）；来源清单与评价等 `rc` 到了再现 */}
+            {rc || rcDraft ? (
+              <RecapMarkdown>{recapMarkdown(rc ?? rcDraft!)}</RecapMarkdown>
+            ) : null}
             {rc?.sources?.length ? (
               <details className="mt-3 text-xs text-neutral-500">
                 <summary className="cursor-pointer select-none">

@@ -283,7 +283,12 @@ def test_run_emits_frame_before_gathering(wired, monkeypatch):
         stream_fn=_llm_seq(FRAME_JSON, REPORT_JSON),
     )
     kinds = [e for e, _ in events]
-    assert kinds == ["framing", "frame", "gathering", "sources", "writing", "report"]
+    kinds = [e for e, _ in events]
+    # 流式：正文边生成边发 draft；滤掉它之后仍是原来的六步，且 draft 必在 report 之前
+    assert [k for k in kinds if k != "draft"] == [
+        "framing", "frame", "gathering", "sources", "writing", "report",
+    ]
+    assert kinds.index("draft") < kinds.index("report")
     assert kinds.index("frame") < kinds.index("gathering")  # 先摆题，再去取材料
 
     frame = dict(events)["frame"]
@@ -353,7 +358,10 @@ def test_run_happy_path(wired, monkeypatch):
         fetch_fn=fetch,
         stream_fn=_llm_seq(FRAME_JSON, REPORT_JSON),
     )
-    assert [e for e, _ in events] == ["framing", "frame", "gathering", "sources", "writing", "report"]
+    kinds = [e for e, _ in events]
+    assert [k for k in kinds if k != "draft"] == [
+        "framing", "frame", "gathering", "sources", "writing", "report",
+    ]
 
     sources = dict(events)["sources"]
     assert sources["kb"] == 1 and sources["web"] == 1

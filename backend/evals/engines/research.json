@@ -1,0 +1,56 @@
+{
+  "engine": "research",
+  "_note": "研究的 golden set。只喂成文那一步的材料（知识库 + 网络），不跑检索与抓取——那两步是不确定的，被测的应该是「有材料之后写得怎么样」。",
+  "cases": [
+    {
+      "id": "research-kb-plus-web",
+      "topic": "RRF 融合检索为什么比单路好",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "kb",
+          "title": "自己的检索笔记",
+          "ref": "notes/retrieval.md",
+          "text": "单路向量检索对专有名词差，单路 BM25 对同义改写差，两路一起能互补。"
+        },
+        {
+          "n": 2,
+          "kind": "web",
+          "title": "Reciprocal Rank Fusion",
+          "ref": "https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf",
+          "text": "RRF 用 1/(k+rank) 把多路排名合起来，k 常取 60。它只看排名不看分数，所以不需要把两路的分数归一化。"
+        }
+      ],
+      "expect": {
+        "min_sections": 2,
+        "min_used": 2,
+        "forbid": []
+      }
+    },
+    {
+      "id": "research-conflict",
+      "topic": "长上下文和 RAG 到底该用哪个",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "web",
+          "title": "一篇说长上下文够了",
+          "ref": "https://example.com/a",
+          "text": "在 200K 上下文下，把整份文档塞进去的效果已经追上 RAG 管线。"
+        },
+        {
+          "n": 2,
+          "kind": "web",
+          "title": "一篇说长上下文不行",
+          "ref": "https://example.com/b",
+          "text": "长上下文在「大海捞针」以外的多跳问题上明显掉点，而且成本随长度线性涨。"
+        }
+      ],
+      "expect": {
+        "min_sections": 2,
+        "min_used": 2,
+        "forbid": []
+      }
+    }
+  ]
+}

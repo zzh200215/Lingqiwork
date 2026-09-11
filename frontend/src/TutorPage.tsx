@@ -22,6 +22,7 @@ import {
   streamTutorSay,
   type DecideFrame,
   type DecideReport,
+  type ReportDraft,
   type ResearchReport,
   type TutorMaterialSource,
   type TutorRecallHit,
@@ -161,12 +162,15 @@ export default function TutorPage() {
   // 研究（学习闭环的中间两跳）：拉取式——点「深入研究」才跑，成品可存进知识库
   const [rsBusy, setRsBusy] = useState(false)
   const [rs, setRs] = useState<ResearchReport | null>(null)
+  // 成文是流式的：draft 一帧帧来，正文边生成边渲染，`rs` 到了才算数
+  const [rsDraft, setRsDraft] = useState<ReportDraft | null>(null)
   const [rsMsg, setRsMsg] = useState('')
   const [rsSaved, setRsSaved] = useState('')
   // 分析 / 方案（拿不准的事，理清楚再出方案）：拉取式——点「帮我理清」才跑。
   // 和研究的区别在于先出 `frame`（我理解你要决定什么），那是给人看的。
   const [dcBusy, setDcBusy] = useState(false)
   const [dc, setDc] = useState<DecideReport | null>(null)
+  const [dcDraft, setDcDraft] = useState<ReportDraft | null>(null)
   const [dcFrame, setDcFrame] = useState<DecideFrame | null>(null)
   const [dcMsg, setDcMsg] = useState('')
   const [dcSaved, setDcSaved] = useState('')
@@ -246,6 +250,7 @@ export default function TutorPage() {
     rsAbortRef.current = ctl
     setRsBusy(true)
     setRs(null)
+    setRsDraft(null)
     setRsSaved('')
     setRsMsg('规划检索式…')
     try {
@@ -258,6 +263,11 @@ export default function TutorPage() {
           else if (event === 'sources')
             setRsMsg(`取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，成文中…`)
           else if (event === 'writing') setRsMsg('成文中…')
+          else if (event === 'draft') {
+            // 正文开始出来了：把半截渲染上去，进度行让位
+            setRsDraft(data as unknown as ReportDraft)
+            setRsMsg('')
+          }
         },
         ctl.signal
       )
@@ -300,6 +310,7 @@ export default function TutorPage() {
   const clearResearch = useCallback(() => {
     rsAbortRef.current?.abort()
     setRs(null)
+    setRsDraft(null)
     setRsMsg('')
     setRsSaved('')
     setRsBusy(false)
@@ -316,6 +327,7 @@ export default function TutorPage() {
     dcAbortRef.current = ctl
     setDcBusy(true)
     setDc(null)
+    setDcDraft(null)
     setDcFrame(null)
     setDcSaved('')
     setDcMsg('读题中…')
@@ -330,6 +342,10 @@ export default function TutorPage() {
           else if (event === 'sources')
             setDcMsg(`取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，成文中…`)
           else if (event === 'writing') setDcMsg('成文中…')
+          else if (event === 'draft') {
+            setDcDraft(data as unknown as ReportDraft)
+            setDcMsg('')
+          }
         },
         ctl.signal
       )
@@ -373,6 +389,7 @@ export default function TutorPage() {
   const clearDecide = useCallback(() => {
     dcAbortRef.current?.abort()
     setDc(null)
+    setDcDraft(null)
     setDcFrame(null)
     setDcMsg('')
     setDcSaved('')
@@ -703,7 +720,7 @@ export default function TutorPage() {
                   {err ? <p className="text-sm text-rose-600 dark:text-rose-400">{err}</p> : null}
                   {/* 研究卡就地展开在会话流里：进度 → 带引用的讲解 → 存进知识库。
                       它是这一场会话的动作，不落右栏、不计数（第 2 节）。 */}
-                  {rs || rsBusy || rsMsg ? (
+                  {rs || rsDraft || rsBusy || rsMsg ? (
                     <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-500/30 dark:bg-sky-500/10">
                       <div className="flex items-center justify-between gap-2 pb-1">
                         <p className="text-[11px] font-medium uppercase tracking-wider text-sky-700 dark:text-sky-300">
@@ -720,9 +737,13 @@ export default function TutorPage() {
                         ) : null}
                       </div>
                       {rsMsg ? <p className="text-[11px] text-neutral-500">{rsMsg}</p> : null}
+                      {/* draft 先渲染出来（边生成边看）；来源清单、存档、评价这些
+                          只有最终产物才准的东西，等 `rs` 到了再出现。 */}
+                      {rs || rsDraft ? (
+                        <Markdown>{reportMarkdown(rs ?? rsDraft!)}</Markdown>
+                      ) : null}
                       {rs ? (
                         <>
-                          <Markdown>{reportMarkdown(rs)}</Markdown>
                           {rs.sources.length > 0 ? (
                             <details className="mt-2 border-t border-sky-200/70 pt-2 dark:border-sky-500/20">
                               <summary className="cursor-pointer text-[11px] text-neutral-500">
@@ -767,7 +788,7 @@ export default function TutorPage() {
                   {/* 方案卡：先摆「我理解你要决定的是什么」再出正文——读错题是这类功能
                       第一位的失败模式，题面必须在成文之前就看得见。同样是这一场会话的
                       动作，不落右栏、不计数（第 2 节）。 */}
-                  {dc || dcFrame || dcBusy || dcMsg ? (
+                  {dc || dcFrame || dcDraft || dcBusy || dcMsg ? (
                     <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 dark:border-violet-500/30 dark:bg-violet-500/10">
                       <div className="flex items-center justify-between gap-2 pb-1">
                         <p className="text-[11px] font-medium uppercase tracking-wider text-violet-700 dark:text-violet-300">
@@ -812,9 +833,11 @@ export default function TutorPage() {
 
                       {dcMsg ? <p className="text-[11px] text-neutral-500">{dcMsg}</p> : null}
 
+                      {dc || dcDraft ? (
+                        <Markdown>{reportMarkdown(dc ?? dcDraft!)}</Markdown>
+                      ) : null}
                       {dc ? (
                         <>
-                          <Markdown>{reportMarkdown(dc)}</Markdown>
                           {dc.sources.length > 0 ? (
                             <details className="mt-2 border-t border-violet-200/70 pt-2 dark:border-violet-500/20">
                               <summary className="cursor-pointer text-[11px] text-neutral-500">

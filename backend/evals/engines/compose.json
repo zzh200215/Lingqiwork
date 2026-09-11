@@ -1,0 +1,56 @@
+{
+  "engine": "compose",
+  "_note": "产出的 golden set。材料是三路取材（知识库 / 长期记忆 / 日记）渲染后的样子。提示词不规定小节名，所以只查引用与接地，不查 section 顺序——只断言提示词真正承诺过的东西。",
+  "cases": [
+    {
+      "id": "compose-three-legs",
+      "topic": "RAG 评测怎么做才不假",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "kb",
+          "title": "RAG 评测笔记",
+          "ref": "notes/rag-eval.md",
+          "text": "评测要分两层：检索层看得没看对（命中率 / 排序），生成层看说得有没有据（忠实度）。只做一层都会骗自己。"
+        },
+        {
+          "n": 2,
+          "kind": "memory",
+          "title": "长期记忆",
+          "ref": "",
+          "text": "偏好：先把任务拆小再动手。事实：主力机是 Windows，没有独显。"
+        },
+        {
+          "n": 3,
+          "kind": "journal",
+          "title": "近期日记",
+          "ref": "",
+          "text": "- 2026-09-07 08:30 在想 eval 怎么做才不假，感觉题目本身太简单的话分数永远是满分"
+        }
+      ],
+      "expect": {
+        "min_sections": 2,
+        "min_used": 2,
+        "forbid": []
+      }
+    },
+    {
+      "id": "compose-thin",
+      "topic": "向量数据库的选型",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "kb",
+          "title": "零散摘抄",
+          "ref": "clippings/vectordb.md",
+          "text": "Chroma 上手最快。"
+        }
+      ],
+      "expect": {
+        "min_sections": 2,
+        "min_used": 1,
+        "forbid": []
+      }
+    }
+  ]
+}

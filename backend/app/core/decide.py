@@ -383,7 +383,8 @@ async def run(
     }
 
     yield "writing", {}
-    rep = await _report.synthesize(
+    rep = None
+    async for _ev, _payload in _report.synthesize_streaming(
         frame.decision,
         sources,
         _SYNTH_PROMPT,
@@ -391,7 +392,11 @@ async def run(
         stream_fn=stream_fn,
         native_fn=native_fn,
         resolve_fn=_resolve,
-    )
+    ):
+        if _ev == "draft":
+            yield "draft", _payload
+        else:
+            rep = _payload
     if rep is None:
         yield "error", {"message": "成文失败——默认模型不可用，或输出无法解析"}
         return

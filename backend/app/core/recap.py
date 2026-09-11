@@ -254,7 +254,8 @@ async def run(*, days: int = DAYS, stream_fn=None, native_fn=None, **gather_kw):
     yield "sources", {"sources": [_public_source(s) for s in sources], "n": len(sources)}
 
     yield "writing", {}
-    rep = await _report.synthesize(
+    rep = None
+    async for _ev, _payload in _report.synthesize_streaming(
         f"最近 {days} 天",
         sources,
         _SYNTH_PROMPT,
@@ -262,7 +263,11 @@ async def run(*, days: int = DAYS, stream_fn=None, native_fn=None, **gather_kw):
         stream_fn=stream_fn,
         native_fn=native_fn,
         resolve_fn=_resolve,
-    )
+    ):
+        if _ev == "draft":
+            yield "draft", _payload
+        else:
+            rep = _payload
     if rep is None:
         yield "error", {"message": "成文失败——默认模型不可用，或输出无法解析"}
         return

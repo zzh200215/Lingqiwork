@@ -1,0 +1,67 @@
+{
+  "engine": "decide",
+  "_note": "方案的 golden set。它比另外三个多一层：先评 `frame`（读题），再评正文。`expect.frame` 只在话题本身没给全选项时才有意义——读题必须把备选补出来，否则「帮你选」退化成「帮你确认 A 挺好」。`require_kinds` 是这条链路的立命之本：判断必须引到「你自己的材料」或「你的约束」。",
+  "cases": [
+    {
+      "id": "decide-with-own-material",
+      "topic": "本地向量库到底该用 Chroma 还是 Qdrant",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "kb",
+          "title": "向量库选型-上次的想法",
+          "ref": "notes/向量库选型-上次的想法.md",
+          "text": "1. 单机规模下 Chroma 够用，装起来最快，但检索调优空间小。\n2. Qdrant 要单独起一个服务，多一份运维。\n3. 我最在意的是迁移代价——embedding 换了之后索引得重建。"
+        },
+        {
+          "n": 2,
+          "kind": "memory",
+          "title": "长期记忆",
+          "ref": "",
+          "text": "偏好：数据宁可留在本机，不想被云厂商绑住。事实：主力机是 Windows，没有独显，服务都跑在本机 Docker 里。"
+        },
+        {
+          "n": 3,
+          "kind": "web",
+          "title": "Chroma 官方文档",
+          "ref": "https://docs.trychroma.com/",
+          "text": "Chroma 可以嵌入式运行，也可以起服务。默认用本地持久化目录，支持元数据过滤。"
+        }
+      ],
+      "expect": {
+        "sections": ["到底在决定什么", "几个选项", "我的判断", "什么会推翻它"],
+        "min_used": 2,
+        "require_kinds": ["kb"],
+        "frame": { "min_options": 2, "min_criteria": 3 },
+        "forbid": []
+      }
+    },
+    {
+      "id": "decide-no-own-material",
+      "topic": "要不要给服务加上 gRPC",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "web",
+          "title": "gRPC vs REST",
+          "ref": "https://example.com/grpc",
+          "text": "gRPC 用 protobuf 和 HTTP/2，强类型、流式好，但浏览器端要 grpc-web 代理，调试比 REST 麻烦。"
+        },
+        {
+          "n": 2,
+          "kind": "web",
+          "title": "什么时候不该上 gRPC",
+          "ref": "https://example.com/grpc2",
+          "text": "内部服务数量少、团队只有一两个人时，schema 维护成本往往大于收益。"
+        }
+      ],
+      "expect": {
+        "sections": ["到底在决定什么", "几个选项", "我的判断", "什么会推翻它"],
+        "min_used": 1,
+        "require_kinds": [],
+        "frame": { "min_options": 2, "min_criteria": 3 },
+        "forbid": []
+      }
+    }
+  ]
+}

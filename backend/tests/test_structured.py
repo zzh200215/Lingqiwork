@@ -11,7 +11,13 @@ sys.path.insert(0, ".")
 
 from pydantic import BaseModel, Field  # noqa: E402
 
-from app.core.structured import clean_json, extract_json, stats  # noqa: E402
+from app.core.structured import (  # noqa: E402
+    clean_json,
+    extract_json,
+    partial_json,
+    repair_prefix,
+    stats,
+)
 
 
 class _Fact(BaseModel):
@@ -164,3 +170,59 @@ def test_stats_shape():
     s = stats()
     assert {"native", "cleaned", "retried", "failed", "total", "success_rate"} <= set(s)
     assert 0.0 <= s["success_rate"] <= 1.0
+
+
+# ---------- 截断前缀的修补（流式渲染用） ----------
+
+
+def test_repair_prefix_closes_string_and_brackets():
+    assert repair_prefix('{"a": "b') == '{"a": "b"}'
+    assert repair_prefix('{"a": [1, 2') == '{"a": [1, 2]}'
+
+
+def test_repair_prefix_drops_dangling_backslash():
+    """悬着的反斜杠是不完整的转义——留着会把补的引号吃掉，反而补不合法。"""
+    assert repair_prefix('{"a": "b\\') == '{"a": "b"}'
+
+
+def test_repair_prefix_rejects_unbalanced():
+    assert repair_prefix("}") is None
+
+
+# `{"title":"T","sections":[{"heading":"H","body":"正文很长的内容在这里继续写下去"}]}`
+_PARTIAL_WHERE = [
+    '{"title":"T"',
+    '{"title":"T","sections":[',
+    '{"title":"T","sections":[{"head',
+    '{"title":"T","sections":[{"heading":"H"',
+    '{"title":"T","sections":[{"heading":"H","body":"正文很长的内容',
+    '{"title":"T","sections":[{"heading":"H","body":"正文很长的内容在这里继续写下去"',
+]
+
+
+def test_partial_json_parses_at_every_truncation_point():
+    """流式渲染就靠这个：**任何一个**前缀都得能解出「到目前为止有的东西」。
+
+    这正是它和 `clean_json` 的区别——后者只认完整的。
+    """
+    for prefix in _PARTIAL_WHERE:
+        assert clean_json(prefix) is None, f"clean_json 不该认半截的：{prefix}"
+        obj = partial_json(prefix)
+        assert isinstance(obj, dict), f"半截解不出来：{prefix}"
+        assert obj.get("title") == "T"
+
+
+def test_partial_json_keeps_the_half_written_body():
+    """正写到一半的正文要留下——那是用户正想看的那一截，不该为了合法把它切掉。"""
+    obj = partial_json('{"title":"T","sections":[{"heading":"H","body":"正文很长的内容')
+    assert obj["sections"][0]["body"] == "正文很长的内容"
+
+
+def test_partial_json_none_when_nothing_parsable():
+    assert partial_json("") is None
+    assert partial_json("还在想…") is None
+
+
+def test_partial_json_tolerates_prose_and_fences():
+    assert partial_json('```json\n{"title":"T"')["title"] == "T"
+    assert partial_json('好的，这是结果：{"title":"T"')["title"] == "T"

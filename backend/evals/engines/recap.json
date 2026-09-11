@@ -1,0 +1,70 @@
+{
+  "engine": "recap",
+  "_note": "复盘的 golden set。材料是五路记录渲染后的样子（与 core/recap.py 的 _render_* 同形），冻结在这里——评测只喂材料给 synthesize，不碰真实记录。expect.sections 就是提示词里写死的那三段顺序。",
+  "cases": [
+    {
+      "id": "recap-full",
+      "topic": "最近 30 天",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "belief",
+          "title": "信念线（同一条主张随时间的说法）",
+          "ref": "",
+          "text": "- 本地优先（2026-08-01 → 2026-09-10）：先看了眼云厂商；数据留在本机更踏实；宁可多写点代码"
+        },
+        {
+          "n": 2,
+          "kind": "journal",
+          "title": "近期日记",
+          "ref": "",
+          "text": "- 2026-09-10 22:10 今天把复盘这块想通了，镜子不是任务清单\n- 2026-09-08 21:00 读了 Agentic RAG 那篇"
+        },
+        {
+          "n": 3,
+          "kind": "files",
+          "title": "最近动过的文件",
+          "ref": "",
+          "text": "- notes/向量库选型-上次的想法.md（09-09）\n- research/RAG-评测.md（09-05）"
+        },
+        {
+          "n": 4,
+          "kind": "teach",
+          "title": "学习画像（说通 / 半懂）",
+          "ref": "",
+          "text": "说通过的：BM25、RRF\n还是半懂的：cross-encoder 重排"
+        },
+        {
+          "n": 5,
+          "kind": "stuck",
+          "title": "最近卡过的点",
+          "ref": "",
+          "text": "- 召回阈值：0.62 是怎么定的说不清"
+        }
+      ],
+      "expect": {
+        "sections": ["最近在关注什么", "学到哪", "卡在哪"],
+        "min_used": 2,
+        "forbid": ["建议", "下一步", "应该", "推荐你"]
+      }
+    },
+    {
+      "id": "recap-thin",
+      "topic": "最近 30 天",
+      "sources": [
+        {
+          "n": 1,
+          "kind": "files",
+          "title": "最近动过的文件",
+          "ref": "",
+          "text": "- notes/零散记.md（09-01）"
+        }
+      ],
+      "expect": {
+        "sections": ["最近在关注什么", "学到哪", "卡在哪"],
+        "min_used": 1,
+        "forbid": ["建议", "下一步", "应该", "推荐你"]
+      }
+    }
+  ]
+}

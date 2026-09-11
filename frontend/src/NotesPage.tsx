@@ -7,7 +7,7 @@ import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
 import FeedbackButtons from './FeedbackButtons'
 import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry } from './api'
-import { streamCompose, streamPodcastGenerate } from './stream'
+import { streamCompose, streamPodcastGenerate, type ReportDraft } from './stream'
 
 type AiAction = 'continue' | 'polish' | 'summarize' | 'rewrite'
 type ViewMode = 'edit' | 'split' | 'preview'
@@ -245,6 +245,13 @@ export default function NotesPage() {
               `取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，成文中…`
             )
           else if (event === 'writing') setComposeMsg('成文中…')
+          else if (event === 'draft') {
+            // 产出的成品直接落盘并打开，这里没有卡片可渲染——但进度要活：
+            // 字数一直在涨，比一个不动的「成文中…」诚实得多
+            const d = data as unknown as ReportDraft
+            const chars = d.sections.reduce((n, s) => n + s.body.length, 0)
+            setComposeMsg(`成文中…（已写出 ${chars} 字）`)
+          }
         },
         ctl.signal
       )

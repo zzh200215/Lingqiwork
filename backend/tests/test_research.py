@@ -303,13 +303,18 @@ def test_run_happy_path(wired, monkeypatch):
     )
     events = _run("话题", kb_fn=kb, search_fn=search, fetch_fn=fetch, stream_fn=stream)
 
-    assert [e for e, _ in events] == ["plan", "gathering", "sources", "writing", "report"]
-    plan = events[0][1]
+    kinds = [e for e, _ in events]
+    # 流式：正文边生成边发 draft；滤掉它之后仍是原来的五步，且 draft 必在 report 之前
+    assert [k for k in kinds if k != "draft"] == ["plan", "gathering", "sources", "writing", "report"]
+    assert kinds.index("draft") < kinds.index("report")
+
+    by_event = dict(events)
+    plan = by_event["plan"]
     assert plan["queries"] == ["q1", "q2"]
-    sources = events[2][1]
+    sources = by_event["sources"]
     assert sources["kb"] == 1 and len(sources["sources"]) == 2
     assert set(sources["sources"][0]) == {"n", "kind", "title", "ref"}  # 不带正文
-    report = events[4][1]
+    report = by_event["report"]
     assert report["title"] == "R"
     assert report["used"] == [1]
     assert report["model_id"] == "test-model"

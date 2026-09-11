@@ -196,11 +196,17 @@ def test_run_happy_path(wired, monkeypatch):
     stream = _llm('{"title":"R","sections":[{"heading":"H","body":"B [1]"}],"used":[1]}')
     events = _run("话题", kb_fn=kb, memory_fn=memory, journal_fn=_no_journal, stream_fn=stream)
 
-    assert [e for e, _ in events] == ["gathering", "sources", "writing", "report"]
-    sources = events[1][1]
+    kinds = [e for e, _ in events]
+    # 流式：正文边生成边发 draft。滤掉 draft 之后仍是原来的四步，且 draft 必在 report 之前
+    assert [k for k in kinds if k != "draft"] == ["gathering", "sources", "writing", "report"]
+    assert kinds.index("draft") < kinds.index("report")
+    draft = dict(events)["draft"]
+    assert draft["title"] == "R" and draft["sections"][0]["heading"] == "H"
+    by_event = dict(events)
+    sources = by_event["sources"]
     assert len(sources["sources"]) == 2 and sources["kb"] == 1
     assert set(sources["sources"][0]) == {"n", "kind", "title", "ref"}  # 不带正文
-    report = events[3][1]
+    report = by_event["report"]
     assert report["title"] == "R"
     assert report["used"] == [1]
     assert report["model_id"] == "test-model"

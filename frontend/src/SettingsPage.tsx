@@ -1,6 +1,9 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import Layout from './Layout'
-import { api, type AgentPreset, type ArenaResult, type BackupList, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
+import { api, type AgentPreset, type ArenaResult, type BackupList, type EngineEvalLatest, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
+
+/** 四个成文引擎的展示顺序（与 core/engine_eval.ENGINES 一致）。 */
+const ENGINE_ORDER = ['research', 'compose', 'recap', 'decide'] as const
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -930,6 +933,44 @@ export default function SettingsPage() {
     if (section !== 'agents' || quality) return
     api.qualitySummary().then(setQuality).catch(() => {})
   }, [section, quality])
+
+  // 自动标尺：四个引擎的 golden set 得分。它和上面的满意率共用同一个 prompt_sha，
+  // 所以能回答「这版提示词是真变好了，还是只是我手滑点了赞」。
+  const [engineEval, setEngineEval] = useState<EngineEvalLatest | null>(null)
+  const [engineEvalBusy, setEngineEvalBusy] = useState(false)
+  const [engineEvalMsg, setEngineEvalMsg] = useState('')
+
+  useEffect(() => {
+    if (section !== 'agents' || engineEval) return
+    api.engineEvalLatest().then(setEngineEval).catch(() => {})
+  }, [section, engineEval])
+
+  async function runEngineEval() {
+    if (engineEvalBusy) return
+    setEngineEvalBusy(true)
+    const done: string[] = []
+    let judged = true
+    try {
+      // 按引擎逐个跑：单个引擎几十秒到一两分钟，一次请求跑完四个既顶着超时上限，
+      // 中间又没有任何进度可看。
+      for (let i = 0; i < ENGINE_ORDER.length; i++) {
+        const e = ENGINE_ORDER[i]
+        setEngineEvalMsg(`正在跑 ${e}…（${i + 1}/${ENGINE_ORDER.length}）`)
+        const r = await api.engineEvalRun(e)
+        judged = judged && r.judged
+        const run = r.runs[0]
+        done.push(run ? `${e} 结构 ${Math.round(run.structural * 100)}%` : `${e} 跳过`)
+      }
+      setEngineEvalMsg(
+        `跑完：${done.join(' · ')}${judged ? '' : '（没有可用模型，只跑了结构判分）'}`
+      )
+      setEngineEval(await api.engineEvalLatest())
+    } catch (e) {
+      setEngineEvalMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setEngineEvalBusy(false)
+    }
+  }
 
   async function runArena() {
     if (arenaBusy || !arenaPrompt.trim()) return
@@ -2434,6 +2475,78 @@ export default function SettingsPage() {
             )}
           </>
         )}
+
+        {/* 自动标尺：同一个 prompt_sha 上，除了人点的满意率，还有一份客观分。
+            结构判分是确定性的（不花模型钱，秒级），接地判分要模型。 */}
+        <div className="mt-1 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+              自动标尺（golden set）
+            </p>
+            <button
+              onClick={() => void runEngineEval()}
+              disabled={engineEvalBusy}
+              title="在真模型上跑一遍四个引擎的 golden set：结构判分 + 接地判分"
+              className="rounded-full border border-neutral-200 px-2.5 py-0.5 text-[11px] text-neutral-600 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500 dark:hover:text-violet-300"
+            >
+              {engineEvalBusy ? '跑着…' : '跑一遍'}
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-neutral-400">
+            四个引擎共用一条脊梁，提示词一改同时打穿四个——这是接住回归的那张网。结构判分不花模型钱。
+          </p>
+          {engineEvalMsg ? <p className="mt-1 text-[11px] text-neutral-500">{engineEvalMsg}</p> : null}
+          {engineEval ? (
+            <table className="mt-2 w-full text-left text-xs">
+              <thead className="text-neutral-400">
+                <tr>
+                  <th className="py-1 pr-3 font-normal">引擎</th>
+                  <th className="py-1 pr-3 font-normal">用例</th>
+                  <th className="py-1 pr-3 font-normal">结构</th>
+                  <th className="py-1 pr-3 font-normal">接地</th>
+                  <th className="py-1 font-normal">提示词</th>
+                </tr>
+              </thead>
+              <tbody className="text-neutral-600 dark:text-neutral-300">
+                {ENGINE_ORDER.map((e) => {
+                  const r = engineEval.by_engine[e]
+                  return (
+                    <tr key={e} className="border-t border-neutral-100 dark:border-neutral-800">
+                      <td className="py-1 pr-3">{e}</td>
+                      <td className="py-1 pr-3 text-neutral-400">{engineEval.coverage[e] ?? 0}</td>
+                      <td
+                        className={`py-1 pr-3 ${
+                          !r ? 'text-neutral-400' : r.structural >= 1 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+                        }`}
+                      >
+                        {r ? `${Math.round(r.structural * 100)}%` : '未跑'}
+                      </td>
+                      <td
+                        className={`py-1 pr-3 ${
+                          r?.grounded == null ? 'text-neutral-400' : r.grounded >= 4 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+                        }`}
+                      >
+                        {r?.grounded == null ? '—' : `${r.grounded.toFixed(1)}/5`}
+                      </td>
+                      <td className="py-1 font-mono text-[10px] text-neutral-400">
+                        {r?.prompt_sha || '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          ) : null}
+          {engineEval?.warnings?.length ? (
+            <ul className="mt-1.5 space-y-0.5">
+              {engineEval.warnings.map((w, i) => (
+                <li key={i} className="text-[11px] text-amber-600 dark:text-amber-400">
+                  {w}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       </section>
 
       {tutorProfile && (tutorProfile.known.length > 0 || tutorProfile.half.length > 0 || tutorProfile.preferences.length > 0) ? (

@@ -7,6 +7,10 @@
 从 `research.py` 机械搬移而来，行为逐字节不变：`test_research.py` 的 20 例是这次
 搬移的安全网。唯一新增的是三个缝：`synthesize` 的 `system_prompt` / `resolve_fn`
 入参与 `save` 的 `dest_dir`——正是「两种体裁共用同一套形状」所必需的那点参数化。
+
+成文有两条入口：`synthesize`（一次拿全，含原生结构化）与 `synthesize_streaming`
+（**流式优先**，边收边发半截报告给前端；解析不了才退回前者）。报告是整条链里最长
+的一段生成，四个引擎共用这条脊梁，所以这一处改动四个都受益。
 """
 
 import asyncio
@@ -22,6 +26,9 @@ from pydantic import BaseModel, Field, field_validator
 from app.config import VAULT_DIR
 
 log = logging.getLogger(__name__)
+
+_PARTIAL_EVERY = 24  # 每攒够这么多字符才重解一次半截 JSON（整体重解是 O(n)，别每个 chunk 都来）
+_DRAIN_TICK = 0.1  # 等下一个 draft 的轮询间隔；生成结束到最后一帧之间最多晚这么久
 
 # 来源种类 → 中文标签（材料块与文末「来源」清单共用）
 _KIND_LABELS = {
@@ -240,28 +247,136 @@ async def synthesize(
     if resolved is None:
         return None
     info, model = resolved
+    obj = await _extract(info, model, _messages(topic, sources, system_prompt), stream_fn, native_fn)
+    return _finalize(obj, sources) if obj is not None else None
 
-    from app.core.structured import extract_json
 
-    obj, meta = await extract_json(
-        info,
-        model,
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"话题：{topic}\n\n材料：\n{format_sources(sources)}"},
-        ],
-        Report,
-        stream_fn=stream_fn,
-        native_fn=native_fn,
-    )
-    if obj is None:
-        log.info("report synthesis unavailable: %s", meta.error)
-        return None
+def _messages(topic: str, sources: list[dict], system_prompt: str) -> list[dict]:
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"话题：{topic}\n\n材料：\n{format_sources(sources)}"},
+    ]
 
+
+def _finalize(obj: Report, sources: list[dict]) -> Report | None:
+    """引用编号过滤 + 空段裁剪——流式与非流式两个入口共用，结果必须一致。"""
     valid = {s["n"] for s in sources}
     report = clean_report(obj)
     report.used = sorted({int(u) for u in report.used if isinstance(u, int) and u in valid})
     return report if report.sections else None
+
+
+async def _extract(info, model, messages, stream_fn, native_fn) -> Report | None:
+    """非流式那一路（含 L1 原生结构化）——也是流式失败后的兜底。"""
+    from app.core.structured import extract_json
+
+    obj, meta = await extract_json(
+        info, model, messages, Report, stream_fn=stream_fn, native_fn=native_fn
+    )
+    if obj is None:
+        log.info("report synthesis unavailable: %s", meta.error)
+    return obj
+
+
+def partial_sections(obj) -> dict:
+    """模型的半截对象 → 发前端的 draft 形状（只留 title 与 sections）。Pure."""
+    if not isinstance(obj, dict):
+        return {"title": "", "sections": []}
+    raw = obj.get("sections")
+    sections = []
+    for s in raw if isinstance(raw, list) else []:
+        if isinstance(s, dict):
+            sections.append(
+                {"heading": str(s.get("heading") or ""), "body": str(s.get("body") or "")}
+            )
+    return {"title": str(obj.get("title") or ""), "sections": sections}
+
+
+async def _stream_report(info, model, messages, stream_fn, on_partial) -> Report | None:
+    """流式跑一遍：边收边把**半截**报告交出去，收完再按完整解析。
+
+    解析不了就返回 None——调用方会退回 `_extract`（原生结构化那条路），
+    所以流式只是让画面早一点动起来，**不承担正确性**。
+    """
+    from app.core.llm import stream_chat
+    from app.core.structured import clean_json, partial_json
+
+    _stream = stream_fn or stream_chat
+    buf: list[str] = []
+    sent = 0
+    try:
+        async for chunk in _stream(info, model, messages):
+            buf.append(chunk)
+            text = "".join(buf)
+            if len(text) - sent < _PARTIAL_EVERY:
+                continue  # 每来一点点就整体重解一次太浪费；攒够一段再解
+            sent = len(text)
+            part = partial_json(text)
+            if part is not None:
+                draft = partial_sections(part)
+                # 还没出第一节就别发：只有一个半截标题的帧渲染出来是「闪一下」，没有信息量
+                if draft["sections"]:
+                    on_partial(draft)
+    except Exception:  # noqa: BLE001 - 上游故障 → 交给调用方退回非流式
+        log.warning("report stream pass failed, falling back", exc_info=True)
+        return None
+
+    blob = clean_json("".join(buf))
+    if not blob:
+        return None
+    try:
+        return Report.model_validate_json(blob)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def synthesize_streaming(
+    topic: str,
+    sources: list[dict],
+    system_prompt: str,
+    model_id: str = "",
+    *,
+    stream_fn=None,
+    native_fn=None,
+    resolve_fn=None,
+):
+    """`synthesize` 的流式版：先 yield ("draft", {title, sections}) 若干次，最后 ("done", Report|None)。
+
+    为什么要先流一遍：报告是整条链里最长的一段生成，此前「转圈 → 整篇蹦出来」，
+    而这四个引擎共用这一条脊梁。**流式那遍不承担正确性**——它解析不了、或上游中途
+    抛错，就原样退回 `synthesize` 的老路（含原生结构化），代价只是失败时多一次调用。
+    """
+    if not sources:
+        yield "done", None
+        return
+    resolve_fn = resolve_fn or resolve
+    resolved = await resolve_fn(model_id)
+    if resolved is None:
+        yield "done", None
+        return
+    info, model = resolved
+    messages = _messages(topic, sources, system_prompt)
+
+    # 回调不能 yield，所以走队列：生成在 task 里跑，draft 从这里漏出去。
+    queue: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(_stream_report(info, model, messages, stream_fn, queue.put_nowait))
+    try:
+        while not task.done():
+            try:
+                yield "draft", await asyncio.wait_for(queue.get(), timeout=_DRAIN_TICK)
+            except asyncio.TimeoutError:
+                continue
+        while not queue.empty():
+            yield "draft", queue.get_nowait()
+        obj = task.result()
+    finally:
+        # 前端断开时生成器被提前关掉，别把还在跑的模型调用漏在后面
+        if not task.done():
+            task.cancel()
+
+    if obj is None:
+        obj = await _extract(info, model, messages, stream_fn, native_fn)
+    yield "done", (_finalize(obj, sources) if obj is not None else None)
 
 
 async def save(

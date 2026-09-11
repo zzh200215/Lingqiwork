@@ -117,6 +117,7 @@ describe('streamDecide', () => {
       'event: gathering\ndata: {}\n\n' +
       'event: sources\ndata: {"sources":[{"n":1,"kind":"kb","title":"A","ref":"notes/a.md"}],"kb":1,"web":0}\n\n' +
       'event: writing\ndata: {}\n\n' +
+      'event: draft\ndata: {"title":"T","sections":[{"heading":"H","body":"B"}]}\n\n' +
       'event: report\ndata: {"title":"T","sections":[{"heading":"H","body":"B [1]"}],"used":[1],"sources":[],"model_id":"m","frame":{"decision":"选哪个向量库","options":["Chroma"],"criteria":[]}}\n\n'
     const fetchMock = vi.fn(async () => resOf([frames]))
     vi.stubGlobal('fetch', fetchMock)
@@ -130,7 +131,12 @@ describe('streamDecide', () => {
           body: JSON.stringify({ topic: '本地向量库怎么选' }),
         })
       )
-      expect(stages.map(([ev]) => ev)).toEqual(['framing', 'frame', 'gathering', 'sources', 'writing'])
+      expect(stages.map(([ev]) => ev)).toEqual([
+        'framing', 'frame', 'gathering', 'sources', 'writing', 'draft',
+      ])
+      // draft 转发给页面 —— 正文边生成边渲染靠的就是这一帧
+      const draft = stages.find(([ev]) => ev === 'draft')?.[1]
+      expect((draft?.sections as { heading: string }[])[0].heading).toBe('H')
       // frame 事件的内容真的到了页面手上——题面读对了没有，只有人看得出来
       const frame = stages.find(([ev]) => ev === 'frame')?.[1]
       expect(frame?.decision).toBe('选哪个向量库')

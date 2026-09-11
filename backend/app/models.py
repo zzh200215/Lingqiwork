@@ -501,6 +501,31 @@ class ArtifactFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class EngineEvalRun(Base):
+    """某个成文引擎跑一遍 golden set 的自动得分。
+
+    `core/engine_eval.py` 的落库形态：**结构判分**（确定性：小节齐/序、引用不越界、
+    复盘不得出现被禁的话）与**接地判分**（LLM 0-5：有没有编造）各一个聚合分。
+
+    `prompt_sha` 与 `ArtifactFeedback` **同一个算法**——这是这张表存在的理由：自动分
+    和人点出来的满意率落在同一把 key 上，才回答得了「这版提示词是真变好了，还是只是
+    我手滑点了赞」。
+    """
+
+    __tablename__ = "engine_eval_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    engine: Mapped[str] = mapped_column(String(20), index=True)  # research | compose | recap | decide
+    prompt_sha: Mapped[str] = mapped_column(String(12), index=True)
+    model_id: Mapped[str] = mapped_column(String(120), default="")  # "" = 只跑了结构判分
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    structural: Mapped[float] = mapped_column(Float, default=0.0)  # 无 finding 的用例占比
+    grounded: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-5 均值
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐用例的 findings / 分数 / 理由
+
+
 # The uniqueness is load-bearing, not decoration: it is what makes a double tick
 # idempotent (the router upserts on it). Expressed as a unique Index rather than a
 # UniqueConstraint because a bare UniqueConstraint() at module level attaches to no
@@ -510,3 +535,4 @@ Index("ix_job_runs_recent", JobRun.job_id, JobRun.id)
 Index("ix_usage_page_day", UsageVisit.page, UsageVisit.day, unique=True)
 Index("ix_tutor_turns_session", TutorTurn.session_id, TutorTurn.id)
 Index("ix_feedback_group", ArtifactFeedback.kind, ArtifactFeedback.prompt_sha, ArtifactFeedback.model_id)
+Index("ix_engine_eval_group", EngineEvalRun.engine, EngineEvalRun.prompt_sha, EngineEvalRun.model_id)
