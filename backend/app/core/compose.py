@@ -12,7 +12,6 @@
 护栏（PLAN.md 第 2 节）：拉取式——点它才跑；没有定时、没有队列、没有设置开关。
 """
 
-import asyncio
 import logging
 
 from app.config import VAULT_DIR
@@ -67,9 +66,10 @@ __all__ = [
 
 
 async def _default_kb(query: str, top_k: int) -> list[dict]:
-    from app.core import indexer
+    """引擎的「对照你自己的材料」：把话题多问几遍再检索（PLAN §10.2「检索」）。"""
+    from app.core import retriever
 
-    return await asyncio.to_thread(indexer.search_auto, query, top_k)
+    return await retriever.deep_search(query, top_k)
 
 
 async def _default_memory(query: str) -> str:

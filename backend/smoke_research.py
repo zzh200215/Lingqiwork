@@ -42,9 +42,14 @@ async def main() -> int:
             print(f"  检索式：{data['queries']}")
         elif ev == "gathering":
             print("  检索知识库与网络…")
+        elif ev == "round":
+            miss = "、".join(data.get("missing") or []) or "（没说清）"
+            print(f"  第 {data['round']} 轮：还缺 {miss} → 补搜 {data['queries']}")
         elif ev == "sources":
             sources = data["sources"]
-            print(f"  取到 {len(sources)} 条材料（你自己的材料 {data['kb']} 条）：")
+            added = data.get("added")
+            tail = f"，本轮又添 {added} 条" if added is not None else ""
+            print(f"  取到 {len(sources)} 条材料（你自己的材料 {data['kb']} 条）{tail}：")
             for s in sources:
                 print(f"    [{s['n']}] {_icon(s['kind'])} {s['title']} — {s['ref']}")
         elif ev == "writing":

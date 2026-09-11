@@ -298,6 +298,7 @@ def test_run_happy_path(wired, monkeypatch):
     stream = _llm_seq(
         [
             '{"queries":["q1","q2"]}',
+            '{"enough": true, "queries": []}',  # 缺口判断：够了，不再搜（不产生 round 事件）
             '{"title":"R","sections":[{"heading":"H","body":"B [1]"}],"used":[1]}',
         ]
     )
@@ -322,3 +323,169 @@ def test_run_happy_path(wired, monkeypatch):
     from app.core import report as report_mod
 
     assert report["prompt_sha"] == report_mod.prompt_sha(research._SYNTH_PROMPT)
+
+
+# ---------- 多轮深研究（PLAN §10.3 D）：发现缺口 → 再搜 → 信息饱和 ----------
+
+_REPORT_JSON = '{"title":"R","sections":[{"heading":"H","body":"B [1]"}],"used":[1]}'
+
+
+async def _kb_one(query, top_k):
+    return [{"source": "notes/a.md", "title": "A", "text": "内容A"}]
+
+
+async def _fetch_ok(url):
+    return "正文"
+
+
+def test_merge_sources_dedupes_by_ref_and_renumbers():
+    existing = [{"n": 1, "kind": "kb", "title": "A", "ref": "notes/a.md", "text": "x"}]
+    more = [
+        {"n": 1, "kind": "web", "title": "同一篇", "ref": "notes/a.md", "text": "重复"},
+        {"n": 2, "kind": "web", "title": "新的", "ref": "https://x/1", "text": "y"},
+    ]
+    merged, added = research._merge_sources(existing, more)
+    assert added == 1
+    assert [s["ref"] for s in merged] == ["notes/a.md", "https://x/1"]
+    assert [s["n"] for s in merged] == [1, 2]  # 合并后重新编号
+
+
+def test_merge_sources_is_zero_when_nothing_is_new():
+    existing = [{"n": 1, "kind": "web", "title": "A", "ref": "https://x/1", "text": "x"}]
+    merged, added = research._merge_sources(existing, [dict(existing[0])])
+    assert added == 0 and merged is existing
+
+
+def test_merge_sources_counts_zero_when_the_budget_eats_the_new_ones(monkeypatch):
+    """预算把新来的当场吃掉 = 这一轮等于没带回东西。必须算 0——算 1 的话 loop 会一直
+    以为自己在进展，把轮数烧完为止。"""
+    monkeypatch.setattr(research, "TOTAL_CHARS", 60)
+    existing = [{"n": 1, "kind": "kb", "title": "A", "ref": "notes/a.md", "text": "x" * 50}]
+    more = [{"n": 1, "kind": "web", "title": "新", "ref": "https://x/1", "text": "y" * 50}]
+    _, added = research._merge_sources(existing, more)
+    assert added == 0
+
+
+def test_assess_gaps_reads_missing_queries_and_enough(wired):
+    payload = '{"missing":["缺生产案例"],"queries":["q1","q2"],"enough":false}'
+    gaps = asyncio.run(
+        research.assess_gaps("话题", [{"n": 1, "kind": "web", "title": "T", "ref": "u", "text": "t"}],
+                             stream_fn=_llm_seq([payload]))
+    )
+    assert gaps is not None
+    assert gaps.missing == ["缺生产案例"] and gaps.queries == ["q1", "q2"] and gaps.enough is False
+
+
+def test_assess_gaps_caps_queries(wired):
+    gaps = asyncio.run(
+        research.assess_gaps("话题", [{"n": 1, "kind": "web", "title": "T", "ref": "u", "text": "t"}],
+                             stream_fn=_llm_seq(['{"queries":["1","2","3","4","5"]}']))
+    )
+    assert len(gaps.queries) == research.GAP_MAX_QUERIES
+
+
+def test_assess_gaps_is_none_without_a_model(monkeypatch):
+    async def no_resolve(model_id=""):
+        return None
+
+    monkeypatch.setattr(research, "_resolve", no_resolve)
+    srcs = [{"n": 1, "kind": "web", "title": "T", "ref": "u", "text": "t"}]
+    assert asyncio.run(research.assess_gaps("话题", srcs, stream_fn=_llm_seq(["{}"]))) is None
+
+
+def test_assess_gaps_is_none_without_material(wired):
+    assert asyncio.run(research.assess_gaps("话题", [], stream_fn=_llm_seq(["{}"]))) is None
+
+
+def test_gap_digest_keeps_titles_and_trims_bodies():
+    blob = research._gap_digest(
+        [{"n": 1, "kind": "web", "title": "标题", "ref": "https://x/1", "text": "z" * 800}]
+    )
+    assert "[1]" in blob and "标题" in blob and "https://x/1" in blob
+    assert len(blob) < 400  # 只留开头一小段，不是把整篇正文再喂一遍
+
+
+def test_run_does_a_second_round_and_reports_it(wired, monkeypatch):
+    monkeypatch.setattr("app.core.providers.default_model_id", lambda: "test-model")
+    seen: list[str] = []
+
+    async def search(q):
+        seen.append(q)
+        return [{"title": "第一轮", "url": "https://x/1"}] if q in ("q1", "q2") \
+            else [{"title": "第二轮", "url": "https://x/2"}]
+
+    stream = _llm_seq(
+        [
+            '{"queries":["q1","q2"]}',
+            '{"missing":["缺案例"],"queries":["gap1"]}',  # 第一轮之后：还缺
+            '{"enough":true}',  # 第二轮之后：够了
+            _REPORT_JSON,
+        ]
+    )
+    events = _run("话题", kb_fn=_kb_one, search_fn=search, fetch_fn=_fetch_ok, stream_fn=stream)
+
+    kinds = [e for e, _ in events]
+    assert kinds.index("round") > kinds.index("sources")  # 先有材料，才谈得上缺口
+    assert kinds.index("round") < kinds.index("writing")
+
+    assert [d for e, d in events if e == "round"][0] == {
+        "round": 2, "missing": ["缺案例"], "queries": ["gap1"],
+    }
+    assert "gap1" in seen  # 补搜真的按缺口检索式打出去了
+
+    second = [d for e, d in events if e == "sources"][-1]
+    assert second["round"] == 2 and second["added"] == 1
+    assert len(second["sources"]) == 3  # 自己的材料 1 + 网页 2
+    assert dict(events)["report"]["rounds"] == 2
+
+
+def test_run_stops_when_a_round_brings_nothing_new(wired, monkeypatch):
+    """信息饱和：补搜原样返回同一批 URL → 停，不再问第三轮。"""
+    monkeypatch.setattr("app.core.providers.default_model_id", lambda: "test-model")
+
+    async def search(q):
+        return [{"title": "同一条", "url": "https://x/1"}]
+
+    stream = _llm_seq(['{"queries":["q1"]}', '{"queries":["gap1"]}', _REPORT_JSON])
+    events = _run("话题", kb_fn=_no_kb, search_fn=search, fetch_fn=_fetch_ok, stream_fn=stream)
+
+    assert len([e for e, _ in events if e == "round"]) == 1  # 只补了一轮就停
+    assert dict(events)["report"]["rounds"] == 2
+
+
+def test_run_stops_when_the_gap_assessment_fails(wired, monkeypatch):
+    """判断没跑成 → 停，不瞎继续搜（没有判断还多搜一轮就是拿钱换噪音）。"""
+    monkeypatch.setattr("app.core.providers.default_model_id", lambda: "test-model")
+
+    async def no_gaps(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(research, "assess_gaps", no_gaps)
+
+    async def search(q):
+        return [{"title": "T", "url": "https://x/1"}]
+
+    events = _run("话题", kb_fn=_no_kb, search_fn=search, fetch_fn=_fetch_ok,
+                  stream_fn=_llm_seq(['{"queries":["q1"]}', _REPORT_JSON]))
+    assert "round" not in [e for e, _ in events]
+    assert dict(events)["report"]["rounds"] == 1
+
+
+def test_run_never_exceeds_max_rounds(wired, monkeypatch):
+    """缺口永远说有、每轮都能带回新的 → 也必须在上限处停住。"""
+    monkeypatch.setattr("app.core.providers.default_model_id", lambda: "test-model")
+    n = {"i": 0}
+
+    async def search(q):
+        n["i"] += 1
+        return [{"title": f"T{n['i']}", "url": f"https://x/{n['i']}"}]  # 每轮都是新的
+
+    async def gaps_forever(*_a, **_k):
+        return research.GapPlan(queries=["more"])
+
+    monkeypatch.setattr(research, "assess_gaps", gaps_forever)
+    events = _run("话题", kb_fn=_no_kb, search_fn=search, fetch_fn=_fetch_ok,
+                  stream_fn=_llm_seq(['{"queries":["q1"]}', _REPORT_JSON]))
+
+    assert len([e for e, _ in events if e == "round"]) == research.MAX_ROUNDS - 1
+    assert dict(events)["report"]["rounds"] == research.MAX_ROUNDS

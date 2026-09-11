@@ -392,6 +392,8 @@ export interface ResearchReport {
   model_id?: string
   /** 这版成文提示词的指纹——质量闭环按它把评价分版本统计 */
   prompt_sha?: string
+  /** 搜了几轮（含第一轮）。多轮 = 发现缺口后又补搜过 */
+  rounds?: number
 }
 
 export interface ResearchDone {

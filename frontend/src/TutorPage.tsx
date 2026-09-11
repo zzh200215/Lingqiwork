@@ -272,9 +272,19 @@ export default function TutorPage() {
           if (event === 'plan')
             setRsMsg(`已规划 ${(data.queries as string[] | undefined)?.length ?? 0} 个检索式，检索中…`)
           else if (event === 'gathering') setRsMsg('检索知识库与网络…')
-          else if (event === 'sources')
-            setRsMsg(`取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，成文中…`)
-          else if (event === 'writing') setRsMsg('成文中…')
+          else if (event === 'sources') {
+            const n = (data.sources as unknown[] | undefined)?.length ?? 0
+            const added = data.added as number | undefined
+            // 第一轮没有 added；补搜那几轮带 added，说清「这一轮又添了几条」
+            setRsMsg(
+              added === undefined
+                ? `取到 ${n} 条材料…`
+                : `第 ${data.round as number} 轮又添 ${added} 条（共 ${n} 条）…`
+            )
+          } else if (event === 'round') {
+            const missing = ((data.missing as string[] | undefined) ?? []).join('、')
+            setRsMsg(`第 ${data.round as number} 轮：还缺${missing || '一些面'}，补搜中…`)
+          } else if (event === 'writing') setRsMsg('成文中…')
           else if (event === 'draft') {
             // 正文开始出来了：把半截渲染上去，进度行让位
             setRsDraft(data as unknown as ReportDraft)
@@ -825,7 +835,7 @@ export default function TutorPage() {
                     <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-500/30 dark:bg-sky-500/10">
                       <div className="flex items-center justify-between gap-2 pb-1">
                         <p className="text-[11px] font-medium uppercase tracking-wider text-sky-700 dark:text-sky-300">
-                          🔍 研究
+                          🔍 研究{rs && rs.rounds && rs.rounds > 1 ? ` · 搜了 ${rs.rounds} 轮` : ''}
                         </p>
                         {rs ? (
                           <button

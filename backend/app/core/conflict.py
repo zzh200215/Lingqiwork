@@ -22,7 +22,6 @@
 形状来自共用脊梁 `core/report.py`（第五个消费者）。
 """
 
-import asyncio
 import logging
 import re
 
@@ -285,9 +284,10 @@ async def frame_confrontation(
 
 
 async def _default_kb(query: str, top_k: int) -> list[dict]:
-    from app.core import indexer
+    """引擎的「对照你自己的材料」：把话题多问几遍再检索（PLAN §10.2「检索」）。"""
+    from app.core import retriever
 
-    return await asyncio.to_thread(indexer.search_auto, query, top_k)
+    return await retriever.deep_search(query, top_k)
 
 
 async def _default_memory(query: str) -> str:
