@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -23,7 +24,20 @@ def _cleanup() -> None:
         asyncio.run(engine.dispose())
     except Exception:  # noqa: BLE001
         pass
-    shutil.rmtree(_TMP, ignore_errors=True)
+    try:
+        from app.core import indexer
+
+        if indexer._client is not None:
+            indexer._client.close()
+            indexer._client = None
+    except Exception:  # noqa: BLE001
+        pass
+    # chroma 的 SQLite 句柄在 Windows 上会让 rmtree 静默失败，留下 _TMP/chroma。
+    for _ in range(3):
+        shutil.rmtree(_TMP, ignore_errors=True)
+        if not _TMP.exists():
+            break
+        time.sleep(0.3)
 
 
 atexit.register(_cleanup)
