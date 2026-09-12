@@ -312,7 +312,7 @@ export interface TutorSayDone {
   ok: boolean
   error?: string
   model_id?: string
-  /** whether 「你上次卡过」 fired in this session — 第 4 节's second number */
+  /** whether 「你上次卡过」 fired in this session — one of the two numbers */
   recalled?: boolean
 }
 

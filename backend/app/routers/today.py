@@ -32,9 +32,19 @@ async def today_next():
         log.exception("today_next fact assembly failed")
         return today_core.next_suggestion({})
 
+    # 「一件事」那一档（§4-17）：只读一张表、不碰模型，所以模型挂了它也照样出得来
+    threads: list[dict] = []
+    try:
+        from app.core import threads as threads_core
+
+        threads = await threads_core.recent()
+    except Exception:  # noqa: BLE001 - 缺这一档不该拖垮整条建议
+        log.warning("today_next thread lookup failed", exc_info=True)
+
     return today_core.next_suggestion(
         {
             "default_model_broken": bool(check.get("default_model_broken")),
             "jobs_failing": len(check.get("jobs_failing") or []),
+            "threads": threads,
         }
     )

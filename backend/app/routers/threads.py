@@ -30,6 +30,11 @@ class ItemRef(BaseModel):
     ref: str
 
 
+class DeliverIn(BaseModel):
+    genre: str = "briefing"
+    audience: str = "self"
+
+
 @router.get("")
 async def list_threads(include_archived: bool = False):
     return await core.list_threads(include_archived)
@@ -96,3 +101,14 @@ async def attach(thread_id: int, body: ItemRef):
 @router.delete("/{thread_id}/items")
 async def detach(thread_id: int, kind: str, ref: str):
     return await core.detach(thread_id, kind, ref)
+
+
+@router.post("/{thread_id}/deliver")
+async def deliver_into(thread_id: int, body: DeliverIn):
+    """就这件事写一份交付（§4-16）。**这一路的模型用量记在这件事头上。**"""
+    try:
+        return await core.deliver_into(thread_id, body.genre, body.audience)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e

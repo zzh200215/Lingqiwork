@@ -570,7 +570,7 @@ class DecisionLog(Base):
     记得蒙对的那几次。把信心在**当时**钉下来，才谈得上校准——「你当时说七成把握的那类事，
     实际应验了几成」。这是这张表存在的唯一理由。
 
-    **回看是拉取式（第 2 节）**：没有到期时间、没有队列、没有提醒。`outcome` 空着就是
+    **回看是拉取式**：没有到期时间、没有队列、没有提醒。`outcome` 空着就是
     还没回看；没有任何东西会催它。`outcome` ∈ "" | hit | miss | unclear。
     """
 
@@ -609,6 +609,11 @@ class ModelUsage(Base):
     tokens_in: Mapped[int] = mapped_column(Integer, default=0)
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
     calls: Mapped[int] = mapped_column(Integer, default=0)
+    # 这笔钱算在哪件事头上（§4-16）。NULL = 不属于任何一件事——**大多数调用都是这样**，
+    # 别为了填满它去猜：只有「就这件事做的那次」才记。
+    # 不加索引：这张表很小，而且**迁移列建不了索引**（`create_all` 会跳过已存在的表，
+    # 老库靠 `_migrate` 补列），带了 `index=True` 只会让新库和老库长得不一样。
+    thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Thread(Base):

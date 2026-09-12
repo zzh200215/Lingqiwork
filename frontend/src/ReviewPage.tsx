@@ -448,14 +448,22 @@ export default function ReviewPage() {
                     : 'border-neutral-200/80 text-neutral-500 dark:border-neutral-800/80 dark:text-neutral-400'
                 }`}
               >
-                {/* 这一条**只报障**：模型挂了 / 作业连着失败。`today.py` 里待办那几档
-                    按封存删掉了，所以只剩下「去设置」这一个动作——不要再长出别的按钮。 */}
+                {/* 两档：报障（模型挂了 / 作业连着失败 → 去设置）与「最近那件事」
+                    （→ 去那件事接着看）。**都不是待办**——没有计数、没有到期、没有催。 */}
                 <span className="shrink-0">👋 今天</span>
                 <span>{next.text}</span>
-                {next.action.kind === 'settings' && (
+                {next.action.kind !== 'none' && (
                   <Link
-                    to="/settings"
-                    className="ml-auto shrink-0 rounded-lg border border-rose-300 px-2.5 py-1 font-medium text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                    to={
+                      next.action.kind === 'thread'
+                        ? `/threads?thread=${next.action.thread_id}`
+                        : '/settings'
+                    }
+                    className={`ml-auto shrink-0 rounded-lg border px-2.5 py-1 font-medium transition-colors ${
+                      next.tone === 'bad'
+                        ? 'border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10'
+                        : 'border-neutral-300 text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800'
+                    }`}
                   >
                     {next.action.label} →
                   </Link>

@@ -815,7 +815,8 @@ export interface ArenaResult {
 export interface TodayNext {
   text: string
   tone: 'bad' | 'idle'
-  action: { kind: 'settings' | 'none'; label: string }
+  /** thread = 「最近动过的那件事」——点进去是接着看，**不是待办** */
+  action: { kind: 'settings' | 'thread' | 'none'; label: string; thread_id?: number }
 }
 
 /** 一条已生成的产出。`kind` 是哪个引擎写的，`path` 是 vault 相对路径（可直接交给
@@ -894,11 +895,21 @@ export interface ThreadRow {
   total: number
 }
 
+/** 这件事头上记着的账（§4-16）。`by_model` 同时回答了"用了哪些模型"。 */
+export interface ThreadCost {
+  tokens_in: number
+  tokens_out: number
+  total: number
+  calls: number
+  by_model: Record<string, { in: number; out: number; calls: number }>
+}
+
 export interface ThreadDetail extends ThreadRow {
   items: ThreadItemRow[]
   by_step: Record<string, ThreadItemRow[]>
   steps: ThreadStep[]
   suggestions: ThreadCandidate[]
+  cost: ThreadCost
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1717,6 +1728,12 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     request<{ label: string; threads: ThreadRow[] }>(
       `/api/threads/suggest?kind=${kind}&ref=${encodeURIComponent(ref)}`
     ),
+  /** 就这件事写一份交付——**这一路的模型用量记在这件事头上**（§4-16） */
+  deliverIntoThread: (id: number, genre: string, audience: string) =>
+    request<{ filename: string; title: string; chunks: number }>(`/api/threads/${id}/deliver`, {
+      method: 'POST',
+      body: JSON.stringify({ genre, audience }),
+    }),
 
   // ---------- 工作：交付（把材料改写成能交出去的体裁） ----------
   /** 体裁 × 读者的定义（唯一真值在后端） */

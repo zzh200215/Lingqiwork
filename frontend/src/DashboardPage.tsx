@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import AttachToThread from './AttachToThread'
 import FeedbackButtons from './FeedbackButtons'
 import {
   api,
@@ -21,7 +22,7 @@ import { streamRecap, type RecapReport, type RecapSaved, type ReportDraft } from
 // 其余图表与列表保留。
 //
 // 第二张卡原来是「今天到期 N 张 · 连续 N 天 · 习惯 x/y」，封存后换掉了：
-// 到期数是那一版唯一还留在导航页上的债，第 2 节的判断标准就是它。换成「学」的记录 ——
+// 到期数是那一版唯一还留在导航页上的债，判断标准就是它。换成「学」的记录 ——
 // 已经发生过的事，没有到期，也没有未完成计数。
 //
 // 「📋 复盘一下」收的是：信念线 / 学习画像 / 卡点 / 日记 / 最近动过的
@@ -64,7 +65,7 @@ export default function DashboardPage() {
   const [beliefs, setBeliefs] = useState<BeliefThread[] | null>(null)
 
   // 决策日志 + 校准分：把「判断 + 依据 + 当时的把握」在**当时**钉下来，
-  // 几个月后回看才谈得上校准。拉取式——没有到期、没有队列、没有提醒（第 2 节）；
+  // 几个月后回看才谈得上校准。拉取式——没有到期、没有队列、没有提醒；
   // `outcome` 空着就是还没回看，没有任何东西会催它。
   const [decisions, setDecisions] = useState<DecisionLogView | null>(null)
   const [dText, setDText] = useState('')
@@ -540,7 +541,7 @@ export default function DashboardPage() {
         )}
 
         {/* 决策日志 + 校准分：判断要**在做出的时候**连把握一起钉下来，否则回头只会记得
-            蒙对的那几次。拉取式、无提醒——回看是你自己决定何时（第 2 节）。 */}
+            蒙对的那几次。拉取式、无提醒——回看是你自己决定何时。 */}
         {decisions && (
           <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
             <div className="flex items-center justify-between">
@@ -634,10 +635,11 @@ export default function DashboardPage() {
                         >
                           还说不好
                         </button>
+                        <AttachToThread kind="decision" ref={String(e.id)} className="ml-auto" />
                         <button
                           onClick={() => void dropDecision(e.id)}
                           title="删掉这条"
-                          className="ml-auto text-[10px] text-neutral-400 transition-colors hover:text-rose-600"
+                          className="text-[10px] text-neutral-400 transition-colors hover:text-rose-600"
                         >
                           删除
                         </button>

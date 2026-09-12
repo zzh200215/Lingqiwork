@@ -20,6 +20,7 @@ import {
   type WorkMeeting,
   type WorkOutput,
 } from './api'
+import AttachToThread from './AttachToThread'
 import FeedbackButtons from './FeedbackButtons'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
 import { useAside } from './split'
@@ -678,6 +679,11 @@ export default function WorkPage() {
                   </span>
                   <span className="block truncate text-[11px] text-neutral-400">{o.path}</span>
                 </button>
+                <AttachToThread
+                  kind="output"
+                  ref={o.path}
+                  className="hidden shrink-0 group-hover:block"
+                />
                 <span className="shrink-0 text-[11px] text-neutral-400">{o.date.slice(5)}</span>
                 <button
                   onClick={() => aside.toggle('/notes?path=' + encodeURIComponent(o.path))}

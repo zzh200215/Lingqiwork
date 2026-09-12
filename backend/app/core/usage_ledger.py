@@ -89,13 +89,18 @@ async def wrap_stream(kind: str, ref: str, agen):
 
 
 @asynccontextmanager
-async def span(kind: str, ref: str = ""):
+async def span(kind: str, ref: str = "", thread_id: int | None = None):
     """包住一次操作：退出时把 span 内累积的用量按模型落成行。
 
     嵌套时内层会盖住外层（`ContextVar.set` 的语义），外层退出时拿回自己的状态——单层足够
     用，嵌套只是不会崩。
+
+    `thread_id`（§4-16）：只有「就这件事做的那一次」才传。**默认不传是有意的**——绝大多数
+    调用不属于任何一件事，硬猜一个归属会让账本变成噪音。
     """
-    token = _span.set({"kind": kind, "ref": (ref or "")[:120], "by_model": {}})
+    token = _span.set(
+        {"kind": kind, "ref": (ref or "")[:120], "thread_id": thread_id, "by_model": {}}
+    )
     try:
         yield
     finally:
@@ -122,6 +127,7 @@ async def _write(state: dict) -> None:
                     tokens_in=m["in"],
                     tokens_out=m["out"],
                     calls=m["calls"],
+                    thread_id=state.get("thread_id"),
                 )
             )
         await db.commit()

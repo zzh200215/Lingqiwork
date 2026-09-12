@@ -105,6 +105,8 @@ async def _migrate() -> None:
         ("task_runs", "grounded", "ALTER TABLE task_runs ADD COLUMN grounded INTEGER"),
         ("task_runs", "judge_reason", "ALTER TABLE task_runs ADD COLUMN judge_reason TEXT DEFAULT ''"),
         ("task_runs", "run_dir", "ALTER TABLE task_runs ADD COLUMN run_dir VARCHAR(300) DEFAULT ''"),
+        # 用量按事记（§4-16）
+        ("model_usage", "thread_id", "ALTER TABLE model_usage ADD COLUMN thread_id INTEGER"),
         # tutor history compression (maple-os 参考项：长会话中段压缩)
         ("tutor_sessions", "summary", "ALTER TABLE tutor_sessions ADD COLUMN summary TEXT DEFAULT ''"),
         ("tutor_sessions", "summary_upto", "ALTER TABLE tutor_sessions ADD COLUMN summary_upto INTEGER DEFAULT 0"),

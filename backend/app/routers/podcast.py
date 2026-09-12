@@ -55,7 +55,7 @@ async def stuck_podcast(body: StuckPodcastIn | None = None):
     """卡点 → 双人讨论播客（对话播客 2.0）。
 
     源材料是教学会话记下的卡点摘要而非对话逐字稿：播客讨论「这个卡点怎么
-    想通」比逐字重放有用。拉取式——只有你点它才生成（第 2 节）。"""
+    想通」比逐字重放有用。拉取式——只有你点它才生成。"""
     from app.core import tutor as tutor_core
 
     blocks = await tutor_core.stuck_blocks(days=body.days if body else 90)

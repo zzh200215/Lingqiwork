@@ -7,7 +7,7 @@ arena 是同一段 prompt **并行**赛马（比谁答得好）；圆桌是**串
 圆桌的产出先是一份文字纪要，想听再做播客（复用 generate_from_blocks）。
 
 纪要按天落 vault/roundtable/，人在 Obsidian 里照常可翻——和语音日记同一个
-「vault 是正文真相源」的规矩（第 9 节）。
+「vault 是正文真相源」的规矩。
 """
 import asyncio
 import logging

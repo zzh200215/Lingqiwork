@@ -7,7 +7,7 @@ related topic gets those triples back. If that recall never fires or never
 helps, it gets cut, so it is kept in one module.
 
 RAG 取材 was deliberately absent in the first step and added
-afterwards as 第 7 节's first item (2026-09-06, gate lifted by the user): the
+afterwards (2026-09-06, gate lifted by the user): the
 teaching now draws on the user's own vault / clippings when they match, but
 stays silent when they don't. No tools, no scheduled jobs. Heavy imports stay
 inside functions, matching the other core modules.
@@ -62,7 +62,7 @@ ALIAS_CHARS_MIN = 4
 ALIAS_SEP = " | "
 MATERIAL_TOP_K = 3  # chunks pulled from the user's own KB per turn
 MATERIAL_CHUNK_CHARS = 800  # per chunk; the teaching voice is 3-5 sentences, not a report
-# 会话结束时「材料里还有」的检索宽度与条数。它不是推荐队列（第 2 节红线）：只在
+# 会话结束时「材料里还有」的检索宽度与条数。它不是推荐队列：只在
 # 你点完自评的那条总结里出现一次、最多 2 个文件、不落库、页面上没有它的常驻入口。
 NEARBY_TOP_K = 6  # 检索宽一点：按 source 去重后常常只剩两三个
 NEARBY_MAX = 2
@@ -278,7 +278,7 @@ async def recall_hits(topic: str, exclude_id: int | None = None) -> list[dict]:
         # 「怎么优化 SQLite 并发写入」对 concept+stuck 只有 0.577，会从 0.62 底下
         # 滑过去漏掉；带上 topic 后 0.722。只留 concept 反而最差。
         #
-        # 别名为什么每个各成一条向量（smoke_recall.py 第 1 节列了五种拼法的代价，
+        # 别名为什么每个各成一条向量（五种拼法的代价如下，
         # 这里只记结论。左右两列 = 该中的最低分 / 不该中的最高分）：
         #   并进 primary 一条         0.573 / 0.601  ← 被平均掉，仍有 1 条漏
         #   别名整行一条              0.573 / 0.601  ← 同一个平均化问题，见下
@@ -829,7 +829,7 @@ async def say(session_id: int, text: str):
     hits = await recall_hits(topic, exclude_id=session_id)
     first_recall = False
     if hits:
-        # Flagged on the row the first time it fires, so 第 5 节's "recall never
+        # Flagged on the row the first time it fires, so "recall never
         # triggers → cut it" is a query, not a hand count in LOG.md.
         async with SessionLocal() as db:
             row = await db.get(TutorSession, session_id)
@@ -1119,10 +1119,10 @@ async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str
 async def _nearby_material(concept: str, exclude: set[str] | None = None) -> list[dict]:
     """刚搞懂的概念 → 你的材料里还讲过这附近的东西（<=NEARBY_MAX 个文件）。
 
-    第 7 节「从你的材料里发现你可能想搞懂的东西」的护栏版：查询是**这个会话
+    「从你的材料里发现你可能想搞懂的东西」的护栏版：查询是**这个会话
     刚谈完的概念**（你在场的上下文里顺手看见），不是一份推送清单。所以它只在
     `end()` 的返回里出现一次——没有表、没有计数、没有角标，下一次会话开始它
-    就不在了。做之前回看过第 2 节。`exclude` 是本会话取材已经引用过的来源：
+    就不在了。`exclude` 是本会话取材已经引用过的来源：
     「还有」的字面意思就是别推荐你刚看过的。
     """
     try:
@@ -1149,7 +1149,7 @@ async def end(session_id: int, verdict: str) -> dict:
     concept (`material_nearby`).
 
     The verdict is the only manual input in the whole product, so it is written
-    first and unconditionally: with the model down, 第 4 节's count still works
+    first and unconditionally: with the model down, the session count still works
     and recall simply skips this row (`concept` stays ""). `useless` skips
     extraction — recall ignores those rows, so the call would buy nothing.
 
@@ -1200,12 +1200,12 @@ async def end(session_id: int, verdict: str) -> dict:
     }
 
 
-# ---------- history and the two numbers 第 4 节 asks for ----------
+# ---------- history and the two numbers ----------
 
 
 async def sessions(limit: int = 50) -> list[dict]:
     """Newest first, for the page's rail. History, not a queue — no due dates and
-    no unfinished count, per 第 2 节: anything that reads as debt is the old shape."""
+    no unfinished count: anything that reads as debt is the old shape."""
     from sqlalchemy import func, select
 
     from app.db import SessionLocal
@@ -1372,7 +1372,7 @@ async def starters() -> list[dict]:
 
     DeepTutor v1.5.13 的「home starter suggestions drawn from memory」的本地版：
     来源只有两路——最近半懂的概念（每个概念取最近一次时间，新→旧最多 2 条）和
-    最近一条日记里带疑问词的句子（最多 1 条）。第 2 节的护栏照旧：这是你自己的
+    最近一条日记里带疑问词的句子（最多 1 条）。护栏照旧：这是你自己的
     记录放在手边的就近入口，点它才开会话——没有计数、没有到期、没有「还没学」
     的欠账感；query 挂了返回 []，绝不能挡住开场输入框。
     """
@@ -1443,11 +1443,11 @@ async def detail(session_id: int) -> dict | None:
 
 
 async def stats(days: int = 14) -> dict:
-    """第 4 节's two numbers over the trailing `days`: how many sessions you marked
+    """The two numbers over the trailing `days`: how many sessions you marked
     「懂了」, and how many of those had recall fire.
 
-    Not a dashboard — 第 4 节 says the honest record is three hand-written lines in
-    LOG.md. This exists so 第 5 节's kill decision (「上次卡过」从没触发) is a lookup
+    Not a dashboard — the honest record is three hand-written lines in LOG.md.
+    This exists so the kill decision (「上次卡过」从没触发) is a lookup
     rather than a memory. `date(col,'localtime')` on the SQL side: the column is
     UTC in SQLite, so a Python-side local date would post a 22:00 session to
     tomorrow and quietly bend the metric that decides this feature's fate.

@@ -5,9 +5,11 @@ network — so the priority ordering is testable with plain dicts. The priority 
 the entire point: the background being broken must outrank everything else,
 because a suggestion that relies on a broken model is worse than none.
 
-自 2026-09-05 起这里还钉着一件事：**它不许再提到卡片、习惯、连续天数**。第 3 节把复习
-与习惯封存了，第 2 节的判断标准是任何机制一旦产生「欠着没做」的感觉就是滑回上一版 ——
+自 2026-09-05 起这里还钉着一件事：**它不许再提到卡片、习惯、连续天数**。复习与习惯
+封存了，判断标准是任何机制一旦产生「欠着没做」的感觉就是滑回上一版 ——
 这一条建议是全站唯一一句会主动开口的文案，所以由测试守着它别长回待办。
+
+§4-17 加的「一件事」那一档由同一套词表守着：它只说你最近动过什么、到哪了。
 """
 import re
 import sys
@@ -20,7 +22,7 @@ from app.core.today import next_suggestion  # noqa: E402
 
 # 封存词表：任何一个出现在建议文案里，就说明待办从后门回来了
 _DEBT_WORDS = ("卡", "到期", "复习", "习惯", "打勾")
-# 连续天数单独用形状匹配 —— 「连续失败」是报障，「连着 6 天」才是第 2 节禁的那种
+# 连续天数单独用形状匹配 —— 「连续失败」是报障，「连着 6 天」才是该禁的那种
 _STREAK = re.compile(r"连[续着]\s*\d+\s*天")
 
 
@@ -86,7 +88,7 @@ def test_no_branch_ever_mentions_cards_habits_or_streaks(facts):
 
 
 def test_stale_card_facts_are_ignored_rather_than_honoured():
-    """第 3 节封存后 queue_total 不再是输入。传进来也只能得到「没什么要处理的」，
+    """封存后 queue_total 不再是输入。传进来也只能得到「没什么要处理的」，
     绝不能变成「今天有 12 张卡到期」。"""
     s = next_suggestion({"queue_total": 12, "total_cards": 46, "streak": 9})
     assert s["tone"] == "idle"
@@ -94,8 +96,36 @@ def test_stale_card_facts_are_ignored_rather_than_honoured():
 
 
 def test_no_action_kind_points_at_a_sealed_page():
+    """`thread` 是活的（/threads），另外两个是报障与"没事"。"""
     for facts in ({}, {"default_model_broken": True}, {"jobs_failing": 1}):
-        assert next_suggestion(facts)["action"]["kind"] in ("settings", "none")
+        assert next_suggestion(facts)["action"]["kind"] in ("settings", "none", "thread")
+
+
+# ---------- 「一件事」那一档（§4-17） ----------
+
+
+def test_a_recent_thread_surfaces_only_when_nothing_is_broken():
+    facts = _facts(threads=[{"id": 3, "name": "RAG 评测", "summary": "搞懂 2 · 交付 1"}])
+    s = next_suggestion(facts)
+    assert s["tone"] == "idle"
+    assert s["action"]["kind"] == "thread" and s["action"]["thread_id"] == 3
+    assert "RAG 评测" in s["text"] and "搞懂 2" in s["text"]
+
+    # 有故障先说故障：那是报障，这只是"从哪接着看"
+    broken = next_suggestion({**facts, "default_model_broken": True})
+    assert broken["action"]["kind"] == "settings"
+
+
+def test_thread_tier_is_state_not_a_debt_list():
+    """只说它到哪了，不说你还欠哪一步——这个产品的红线是不做债。"""
+    s = next_suggestion(_facts(threads=[{"id": 1, "name": "X", "summary": "搞懂 2"}]))
+    assert not [w for w in _DEBT_WORDS if w in s["text"]], s["text"]
+    assert not _STREAK.search(s["text"])
+
+
+@pytest.mark.parametrize("bad", [[], None, "x", [{}], [{"name": ""}], [1, 2]])
+def test_junk_thread_facts_degrade_to_idle(bad):
+    assert next_suggestion(_facts(threads=bad))["action"]["kind"] == "none"
 
 
 def test_fallback_does_not_depend_on_a_try_block_import():

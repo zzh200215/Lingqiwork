@@ -354,6 +354,65 @@ async def list_threads(include_archived: bool = False) -> dict:
     }
 
 
+async def _cost(thread_id: int) -> dict:
+    """这件事头上记着的账（§4-16）。按模型分开——「这件事用了哪些模型」也是答案的一半。"""
+    from app.models import ModelUsage
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(select(ModelUsage).where(ModelUsage.thread_id == thread_id))
+        ).scalars().all()
+    by_model: dict[str, dict] = {}
+    tin = tout = calls = 0
+    for r in rows:
+        b = by_model.setdefault(r.model_id or "—", {"in": 0, "out": 0, "calls": 0})
+        b["in"] += r.tokens_in or 0
+        b["out"] += r.tokens_out or 0
+        b["calls"] += r.calls or 0
+        tin += r.tokens_in or 0
+        tout += r.tokens_out or 0
+        calls += r.calls or 0
+    return {
+        "tokens_in": tin,
+        "tokens_out": tout,
+        "total": tin + tout,
+        "calls": calls,
+        "by_model": by_model,
+    }
+
+
+async def deliver_into(thread_id: int, genre: str, audience: str) -> dict:
+    """就这件事写一份交付，**这一路的模型用量记在它头上**（§4-16）。
+
+    这是「成本按事记」唯一的入口：不是事后拿 `ref` 去猜归属，而是**在做的当下**就知道
+    这笔钱是为谁花的。产出落 `vault/deliver/` 并顺手挂到这件事上。
+    """
+    from app.core import compose
+    from app.core import deliver as deliver_engine
+    from app.core import report as _report
+    from app.core import usage_ledger
+
+    async with SessionLocal() as db:
+        t = await db.get(Thread, thread_id)
+        if t is None:
+            raise LookupError("thread not found")
+        name = t.name
+
+    prompt = deliver_engine.synth_prompt(genre, audience)  # 未知体裁/读者 → ValueError
+    sources = await compose.gather_inward(name)
+    if not sources:
+        raise ValueError("你自己的材料里没找到跟这件事相关的内容")
+
+    async with usage_ledger.span("deliver", name, thread_id=thread_id):
+        rep = await _report.synthesize(name, sources, prompt)
+    if rep is None:
+        raise ValueError("成文失败——默认模型不可用，或输出无法解析")
+
+    saved = await deliver_engine.save(rep, sources)
+    await attach(thread_id, "output", saved["filename"])
+    return saved
+
+
 async def detail(thread_id: int, *, suggest: bool = True) -> dict:
     async with SessionLocal() as db:
         t = await db.get(Thread, thread_id)
@@ -376,6 +435,7 @@ async def detail(thread_id: int, *, suggest: bool = True) -> dict:
         "items": items,
         "by_step": {key: [it for it in items if it["step"] == key] for key, _l, _k in STEPS},
         "steps": steps_out(),
+        "cost": await _cost(thread_id),
     }
     # 「这些可能也属于这件事」——这正是"不手打标签"的另一半：你只确认，不打字
     out["suggestions"] = await _suggest_items(t.name, attached) if suggest else []
@@ -464,3 +524,21 @@ async def unclassified(limit: int = 60) -> dict:
         }
     items = [c for c in await _catalog() if (c["kind"], c["ref"]) not in attached]
     return {"items": items[:limit], "total": len(items)}
+
+
+async def recent(limit: int = 1) -> list[dict]:
+    """最近动过、还没归档、且挂了东西的一件事——给 `today` 当「今天从哪开始」（§4-17）。
+
+    只说**它到哪了**，不说"你还欠什么"：前者是状态，后者是债，而这个产品的红线就是不做债。
+    所以这里不返回"缺了哪一步"，也不把「未归类」的条数放上来。
+    """
+    rows = [t for t in (await list_threads())["threads"] if t["total"] > 0]
+    out: list[dict] = []
+    for t in rows[: max(1, limit)]:
+        parts = []
+        for _key, label, kinds in STEPS:
+            n = sum(t["counts"].get(k, 0) for k in kinds)
+            if n:
+                parts.append(f"{label} {n}")
+        out.append({"id": t["id"], "name": t["name"], "summary": " · ".join(parts)})
+    return out

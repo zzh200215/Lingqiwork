@@ -17,6 +17,8 @@ vi.mock('./api', () => ({
     detachThreadItem: vi.fn(),
     unclassified: vi.fn(),
     suggestThreads: vi.fn(),
+    deliverGenres: vi.fn(),
+    deliverIntoThread: vi.fn(),
   },
 }))
 import { api } from './api'
@@ -54,6 +56,13 @@ const DETAIL: ThreadDetail = {
   },
   steps: STEPS,
   suggestions: [{ kind: 'card', ref: '9', title: 'RAG 评测怎么做', label: 'RAG 评测', step: 'learn' }],
+  cost: {
+    tokens_in: 900,
+    tokens_out: 300,
+    total: 1200,
+    calls: 3,
+    by_model: { 'p/m': { in: 900, out: 300, calls: 3 } },
+  },
 }
 
 function renderPage(initial = '/') {
@@ -68,6 +77,12 @@ beforeEach(() => {
   vi.mocked(api.listThreads).mockResolvedValue({ threads: [], steps: STEPS })
   vi.mocked(api.unclassified).mockResolvedValue({ items: [], total: 0 })
   vi.mocked(api.threadDetail).mockResolvedValue(DETAIL)
+  vi.mocked(api.deliverGenres).mockResolvedValue({
+    genres: [{ id: 'briefing', label: '汇报要点' }],
+    audiences: [{ id: 'leader', label: '领导' }],
+    default_genre: 'briefing',
+    default_audience: 'leader',
+  })
 })
 
 afterEach(cleanup)
@@ -137,5 +152,25 @@ describe('ThreadsPage', () => {
     fireEvent.click(await screen.findByText(/新建「RAG 评测」/))
     await waitFor(() => expect(api.createThread).toHaveBeenCalledWith('RAG 评测'))
     await waitFor(() => expect(api.attachThreadItem).toHaveBeenCalledWith(1, 'card', '9'))
+  })
+
+  it('这件事头上的账看得见：花的钱、次数、用过的模型（§4-16）', async () => {
+    vi.mocked(api.listThreads).mockResolvedValue({ threads: [THREAD], steps: STEPS })
+    renderPage('/?thread=1')
+
+    expect(await screen.findByText('1.2k tokens · 3 次调用 · p/m')).toBeTruthy()
+  })
+
+  it('就这件事写一份交付：调 deliverIntoThread（账记在这件事头上）', async () => {
+    vi.mocked(api.listThreads).mockResolvedValue({ threads: [THREAD], steps: STEPS })
+    vi.mocked(api.deliverIntoThread).mockResolvedValue({
+      filename: 'deliver/2026-09-12-汇报要点.md',
+      title: '汇报要点',
+      chunks: 1,
+    })
+    renderPage('/?thread=1')
+
+    fireEvent.click(await screen.findByText('写一份'))
+    await waitFor(() => expect(api.deliverIntoThread).toHaveBeenCalledWith(1, 'briefing', 'leader'))
   })
 })

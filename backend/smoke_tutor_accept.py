@@ -161,7 +161,7 @@ async def main() -> None:
             print(f"FAIL 最高分 {top['score']} 低于阈值 {tutor.RECALL_MIN_SIM}")
             ok = False
     if not detail3["recalled"]:
-        # 标志记在发起召回的会话上（谁真的被接上了历史，谁就是第 5 节要数的那个）
+        # 标志记在发起召回的会话上（谁真的被接上了历史，谁就是要数的那个）
         print("FAIL 会话 3 的 recalled 标志没有落库")
         ok = False
 
@@ -176,7 +176,7 @@ async def main() -> None:
         print(f"FAIL 会话 4 排第一的是 {hits4[0]['concept']}，不是 asyncio 那一族 —— 触发得不对")
         ok = False
 
-    # --- 判定：讲的是你自己的材料（第 7 节 第 1 条） ----------------------
+    # --- 判定：讲的是你自己的材料（取材第 1 条） ----------------------
     if kb_count == 0:
         print("  跳过取材判定 —— 知识库索引是空的，先去 KB 页重建索引")
     elif not src1:
@@ -185,7 +185,7 @@ async def main() -> None:
     else:
         print(f"  取材 ok — 会话 1 第一轮引用了 {[x['source'] for x in src1]}")
 
-    # --- 判定：材料里还有（第 7 节 第 2 条的护栏版） ----------------------
+    # --- 判定：材料里还有（取材第 2 条的护栏版） ----------------------
     if kb_count == 0:
         print("  跳过「材料里还有」判定 —— 知识库索引是空的")
     elif not r1["material_nearby"]:
@@ -195,7 +195,7 @@ async def main() -> None:
         print(f"FAIL material_nearby 超过 {tutor.NEARBY_MAX} 条 —— 护栏松了，它会开始像队列")
         ok = False
 
-    # --- 判定：当场跑一下（第 7 节 第 3 条） ------------------------------
+    # --- 判定：当场跑一下（取材第 3 条） ------------------------------
     from app.core import artifacts
 
     run = artifacts.run("print('wb-accept-ok')", "python", timeout=15)

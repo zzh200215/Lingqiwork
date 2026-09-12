@@ -116,7 +116,7 @@ def test_prompt_pins_three_sections_in_order():
 
 
 def test_prompt_forbids_advice():
-    """复盘是镜子不是任务清单（第 2 节）——提示词里必须有这条禁令。"""
+    """复盘是镜子不是任务清单——提示词里必须有这条禁令。"""
     p = recap._SYNTH_PROMPT
     assert "不要写建议" in p
     assert "不要催促" in p

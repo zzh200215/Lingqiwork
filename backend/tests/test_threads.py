@@ -14,7 +14,7 @@ from app.core import threads as th
 from app.db import engine as _engine
 from app.db import SessionLocal
 from app.models import Base as _Base
-from app.models import Card, DecisionLog, ScheduledTask, Thread, ThreadItem
+from app.models import Card, DecisionLog, ModelUsage, ScheduledTask, Thread, ThreadItem
 
 
 async def _init_db() -> None:
@@ -29,7 +29,7 @@ asyncio.run(_init_db())
 def _clean():
     async def _go() -> None:
         async with SessionLocal() as db:
-            for model in (ThreadItem, Thread, Card, DecisionLog, ScheduledTask):
+            for model in (ThreadItem, Thread, ModelUsage, Card, DecisionLog, ScheduledTask):
                 await db.execute(sa_delete(model))
             await db.commit()
 
@@ -200,3 +200,88 @@ async def test_name_cannot_be_blank():
         await th.detail(9999)
     with pytest.raises(LookupError):
         await th.delete(9999)
+
+
+# ---------- 成本按事记（§4-16） ----------
+
+
+async def test_deliver_into_charges_the_thread_and_attaches_the_output(monkeypatch):
+    """在做的当下就知道这笔钱为谁花的——不是事后拿 ref 去猜归属。"""
+    from app.core import compose
+    from app.core import deliver as deliver_engine
+    from app.core import report as _report
+    from app.core import usage_ledger
+
+    async def fake_gather(topic, **kw):
+        return [{"n": 1, "kind": "kb", "title": "A", "ref": "notes/a.md", "text": "x"}]
+
+    async def fake_synth(topic, sources, prompt, *a, **kw):
+        usage_ledger.note("test/model", 100, 50)  # 假装模型回了一次 usage
+        return _report.Report(
+            title="汇报要点", sections=[_report.Section(heading="结论", body="B [1]")], used=[1]
+        )
+
+    async def fake_save(rep, sources):
+        return {"filename": "deliver/2026-09-12-汇报要点.md", "title": rep.title, "chunks": 2}
+
+    monkeypatch.setattr(compose, "gather_inward", fake_gather)
+    monkeypatch.setattr(_report, "synthesize", fake_synth)
+    monkeypatch.setattr(deliver_engine, "save", fake_save)
+
+    t = await th.create("RAG 评测")
+    out = await th.deliver_into(t["id"], "briefing", "leader")
+    assert out["filename"].startswith("deliver/")
+
+    d = await th.detail(t["id"], suggest=False)
+    assert d["cost"]["total"] == 150 and d["cost"]["calls"] == 1
+    assert d["cost"]["by_model"] == {"test/model": {"in": 100, "out": 50, "calls": 1}}
+    # 产出顺手挂上了这件事
+    assert ("output", out["filename"]) in [(i["kind"], i["ref"]) for i in d["items"]]
+
+
+async def test_deliver_into_guards_genre_and_thread(monkeypatch):
+    from app.core import compose
+
+    async def fake_gather(topic, **kw):
+        return [{"n": 1, "kind": "kb", "title": "A", "ref": "notes/a.md", "text": "x"}]
+
+    monkeypatch.setattr(compose, "gather_inward", fake_gather)
+    t = await th.create("X")
+
+    with pytest.raises(ValueError):
+        await th.deliver_into(t["id"], "nope", "self")
+    with pytest.raises(LookupError):
+        await th.deliver_into(9999, "weekly", "self")
+
+
+async def test_deliver_into_falls_back_when_there_is_no_material(monkeypatch):
+    from app.core import compose
+
+    async def no_material(topic, **kw):
+        return []
+
+    monkeypatch.setattr(compose, "gather_inward", no_material)
+    t = await th.create("X")
+    with pytest.raises(ValueError, match="没找到"):
+        await th.deliver_into(t["id"], "weekly", "self")
+
+
+async def test_a_thread_with_nothing_on_it_costs_nothing():
+    t = await th.create("X")
+    d = await th.detail(t["id"], suggest=False)
+    assert d["cost"]["total"] == 0 and d["cost"]["by_model"] == {}
+
+
+# ---------- 「今天从哪开始」（§4-17） ----------
+
+
+async def test_recent_reports_state_not_a_debt_list():
+    """只说它到哪了，不说你还欠哪一步——这个产品的红线就是不做债。"""
+    t = await th.create("RAG 评测")
+    assert await th.recent() == []  # 空的一件事不占位
+
+    await th.attach(t["id"], "card", "7")
+    (row,) = await th.recent()
+    assert row["id"] == t["id"] and row["name"] == "RAG 评测"
+    assert row["summary"] == "搞懂 1"
+    assert "缺" not in row["summary"] and "未" not in row["summary"]

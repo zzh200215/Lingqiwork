@@ -530,9 +530,9 @@ def test_streak_counts_back_from_today_and_survives_yesterday_only():
 
 
 def test_reschedule_registers_nothing_even_with_the_flags_on(monkeypatch):
-    """复习提醒被封存了：20:00 那句「今天有 N 张卡到期」正是第 2 节判死的那种感觉。
+    """复习提醒被封存了：20:00 那句「今天有 N 张卡到期」正是判死的那种感觉。
 
-    config 里的开关留着不动（第 3 节：封存不删、不写迁移），所以默认值仍然是 True ——
+    config 里的开关留着不动（封存不删、不写迁移），所以默认值仍然是 True ——
     这个测试的意义就在这里：开关为真也不许注册出作业来。
     """
     from app.core import scheduler as sched

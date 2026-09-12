@@ -282,7 +282,7 @@ async def reflect(report: dict) -> dict:
     """记忆流水 → 1-2 条 kind=insight 的更高层观察，喂给信念时间线和 MCP 读记忆。
 
     与合并共用同一开关（automemory_enabled，默认关）与同一 provider 解析，
-    不加新设置（第 9 节）。best-effort：反思挂了绝不动 tidy 的结果。
+    不加新设置。best-effort：反思挂了绝不动 tidy 的结果。
     """
     try:
         if not load_config().get("automemory_enabled"):

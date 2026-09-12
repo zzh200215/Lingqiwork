@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
+import AttachToThread from './AttachToThread'
 import FeedbackButtons from './FeedbackButtons'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
 import {
@@ -34,7 +35,7 @@ import { useAside } from './split'
 // before it explains, and a session ends as 概念 / 自评 / 卡点.
 //
 // What is deliberately absent is the point: no due dates, no queue, no streak, no
-// daily count. 第 2 节 makes that the single test — the moment a widget here
+// daily count. That is the single test — the moment a widget here
 // produces the feeling of owing something, this is the Anki page again under a
 // new name. The history rail is history, never a to-do list.
 
@@ -720,7 +721,7 @@ export default function TutorPage() {
   const reportCards = (
     <>
       {/* 研究卡就地展开在会话流里：进度 → 带引用的讲解 → 存进知识库。
-          它是这一场会话的动作，不落右栏、不计数（第 2 节）。 */}
+          它是这一场会话的动作，不落右栏、不计数。 */}
       {rs || rsDraft || rsBusy || rsMsg ? (
         <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-500/30 dark:bg-sky-500/10">
           <div className="flex items-center justify-between gap-2 pb-1">
@@ -775,7 +776,7 @@ export default function TutorPage() {
       ) : null}
       {/* 方案卡：先摆「我理解你要决定的是什么」再出正文——读错题是这类功能
           第一位的失败模式，题面必须在成文之前就看得见。同样是这一场会话的
-          动作，不落右栏、不计数（第 2 节）。 */}
+          动作，不落右栏、不计数。 */}
       {dc || dcFrame || dcDraft || dcBusy || dcMsg ? (
         <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 dark:border-violet-500/30 dark:bg-violet-500/10">
           <div className="flex items-center justify-between gap-2 pb-1">
@@ -857,7 +858,7 @@ export default function TutorPage() {
       ) : null}
       {/* 对质卡：先摆「这次比的是什么」，再出正文。零冲突时它直接给一句实话
           （标题就写着「没有对不上的」），那是正常结果不是失败。同一场会话的
-          动作，不落右栏、不计数（第 2 节）。 */}
+          动作，不落右栏、不计数。 */}
       {cf || cfSubject || cfDraft || cfBusy || cfMsg ? (
         <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-4 dark:border-teal-500/30 dark:bg-teal-500/10">
           <div className="flex items-center justify-between gap-2 pb-1">
@@ -1133,6 +1134,12 @@ export default function TutorPage() {
                 ) : null}
                 {expanded ? (
                   <div className="mb-1 ml-2 border-l border-neutral-200 pl-2 dark:border-neutral-700">
+                    {/* 把这条概念挂到某件事上——念头是看到它的时候冒出来的，所以就在这里 */}
+                    <AttachToThread
+                      kind="tutor"
+                      ref={String(c.last_session_id)}
+                      className="block pb-1"
+                    />
                     {evo.length > 0 ? (
                       evo.map((r) => (
                         <button

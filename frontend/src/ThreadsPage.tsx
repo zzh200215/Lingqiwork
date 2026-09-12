@@ -14,6 +14,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import {
   api,
+  type DeliverCatalogue,
   type ThreadCandidate,
   type ThreadDetail,
   type ThreadKind,
@@ -32,6 +33,11 @@ const KIND_ICON: Record<string, string> = {
 }
 
 const key = (kind: string, ref: string) => `${kind}:${ref}`
+
+/** 1.2k —— 这一栏是给人一眼看的，不需要精确到个位 */
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
 
 /** 一件事在这一步上有几条。 */
 function stepCount(t: ThreadRow, kinds: string[]): number {
@@ -52,6 +58,11 @@ export default function ThreadsPage() {
   const [picker, setPicker] = useState<string | null>(null)
   const [picks, setPicks] = useState<ThreadRow[]>([])
   const [pickLabel, setPickLabel] = useState('')
+  // 「就这件事写一份交付」——这一路的模型用量会记在这件事头上（§4-16）
+  const [cat, setCat] = useState<DeliverCatalogue | null>(null)
+  const [genre, setGenre] = useState('')
+  const [audience, setAudience] = useState('')
+  const [writing, setWriting] = useState(false)
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
 
@@ -86,6 +97,14 @@ export default function ThreadsPage() {
   useEffect(() => {
     void refreshList()
     void refreshOrphans()
+    api
+      .deliverGenres()
+      .then((c) => {
+        setCat(c)
+        setGenre(c.default_genre)
+        setAudience(c.default_audience)
+      })
+      .catch(() => {}) // 体裁拉不到就不显示"写一份"，页面照常
   }, [refreshList, refreshOrphans])
 
   // 深链 `?thread=<id>`（别处也能指进来）
@@ -193,6 +212,21 @@ export default function ThreadsPage() {
       if (r.label) setPickLabel(r.label)
     } catch {
       /* 建议拉不到，就只剩「用它的名字新建」那条路 */
+    }
+  }
+
+  /** 就这件事写一份交付：产出挂上来，这一路的账也记在这件事头上（§4-16）。 */
+  async function writeForThread(threadId: number) {
+    if (!genre || !audience || writing) return
+    setWriting(true)
+    setErr('')
+    try {
+      await api.deliverIntoThread(threadId, genre, audience)
+      await afterChange(threadId)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWriting(false)
     }
   }
 
@@ -365,6 +399,54 @@ export default function ThreadsPage() {
                       </li>
                     ))}
                   </ul>
+                </div>
+              ) : null}
+
+              {cat ? (
+                <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+                  <span className="text-[11px] text-neutral-400">就这件事</span>
+                  <select
+                    value={genre}
+                    onChange={(e) => setGenre(e.target.value)}
+                    className="rounded-lg border border-neutral-300 bg-white px-1.5 py-0.5 text-[11px] outline-none dark:border-neutral-700 dark:bg-neutral-900"
+                  >
+                    {cat.genres.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={audience}
+                    onChange={(e) => setAudience(e.target.value)}
+                    className="rounded-lg border border-neutral-300 bg-white px-1.5 py-0.5 text-[11px] outline-none dark:border-neutral-700 dark:bg-neutral-900"
+                  >
+                    {cat.audiences.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => void writeForThread(detail.id)}
+                    disabled={writing}
+                    className="rounded-full border border-teal-300 px-2.5 py-0.5 text-[11px] text-teal-700 hover:bg-teal-50 disabled:opacity-40 dark:border-teal-600 dark:text-teal-300 dark:hover:bg-teal-500/10"
+                  >
+                    {writing ? '写着…' : '写一份'}
+                  </button>
+                  {/* 这件事头上的账（§4-16）：花的钱、调用的次数、用过的模型 */}
+                  <span
+                    className="ml-auto text-[11px] text-neutral-400"
+                    title="只算「就这件事」做的那些调用——别处烧的钱不摊过来"
+                  >
+                    {detail.cost.calls === 0
+                      ? '这件事还没花过模型钱'
+                      : `${fmtTokens(detail.cost.total)} tokens · ${detail.cost.calls} 次调用${
+                          Object.keys(detail.cost.by_model).length
+                            ? ` · ${Object.keys(detail.cost.by_model).join('、')}`
+                            : ''
+                        }`}
+                  </span>
                 </div>
               ) : null}
             </div>

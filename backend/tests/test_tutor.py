@@ -36,7 +36,7 @@ atexit.register(_cleanup)
 
 os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
 os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
-# 取材（第 7 节）走真 chroma；不指走就等于每次跑测试都摸真实库
+# 取材走真 chroma；不指走就等于每次跑测试都摸真实库
 os.environ["WB_CHROMA_PATH"] = str(_TMP / "chroma")
 
 from app.core import tutor as core  # noqa: E402
@@ -248,7 +248,7 @@ async def test_start_pins_the_model_and_reports_its_health(monkeypatch):
     assert got["topic"] == "asyncio 事件循环" and got["model_id"] == "p/m"
     assert got["model_ok"] is True
 
-    # 第 9 节: a known-broken model has to be visible before the first reply
+    # a known-broken model has to be visible before the first reply
     monkeypatch.setattr(providers, "is_unhealthy", lambda mid, cache=None: True)
     assert (await core.start("闭包"))["model_ok"] is False
 
@@ -280,7 +280,7 @@ async def test_turns_roundtrip_in_order():
     ]
 
 
-# ---------- recall: the only unique value in the product (第 4 节) ----------
+# ---------- recall: the only unique value in the product ----------
 
 
 async def test_recall_returns_the_related_session_and_drops_the_unrelated(monkeypatch):
@@ -385,7 +385,7 @@ def test_the_floor_clears_the_measured_noise_ceiling():
     bge-small-zh-v1.5 scores *any* two short Chinese technical phrases at roughly
     0.4-0.6, so the old floor sat below the noise rather than above it: 「Rust 的
     所有权和借用检查」 pulled 「asyncio 事件循环」 at 0.555, and a three-line recall
-    block came back with two wrong lines. From the outside that is exactly 第 5 节's
+    block came back with two wrong lines. From the outside that is exactly the
     「触发了但没用」 — the signal that says cut recall, reached for a tuning reason.
 
     Offline on purpose (no model loaded): this only stops the constant from being
@@ -522,7 +522,7 @@ async def test_say_says_so_when_no_provider_is_configured(monkeypatch):
     assert await core.turns(sid) == []  # nothing written, nothing lost
 
 
-# ---------- 取材：讲你自己的材料（第 7 节 第 1 条） ----------
+# ---------- 取材：讲你自己的材料（第 1 条） ----------
 
 
 def test_format_material_labels_sources_and_caps_each_chunk():
@@ -877,7 +877,7 @@ async def test_end_stores_the_triple(monkeypatch):
 
 
 async def test_end_surfaces_nearby_material_from_your_kb(monkeypatch):
-    """第 7 节「发现你可能想搞懂的东西」，护栏版：只在 end() 的返回里出现一次，
+    """「发现你可能想搞懂的东西」，护栏版：只在 end() 的返回里出现一次，
     按 source 去重、最多 NEARBY_MAX 个 —— 它是你在场时顺手看见的一行字，不是队列。"""
     await _reset()
     sid = await _live(monkeypatch, "asyncio")
@@ -1041,7 +1041,7 @@ async def test_end_keeps_the_verdict_when_extraction_comes_back_empty(monkeypatc
     monkeypatch.setattr(core, "_extract", blank)
     got = await core.end(sid, "got")
     assert got["verdict"] == "got" and got["concept"] == ""
-    # 第 4 节's count still works; recall just has nothing to match on
+    # the session count still works; recall just has nothing to match on
     assert (await core.stats())["got"] == 1
     assert await core.recall_hits("asyncio 事件循环") == []
 
@@ -1174,7 +1174,7 @@ async def test_starters_carry_a_journal_question(monkeypatch):
     assert len(got[0]["topic"]) <= 60
 
 
-# ---------- history and 第 4 节's two numbers ----------
+# ---------- history and the two numbers ----------
 
 
 async def test_sessions_lists_newest_first_with_turn_counts():
@@ -1204,7 +1204,7 @@ async def test_stats_counts_got_and_how_often_recall_fired():
 
     got = await core.stats()
     assert got["sessions"] == 4 and got["got"] == 2
-    # 第 5 节 kills recall if this stays 0 — it has to be a lookup, not a memory
+    # recall gets killed if this stays 0 — it has to be a lookup, not a memory
     assert got["got_with_recall"] == 1
     assert got["concepts"] == 4
 
