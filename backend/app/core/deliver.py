@@ -141,6 +141,43 @@ def catalogue() -> dict:
     }
 
 
+def pinned_sources(specs: list[str]) -> list[dict]:
+    """**钉进来的材料**（检索命中的 `spec`）→ 带正文的来源。
+
+    这是「任何检索命中能一键加进这次产出」的落点（§4-14）：取材本来是引擎按话题自己捞的，
+    钉进来的那几条是人指的——所以它们排在最前，且**取不到就跳过**，一条材料读不出来不该
+    拖垮整次产出。
+
+    `spec` 的三种形状（vault 相对路径 / `repo:` / `dir:`）由 `cards.collect_material` 认。
+    """
+    from app.core import cards as cards_core
+
+    out: list[dict] = []
+    for spec in specs or []:
+        s = (spec or "").strip()
+        if not s:
+            continue
+        try:
+            rel, label, text = cards_core.collect_material(source_path=s)
+        except Exception:  # noqa: BLE001 - 一条钉不上只是少一条材料
+            log.warning("pinned material unreadable: %s", s, exc_info=True)
+            continue
+        if not (text or "").strip():
+            continue
+        out.append({"kind": "kb", "title": label or s, "ref": rel or s, "text": text})
+    return out
+
+
+def merge_pinned(pinned: list[dict], gathered: list[dict]) -> list[dict]:
+    """钉进来的排在最前，按 `ref` 去重后重新编号。Pure.
+
+    人指定的一定优先于引擎自己捞的；同一份材料被两边都拿到时只留钉的那条。
+    """
+    seen = {str(p.get("ref") or "") for p in pinned}
+    merged = [*pinned, *(g for g in gathered if str(g.get("ref") or "") not in seen)]
+    return [dict(s, n=i) for i, s in enumerate(merged, 1)]
+
+
 # ---------- save ----------
 
 
@@ -158,6 +195,7 @@ async def run(
     topic: str,
     audience: str = AUDIENCE_DEFAULT,
     *,
+    pinned: list[str] | None = None,
     kb_fn=None,
     memory_fn=None,
     journal_fn=None,
@@ -187,9 +225,11 @@ async def run(
         return
 
     yield "gathering", {}
-    sources = await gather_inward(
+    gathered = await gather_inward(
         topic, kb_fn=kb_fn, memory_fn=memory_fn, journal_fn=journal_fn
     )
+    # 钉进来的材料排在最前（人指的优先），再去重编号——见 `merge_pinned`
+    sources = merge_pinned(pinned_sources(pinned or []), gathered)
     if not sources:
         yield "error", {"message": "你自己的材料里没找到相关内容——先往知识库或日记里放点东西"}
         return

@@ -547,12 +547,14 @@ export async function streamDeliver(
   genre: string,
   audience: string,
   onStage: DeliverStage,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** 「加进这次产出」：钉进来的材料 spec，排在最前（§4-14） */
+  pinned: string[] = []
 ): Promise<DeliverDone> {
   const res = await fetch('/api/deliver', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic, genre, audience }),
+    body: JSON.stringify({ topic, genre, audience, pinned }),
     signal,
   })
   if (!res.ok || !res.body) {

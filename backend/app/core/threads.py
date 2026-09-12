@@ -397,11 +397,17 @@ async def deliver_into(thread_id: int, genre: str, audience: str) -> dict:
         if t is None:
             raise LookupError("thread not found")
         name = t.name
+        rows = (
+            await db.execute(select(ThreadItem).where(ThreadItem.thread_id == thread_id))
+        ).scalars().all()
 
+    # 这件事挂着的材料 / 笔记 / 成品，就是这次产出的材料——「这件事用过哪些材料」的直接复用
+    pinned = [r.ref for r in rows if r.kind in ("material", "note", "output")]
     prompt = deliver_engine.synth_prompt(genre, audience)  # 未知体裁/读者 → ValueError
-    sources = await compose.gather_inward(name)
+    gathered = await compose.gather_inward(name)
+    sources = deliver_engine.merge_pinned(deliver_engine.pinned_sources(pinned), gathered)
     if not sources:
-        raise ValueError("你自己的材料里没找到跟这件事相关的内容")
+        raise ValueError("这件事上还没有可用的材料——先往里挂点东西")
 
     async with usage_ledger.span("deliver", name, thread_id=thread_id):
         rep = await _report.synthesize(name, sources, prompt)

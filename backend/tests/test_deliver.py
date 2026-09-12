@@ -91,6 +91,32 @@ def test_synth_prompt_rejects_unknown_genre_or_audience():
         deliver.synth_prompt("weekly", "boss")
 
 
+def test_merge_pinned_puts_pinned_first_and_dedups():
+    """人指的材料优先于引擎自己捞的；同一份被两边拿到时，只留钉的那条。"""
+    pinned = [{"kind": "kb", "title": "P", "ref": "notes/a.md", "text": "钉的"}]
+    gathered = [
+        {"n": 1, "kind": "kb", "title": "同一条", "ref": "notes/a.md", "text": "捞的"},
+        {"n": 2, "kind": "kb", "title": "G", "ref": "notes/b.md", "text": "捞的"},
+    ]
+    out = deliver.merge_pinned(pinned, gathered)
+    assert [s["ref"] for s in out] == ["notes/a.md", "notes/b.md"]
+    assert [s["n"] for s in out] == [1, 2]
+    assert out[0]["text"] == "钉的"
+
+
+def test_pinned_sources_skip_what_cannot_be_read(monkeypatch):
+    """一条材料读不出来，只是少一条材料——不该拖垮整次产出。"""
+    from app.core import cards as cards_core
+
+    def boom(source_path="", text="", max_chars=0):
+        raise ValueError("读不出来")
+
+    monkeypatch.setattr(cards_core, "collect_material", boom)
+    assert deliver.pinned_sources(["notes/gone.md"]) == []
+    assert deliver.pinned_sources([]) == []
+    assert deliver.pinned_sources(["  "]) == []
+
+
 # ---------- save ----------
 
 

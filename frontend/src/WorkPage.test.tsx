@@ -28,6 +28,7 @@ vi.mock('./api', () => ({
     runTask: vi.fn(),
     approveRun: vi.fn(),
     rejectRun: vi.fn(),
+    searchMaterial: vi.fn(),
   },
 }))
 vi.mock('./stream', () => ({ streamDeliver: vi.fn() }))
@@ -318,7 +319,63 @@ describe('WorkPage · 交付', () => {
       'weekly',
       'leader',
       expect.any(Function),
-      expect.anything()
+      expect.anything(),
+      []
+    )
+  })
+
+  it('钉一条材料进这次产出：搜到、钉住，生成时带上它（§4-14）', async () => {
+    vi.mocked(api.searchMaterial).mockResolvedValue({
+      query: '事件循环',
+      hits: [
+        {
+          source: 'notes/loop.md',
+          spec: 'notes/loop.md',
+          title: '事件循环笔记',
+          chunk: 0,
+          score: 0.8,
+          text: '正文',
+          cards: 0,
+        },
+      ],
+    })
+    vi.mocked(streamDeliver).mockResolvedValue({
+      ok: true,
+      report: {
+        title: '第 37 周周报',
+        sections: [{ heading: '本周进展', body: '做了 A [1]' }],
+        used: [1],
+        sources: [{ n: 1, kind: 'kb', title: 'A', ref: 'notes/a.md' }],
+        model_id: 'm',
+        prompt_sha: 'abc123',
+        genre: 'weekly',
+        audience: 'self',
+      },
+    })
+    renderPage()
+    fireEvent.click(await screen.findByText('写一份交付'))
+    fireEvent.click(screen.getByText('＋ 钉一条材料'))
+    fireEvent.change(screen.getByPlaceholderText('在你自己的材料里搜一条…'), {
+      target: { value: '事件循环' },
+    })
+    fireEvent.click(screen.getByText('搜'))
+    fireEvent.click(await screen.findByText('事件循环笔记'))
+
+    // 钉住的材料显示成 chip —— 生成时随请求一起走
+    expect(screen.getByText('事件循环笔记')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('写什么？（例：这周的 RAG 调研）'), {
+      target: { value: '这周的 RAG' },
+    })
+    fireEvent.click(screen.getByText('生成'))
+    await waitFor(() =>
+      expect(streamDeliver).toHaveBeenCalledWith(
+        '这周的 RAG',
+        'weekly',
+        'self',
+        expect.any(Function),
+        expect.anything(),
+        ['notes/loop.md']
+      )
     )
   })
 })

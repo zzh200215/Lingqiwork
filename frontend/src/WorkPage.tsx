@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   api,
   type DeliverCatalogue,
+  type MaterialHit,
   type ScheduledTask,
   type TaskRunItem,
   type WorkMeeting,
@@ -239,6 +240,12 @@ export default function WorkPage() {
   const [topic, setTopic] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  // 「加进这次产出」（§4-14）：钉进来的材料排在取材结果最前
+  const [pinned, setPinned] = useState<{ spec: string; title: string }[]>([])
+  const [pinOpen, setPinOpen] = useState(false)
+  const [pinQuery, setPinQuery] = useState('')
+  const [pinHits, setPinHits] = useState<MaterialHit[]>([])
+  const [pinBusy, setPinBusy] = useState(false)
   const [draft, setDraft] = useState<ReportDraft | null>(null)
   const [report, setReport] = useState<DeliverReport | null>(null)
   const [saved, setSaved] = useState('')
@@ -349,6 +356,30 @@ export default function WorkPage() {
     }
   }, [refreshTasks])
 
+  /** 搜一条自己的材料钉进这次产出——检索命中的 `spec` 后端认（vault 路径 / repo: / dir:）。 */
+  const searchPin = useCallback(async () => {
+    const q = pinQuery.trim()
+    if (!q) return
+    setPinBusy(true)
+    try {
+      setPinHits((await api.searchMaterial(q)).hits)
+    } catch {
+      setPinHits([])
+    } finally {
+      setPinBusy(false)
+    }
+  }, [pinQuery])
+
+  const addPin = useCallback((h: MaterialHit) => {
+    if (!h.spec) return
+    setPinned((cur) =>
+      cur.some((p) => p.spec === h.spec) ? cur : [...cur, { spec: h.spec, title: h.title || h.spec }]
+    )
+    setPinOpen(false)
+    setPinHits([])
+    setPinQuery('')
+  }, [])
+
   const run = useCallback(async () => {
     const t = topic.trim()
     if (!t || busy || !genre || !audience) return
@@ -376,7 +407,8 @@ export default function WorkPage() {
               sections: (data.sections ?? []) as ReportDraft['sections'],
             })
         },
-        ctl.signal
+        ctl.signal,
+        pinned.map((p) => p.spec)
       )
       if (r.ok && r.report) {
         setReport(r.report)
@@ -389,7 +421,7 @@ export default function WorkPage() {
     } finally {
       setBusy(false)
     }
-  }, [topic, genre, audience, busy])
+  }, [topic, genre, audience, busy, pinned])
 
   const save = useCallback(async () => {
     if (!report || busy || saved) return
@@ -490,6 +522,70 @@ export default function WorkPage() {
               {busy ? '生成中…' : '生成'}
             </button>
           </div>
+
+          {/* 「加进这次产出」（§4-14）：钉进来的材料排在取材结果最前 */}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {pinned.map((p) => (
+              <span
+                key={p.spec}
+                title={p.spec}
+                className="flex items-center gap-1 rounded-full border border-teal-300 px-2 py-0.5 text-[11px] text-teal-700 dark:border-teal-600 dark:text-teal-300"
+              >
+                {p.title}
+                <button
+                  onClick={() => setPinned((c) => c.filter((x) => x.spec !== p.spec))}
+                  title="取消钉住"
+                  className="text-teal-500 hover:text-rose-500"
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+            <button
+              onClick={() => setPinOpen((v) => !v)}
+              className="rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 transition-colors hover:border-teal-300 hover:text-teal-600 dark:border-neutral-700 dark:text-neutral-400"
+            >
+              {pinOpen ? '收起' : '＋ 钉一条材料'}
+            </button>
+          </div>
+          {pinOpen ? (
+            <div className="mt-2">
+              <div className="flex gap-2">
+                <input
+                  autoFocus
+                  value={pinQuery}
+                  onChange={(e) => setPinQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void searchPin()
+                  }}
+                  placeholder="在你自己的材料里搜一条…"
+                  className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-[11px] outline-none placeholder:text-neutral-400 focus:border-teal-400 dark:border-neutral-700 dark:bg-neutral-900"
+                />
+                <button
+                  onClick={() => void searchPin()}
+                  disabled={pinBusy || !pinQuery.trim()}
+                  className="shrink-0 rounded-lg border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+                >
+                  {pinBusy ? '搜…' : '搜'}
+                </button>
+              </div>
+              {pinHits.length > 0 ? (
+                <ul className="mt-1.5 space-y-0.5">
+                  {pinHits.map((h) => (
+                    <li key={h.spec || h.source}>
+                      <button
+                        onClick={() => addPin(h)}
+                        title={h.text}
+                        className="block w-full truncate rounded px-1.5 py-1 text-left text-[11px] text-neutral-600 transition-colors hover:bg-teal-50 hover:text-teal-700 dark:text-neutral-300 dark:hover:bg-teal-500/10"
+                      >
+                        {h.title || h.source}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
 
           {msg ? <p className="mt-2 text-[11px] text-neutral-500">{msg}</p> : null}
 

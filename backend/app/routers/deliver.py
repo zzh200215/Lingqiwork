@@ -25,6 +25,8 @@ class DeliverIn(BaseModel):
     topic: str
     genre: str = core.DEFAULT_GENRE
     audience: str = core.AUDIENCE_DEFAULT
+    # 「加进这次产出」（§4-14）：钉进来的材料 spec（vault 路径 / repo: / dir:）
+    pinned: list[str] = Field(default_factory=list)
 
 
 class SourceRef(BaseModel):
@@ -72,7 +74,7 @@ async def deliver_run(body: DeliverIn):
 
     async def gen():
         try:
-            async for event, data in core.run(body.genre, topic, body.audience):
+            async for event, data in core.run(body.genre, topic, body.audience, pinned=body.pinned):
                 yield _sse(event, data)
         except Exception as e:  # noqa: BLE001 - mid-stream, so report as an event
             log.exception("deliver failed")

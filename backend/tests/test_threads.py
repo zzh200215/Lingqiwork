@@ -262,8 +262,49 @@ async def test_deliver_into_falls_back_when_there_is_no_material(monkeypatch):
 
     monkeypatch.setattr(compose, "gather_inward", no_material)
     t = await th.create("X")
-    with pytest.raises(ValueError, match="没找到"):
+    with pytest.raises(ValueError, match="没有可用的材料"):
         await th.deliver_into(t["id"], "weekly", "self")
+
+
+async def test_deliver_into_pins_what_is_attached_to_the_thread(monkeypatch):
+    """「这件事用过哪些材料」直接变成这次产出的材料（§4-14 的"加进这次产出"）。"""
+    from app.core import cards as cards_core
+    from app.core import compose
+    from app.core import deliver as deliver_engine
+    from app.core import report as _report
+
+    monkeypatch.setattr(
+        cards_core,
+        "collect_material",
+        lambda source_path="", text="", max_chars=0: (source_path, "钉的", "钉进来的正文"),
+    )
+
+    async def gathered(topic, **kw):
+        return [{"n": 1, "kind": "kb", "title": "捞的", "ref": "notes/b.md", "text": "捞的正文"}]
+
+    seen: dict = {}
+
+    async def fake_synth(topic, sources, prompt, *a, **kw):
+        seen["sources"] = sources
+        return _report.Report(
+            title="T", sections=[_report.Section(heading="H", body="B [1]")], used=[1]
+        )
+
+    async def fake_save(rep, sources):
+        return {"filename": "deliver/x.md", "title": "T", "chunks": 1}
+
+    monkeypatch.setattr(compose, "gather_inward", gathered)
+    monkeypatch.setattr(_report, "synthesize", fake_synth)
+    monkeypatch.setattr(deliver_engine, "save", fake_save)
+
+    t = await th.create("RAG")
+    await th.attach(t["id"], "note", "notes/a.md")
+    await th.deliver_into(t["id"], "weekly", "self")
+
+    srcs = seen["sources"]
+    assert [s["ref"] for s in srcs] == ["notes/a.md", "notes/b.md"]  # 钉的在前
+    assert [s["n"] for s in srcs] == [1, 2]  # 合并后重新编号
+    assert srcs[0]["text"] == "钉进来的正文"
 
 
 async def test_a_thread_with_nothing_on_it_costs_nothing():

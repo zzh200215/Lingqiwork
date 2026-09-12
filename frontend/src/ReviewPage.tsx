@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import CardList from './CardList'
 import CardMaker from './CardMaker'
 import HabitStrip, { type HabitStripHandle } from './HabitStrip'
 import { Markdown } from './markdown'
@@ -477,6 +478,9 @@ export default function ReviewPage() {
             />
 
             <SelfCheckLine />
+
+            {/* 卡片的清单界面（此前没有）——「事」上要能挂卡片，就得先能看见它们 */}
+            <CardList />
           </div>
         )}
 
