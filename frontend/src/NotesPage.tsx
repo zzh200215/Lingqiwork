@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import Layout from './Layout'
 import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
 import FeedbackButtons from './FeedbackButtons'
@@ -97,6 +97,12 @@ export default function NotesPage() {
   const cursorRef = useRef<number | null>(null)
   const chatBottomRef = useRef<HTMLDivElement | null>(null)
 
+  const [searchParams, setSearchParams] = useSearchParams()
+  const pathParam = searchParams.get('path')
+  // 落地时是否带着 `?path=` —— 带了就由深链 effect 开，没带才自动开第一篇。
+  // 用 ref 定格初值：这个判断只该在挂载时做一次。
+  const initialHadPath = useRef(!!pathParam)
+
   const refreshFiles = useCallback(async () => {
     const { files } = await api.listNotes()
     setFiles(files)
@@ -105,18 +111,22 @@ export default function NotesPage() {
 
   useEffect(() => {
     refreshFiles()
-      .then(async (fs) => {
-        // deep link from RAG citations: /notes.html?path=notes/xxx.md
-        const p = new URLSearchParams(window.location.search).get('path')
-        if (p) {
-          window.history.replaceState({}, '', '/notes.html')
-          await openNote(p)
-          return
-        }
-        if (fs.length) void openNote(fs[0].path)
+      .then((fs) => {
+        // 带 `?path=` 的落地交给下面那个 effect，这里别抢
+        if (!initialHadPath.current && fs.length) void openNote(fs[0].path)
       })
       .catch((e) => setError(String(e)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshFiles])
+
+  // 深链：`/notes?path=notes/xxx.md`（RAG 引用、知识库命中、复习页都往这跳）。
+  // **必须 key 在 search 上**：SPA 里同路由换 path 不会重挂这个组件，挂在 `[]` 上的
+  // effect 只跑一次——从一篇笔记点向另一篇就不换文件了（MPA 时代没有的回归）。
+  useEffect(() => {
+    if (!pathParam) return
+    void openNote(pathParam).then(() => setSearchParams({}, { replace: true }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathParam])
 
   // 零柒口吻的笔记简报（轻量、不阻塞列表）
   useEffect(() => {
@@ -682,7 +692,7 @@ export default function NotesPage() {
   }
 
   return (
-    <Layout page="notes">
+    <>
       <div className="flex h-full min-h-0">
         {/* file list */}
         <div className="hidden w-56 shrink-0 flex-col overflow-hidden border-r border-neutral-200/80 md:flex dark:border-neutral-800/80">
@@ -1366,16 +1376,16 @@ export default function NotesPage() {
                 compact
                 onSaved={(n) => setSavedAt(n > 0 ? `入库 ${n} 张卡片` : '')}
               />
-              <a
-                href="/review.html"
+              <Link
+                to="/review"
                 className="mt-3 block text-center text-[11px] text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
               >
                 去复习页 →
-              </a>
+              </Link>
             </div>
           </aside>
         )}
       </div>
-    </Layout>
+    </>
   )
 }

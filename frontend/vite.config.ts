@@ -18,14 +18,11 @@ export default defineConfig({
   plugins: [react()],
   build: {
     rollupOptions: {
+      // 只有三个真实入口：SPA 外壳，加两个全局热键弹的无边框窗口。
+      // `quick` / `selection` 刻意不进 SPA——它们要的是极短冷启动，
+      // 且是独立窗口，没有共享导航状态可言。
       input: {
         index: resolve(__dirname, 'index.html'),
-        tutor: resolve(__dirname, 'tutor.html'),
-        dashboard: resolve(__dirname, 'dashboard.html'),
-        notes: resolve(__dirname, 'notes.html'),
-        review: resolve(__dirname, 'review.html'),
-        settings: resolve(__dirname, 'settings.html'),
-        kb: resolve(__dirname, 'kb.html'),
         quick: resolve(__dirname, 'quick.html'),
         selection: resolve(__dirname, 'selection.html'),
       },

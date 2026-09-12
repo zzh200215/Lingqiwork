@@ -154,7 +154,7 @@ class SelectionApi:
         这里收尾——收起弹窗，主窗口深链直接打开那次会话。"""
         self.hide_selection()
         if main_window:
-            main_window.load_url(f"{URL}/tutor.html?session={session_id}")
+            main_window.load_url(f"{URL}/tutor?session={session_id}")
             main_window.show()
             main_window.restore()
 

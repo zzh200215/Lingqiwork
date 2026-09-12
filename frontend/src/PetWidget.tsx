@@ -16,7 +16,7 @@ export type PetAction =
 
 // 零柒 — the resident companion avatar fixed to the corner of the main workspace.
 //
-// This is NOT a separate window (that's PetView, /pet.html). This is the
+// This is NOT a separate window (that's PetView / QuickView). This is the
 // "real pet on the main screen" form: a rendered pet avatar fixed to the
 // bottom-right of every main page (chat/dashboard/notes/kb/settings via
 // Layout). It breathes, pops a speech bubble when the system does something,

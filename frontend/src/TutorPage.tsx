@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 
 import CodeBlock from './CodeBlock'
 import FeedbackButtons from './FeedbackButtons'
-import Layout from './Layout'
 import {
   api,
   type RoundtableResult,
@@ -139,6 +139,7 @@ function Bubble({ turn }: { turn: Turn }) {
 }
 
 export default function TutorPage() {
+  const [searchParams] = useSearchParams()
   const [sid, setSid] = useState<number | null>(null)
   const [topic, setTopic] = useState('')
   const [mode, setMode] = useState<'socratic' | 'feynman' | 'future'>('socratic')
@@ -625,28 +626,34 @@ export default function TutorPage() {
     }
   }, [clearResearch, clearDecide])
 
-  // 全局搜索深链：/tutor.html?session=ID 直接打开那次会话（教学命中从聊天页跳过来）
-  const deepLink = useRef(new URLSearchParams(window.location.search).get('session'))
-  // 深链只认一次。`beginWith` 的身份跟着 `busy` 变，于是这个 effect 会在每轮回答结束时
-  // 重跑一次、又开一场新会话（原来就有这个问题，只是要带深链才碰得到）；顺带它会
-  // 把半路在跑的方案/研究卡一起清掉。
-  const deepLinked = useRef(false)
+  // 全局搜索深链：`/tutor?session=ID` 直接打开那次会话（教学命中从聊天页跳过来）；
+  // 知识库页「陪读」深链：`/tutor?new=<话题>&repo=<仓库名>` 直接开一场陪读会话。
+  //
+  // **必须 key 在 search 上**：SPA 里同路由换参数不会重挂这个组件，读
+  // `window.location.search` 的一次性 effect 永远只认第一个值。
+  // 而「只认一次」这个守卫是冲着另一件事去的——`beginWith` 的身份跟着 `busy` 变，
+  // effect 会在每轮回答结束时重跑、又开一场新会话（原来就有这个问题，只是要带深链
+  // 才碰得到）。所以守卫按**参数值**记，而不是布尔：换一个 session 要能重新触发。
+  const sessionParam = searchParams.get('session')
+  const newTopic = searchParams.get('new')
+  const repoParam = searchParams.get('repo') ?? ''
+  const handledDeepLink = useRef<string | null>(null)
   useEffect(() => {
-    if (deepLinked.current) return
-    const s = Number(deepLink.current)
-    if (Number.isFinite(s) && s > 0) {
-      deepLinked.current = true
-      void open(s)
+    const key = sessionParam
+      ? `session:${sessionParam}`
+      : newTopic
+        ? `new:${newTopic}|${repoParam}`
+        : null
+    if (!key) {
+      handledDeepLink.current = null
       return
     }
-    // 知识库页「陪读」深链：?new=<话题>&repo=<仓库名> 直接开一场陪读会话
-    const params = new URLSearchParams(window.location.search)
-    const nt = params.get('new')
-    if (nt) {
-      deepLinked.current = true
-      void beginWith(nt, params.get('repo') || '')
-    }
-  }, [open, beginWith])
+    if (handledDeepLink.current === key) return
+    handledDeepLink.current = key
+    const s = Number(sessionParam)
+    if (sessionParam && Number.isFinite(s) && s > 0) void open(s)
+    else if (newTopic) void beginWith(newTopic, repoParam)
+  }, [sessionParam, newTopic, repoParam, open, beginWith])
 
   const reset = useCallback(() => {
     abortRef.current?.abort()
@@ -665,7 +672,7 @@ export default function TutorPage() {
   }, [clearResearch, clearDecide, clearConflict])
 
   return (
-    <Layout page="tutor">
+    <>
       <div className="flex min-w-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {sid === null ? (
@@ -811,9 +818,9 @@ export default function TutorPage() {
               {modelOk ? null : (
                 <p className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
                   当前默认模型最近失败过，回答可能出不来。去
-                  <a href="/settings.html" className="underline">
+                  <Link to="/settings" className="underline">
                     设置
-                  </a>
+                  </Link>
                   换一个。
                 </p>
               )}
@@ -1288,7 +1295,7 @@ export default function TutorPage() {
           </div>
         </aside>
       </div>
-    </Layout>
+    </>
   )
 }
 

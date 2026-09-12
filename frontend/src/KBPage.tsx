@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import Layout from './Layout'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, type DirItem, type EvalItem, type EvalRun, type KgRetrieval, type KgStatus, type RepoItem } from './api'
 import BookmarkletLink from './BookmarkletLink'
 import { buildBookmarklet, parseClipParams } from './capture'
@@ -63,6 +63,8 @@ const hitColor = (v: number) =>
       : 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
 
 export default function KbPage() {
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [tab, setTab] = useState<'index' | 'repos' | 'dirs' | 'eval' | 'kg'>('index')
   const [stats, setStats] = useState<KbStats | null>(null)
   const [drift, setDrift] = useState<{ count: number; drifted: string[] } | null>(null)
@@ -486,20 +488,25 @@ export default function KbPage() {
 
   // 书签小工具打开的就是这个深链（`?clip=<url>&title=<t>`）：剪完自己关掉。
   // 只有脚本开的窗口 close() 才有效——正是小工具的形态；若把链接粘进普通标签页，
-  // opener 为空，结果就留在页面上给人看。ref 守卫掉 StrictMode 的双次执行。
-  const deeplinkDone = useRef(false)
+  // opener 为空，结果就留在页面上给人看。
+  // `done` 挡两件事：StrictMode 的双次执行，和 SPA 里 setSearchParams 引发的重渲染。
+  const deeplinkDone = useRef<string | null>(null)
+  const clipParam = searchParams.get('clip')
+  const clipTitle = searchParams.get('title') ?? ''
   useEffect(() => {
-    if (deeplinkDone.current) return
-    const req = parseClipParams(window.location.search)
+    const req = parseClipParams(searchParams.toString())
     if (!req) return
-    deeplinkDone.current = true
-    window.history.replaceState({}, '', '/kb.html')
+    const key = `${req.url} ${req.title}`
+    if (deeplinkDone.current === key) return
+    deeplinkDone.current = key
+    setSearchParams({}, { replace: true })
     void runClip(req.url, req.title || undefined).then((ok) => {
       if (ok && window.opener) window.setTimeout(() => window.close(), 3000)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [clipParam, clipTitle, setSearchParams])
 
+  // origin 是**文档属性**，不是路由属性——这里不能用 router 的东西去「转」它
   const bookmarklet = buildBookmarklet(window.location.origin)
 
   function copyBookmarklet() {
@@ -530,7 +537,7 @@ export default function KbPage() {
   const dirsTotalChunks = dirs.reduce((s, d) => s + (d.enabled ? (d.chunks ?? 0) : 0), 0)
 
   return (
-    <Layout page="kb">
+    <>
       <div className="mx-auto max-w-7xl px-6 py-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -884,12 +891,12 @@ export default function KbPage() {
                       <span className="font-mono">{pct(h.score)}</span>
                     </span>
                     {h.source?.endsWith('.md') && (
-                      <a
-                        href={`/notes.html?path=${encodeURIComponent(h.source)}`}
+                      <Link
+                        to={`/notes?path=${encodeURIComponent(h.source)}`}
                         className="text-violet-500 transition-colors hover:text-violet-700 hover:underline dark:text-violet-400"
                       >
                         打开
-                      </a>
+                      </Link>
                     )}
                   </span>
                 </div>
@@ -1049,9 +1056,11 @@ export default function KbPage() {
                         <button
                           onClick={() => {
                             // 代码库陪读：深链开一场教学会话，取材限定在这个仓库里
-                            window.location.href = `/tutor.html?new=${encodeURIComponent(
-                              `跟我读 ${r.name} 这个仓库的代码结构`
-                            )}&repo=${encodeURIComponent(r.name)}`
+                            navigate(
+                              `/tutor?new=${encodeURIComponent(
+                                `跟我读 ${r.name} 这个仓库的代码结构`
+                              )}&repo=${encodeURIComponent(r.name)}`
+                            )
                           }}
                           className="rounded-md border border-violet-400 px-2.5 py-1 text-xs text-violet-600 dark:border-violet-500 dark:text-violet-300"
                         >
@@ -1645,6 +1654,6 @@ export default function KbPage() {
         </>
       )}
       </div>
-    </Layout>
+    </>
   )
 }

@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import Layout from './Layout'
 import CodeBlock from './CodeBlock'
 import { api, type AgentPreset, type Conversation, type PromptItem, type ProviderConfig } from './api'
 import { streamChat, streamCollab, type SourceRef, type ToolTrace } from './stream'
@@ -181,12 +181,12 @@ const MessageRow = React.memo(function MessageRow({
                         )}
                       </span>
                       {s.source?.endsWith('.md') && (
-                        <a
-                          href={`/notes.html?path=${encodeURIComponent(s.source)}`}
+                        <Link
+                          to={`/notes?path=${encodeURIComponent(s.source)}`}
                           className="shrink-0 text-violet-500 transition-colors hover:text-violet-700 hover:underline dark:text-violet-400"
                         >
                           打开
-                        </a>
+                        </Link>
                       )}
                     </div>
                     <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap text-neutral-400">{s.text}</p>
@@ -272,9 +272,9 @@ const MessageRow = React.memo(function MessageRow({
 
 export default function App() {
   return (
-    <Layout page="chat">
+    <>
       <ChatView />
-    </Layout>
+    </>
   )
 }
 
@@ -288,6 +288,8 @@ function ChatView() {
   const [error, setError] = useState('')
   const [useRag, setUseRag] = useState(() => localStorage.getItem('useRag') !== '0')
   const [convQuery, setConvQuery] = useState('')
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [agents, setAgents] = useState<AgentPreset[]>([])
   const [agentId, setAgentId] = useState<number | null>(null)
   const [collabOpen, setCollabOpen] = useState(false)
@@ -436,9 +438,9 @@ function ChatView() {
 
   async function jumpToHit(hit: SearchHit) {
     setSearchOpen(false)
-    // 教学命中跳「学」页深链打开那次会话；教学是独立入口页，不能只切状态
+    // 教学命中跳「学」页深链打开那次会话；教学是另一个模块，不能只切状态
     if (hit.source === 'tutor') {
-      window.location.href = `/tutor.html?session=${hit.ref_id}`
+      navigate(`/tutor?session=${hit.ref_id}`)
       return
     }
     await openConversation(hit.ref_id)
@@ -462,19 +464,32 @@ function ChatView() {
     api.listAgents().then(setAgents).catch(() => {})
     api.listPrompts().then(setPrompts).catch(() => {})
     api.listNotes().then((r) => setNoteFiles(r.files.map((f) => f.path))).catch(() => {})
-    // deep link from dashboard: /?conv=<id>
-    const params = new URLSearchParams(window.location.search)
-    const convParam = params.get('conv')
-    if (convParam) {
+  }, [refreshProviders, refreshConversations])
+
+  // 深链：`/?conv=<id>`（仪表盘、侧栏最近对话）与 `/?new=1`（侧栏「＋ 新对话」）。
+  // **必须 key 在 search 上**：SPA 里同路由换参数不会重挂这个组件，挂在 `[]` 上的
+  // effect 只跑一次——从「最近对话」连点两条，第二条就不生效了。这是 MPA 时代
+  // 没有的回归（那时每次点击都是整页加载）。
+  // `handled` 挡住同一个值被处理两次：`setSearchParams` 触发的重渲染会再进这里。
+  const handledLink = useRef<string | null>(null)
+  const convParam = searchParams.get('conv')
+  const newParam = searchParams.get('new')
+  useEffect(() => {
+    const key = convParam ? `conv:${convParam}` : newParam === '1' ? 'new' : null
+    if (!key) {
+      handledLink.current = null // 参数清掉之后，同一个值应该能再触发一次
+      return
+    }
+    if (handledLink.current === key) return
+    handledLink.current = key
+    if (key === 'new') {
+      void newChat()
+    } else {
       const id = Number(convParam)
       if (Number.isFinite(id) && id > 0) void openConversation(id)
-      window.history.replaceState({}, '', '/')
-    } else if (params.get('new') === '1') {
-      // sidebar "＋ 新对话" from another page hands the intent over via URL
-      void newChat()
-      window.history.replaceState({}, '', '/')
     }
-  }, [refreshProviders, refreshConversations])
+    setSearchParams({}, { replace: true })
+  }, [convParam, newParam, setSearchParams, newChat, openConversation])
 
   const slashMatches = useMemo(() => {
     if (!slashOpen) return []

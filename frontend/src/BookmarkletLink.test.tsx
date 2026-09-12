@@ -17,8 +17,8 @@ describe('BookmarkletLink', () => {
     expect(href).not.toContain('React has blocked')
   })
 
-  it('指向这个 origin 下的 kb.html —— 拖到书签栏后点一下才回得来', () => {
-    expect(hrefOf('http://192.168.1.5:8012')).toContain('http://192.168.1.5:8012/kb.html')
+  it('指向这个 origin 下的 /kb 路由 —— 拖到书签栏后点一下才回得来', () => {
+    expect(hrefOf('http://192.168.1.5:8012')).toContain('http://192.168.1.5:8012/kb?clip=')
   })
 
   it('是 draggable 的（拖到书签栏是唯一的安装方式）', () => {

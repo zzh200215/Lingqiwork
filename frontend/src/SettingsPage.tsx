@@ -1,5 +1,4 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import Layout from './Layout'
 import { api, type AgentPreset, type ArenaResult, type BackupList, type CostSummary, type EngineEvalLatest, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
 
 /** 四个成文引擎的展示顺序（与 core/engine_eval.ENGINES 一致）。 */
@@ -998,7 +997,7 @@ export default function SettingsPage() {
     'w-full rounded-md border border-neutral-300 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-700'
 
   return (
-    <Layout page="settings">
+    <>
       <div className="mx-auto max-w-6xl px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold">设置</h1>
@@ -1579,7 +1578,7 @@ export default function SettingsPage() {
           </div>
           <div className="mb-3 rounded-xl bg-neutral-100 px-3 py-2 text-xs leading-relaxed text-neutral-500 dark:bg-neutral-800/60 dark:text-neutral-400">
             复习已封存：不再有每日到期提醒，也不再有每周补讲。
-            页面还在 <code>/review.html</code>，你自己想开就开；它不会再主动找你。
+            页面还在 <code>/review</code>，你自己想开就开；它不会再主动找你。
           </div>
           <button
             onClick={savePrefs}
@@ -3400,6 +3399,6 @@ export default function SettingsPage() {
         </main>
       </div>
       </div>
-    </Layout>
+    </>
   )
 }

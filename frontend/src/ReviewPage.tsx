@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
@@ -6,7 +7,6 @@ import remarkGfm from 'remark-gfm'
 import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
 import HabitStrip, { type HabitStripHandle } from './HabitStrip'
-import Layout from './Layout'
 import SelfCheckLine from './SelfCheckLine'
 import { api, type CardGrade, type CardItem, type CardStats, type TodayNext } from './api'
 
@@ -37,7 +37,7 @@ const KIND_LABEL: Record<string, string> = {
 const MAX_REQUEUE = 3
 const UNDO_WINDOW_MS = 5000
 
-/** `repo:` / `dir:` cards live outside the vault, where /notes.html cannot reach. */
+/** `repo:` / `dir:` cards live outside the vault, where the /notes route cannot reach. */
 const isVaultSource = (s: string) => !!s && !s.startsWith('repo:') && !s.startsWith('dir:')
 
 function Markdown({ children }: { children: string }) {
@@ -305,9 +305,9 @@ export default function ReviewPage() {
       if (e.key === 'o' || e.key === 'O') {
         if (!card.source) return
         e.preventDefault()
-        // /notes.html only serves vault paths; repo:/dir: cards get their path copied
+        // the /notes route only serves vault paths; repo:/dir: cards get their path copied
         if (isVaultSource(card.source)) {
-          window.open('/notes.html?path=' + encodeURIComponent(card.source), '_blank')
+          window.open('/notes?path=' + encodeURIComponent(card.source), '_blank')
         } else {
           void navigator.clipboard?.writeText(card.source)
         }
@@ -325,7 +325,7 @@ export default function ReviewPage() {
   const truncated = dueTotal > 0 && cap > 0 && dueTotal > total
 
   return (
-    <Layout page="review">
+    <>
       <div className="mx-auto max-w-3xl px-6 py-6">
         <header className="mb-5 flex flex-wrap items-center gap-3">
           <h1 className="bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-xl font-semibold text-transparent">
@@ -446,12 +446,12 @@ export default function ReviewPage() {
                     >
                       建第一张卡 <kbd className="ml-1 text-[10px] opacity-80">N</kbd>
                     </button>
-                    <a
-                      href="/notes.html"
+                    <Link
+                      to="/notes"
                       className="rounded-lg border border-neutral-200 px-3 py-1.5 text-sm text-neutral-600 transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300"
                     >
                       去笔记页划词
-                    </a>
+                    </Link>
                   </div>
                 </div>
               )}
@@ -486,12 +486,12 @@ export default function ReviewPage() {
                   </button>
                 )}
                 {next.action.kind === 'settings' && (
-                  <a
-                    href="/settings.html"
+                  <Link
+                    to="/settings"
                     className="ml-auto shrink-0 rounded-lg border border-rose-300 px-2.5 py-1 font-medium text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10"
                   >
                     {next.action.label} →
-                  </a>
+                  </Link>
                 )}
               </section>
             )}
@@ -599,7 +599,7 @@ export default function ReviewPage() {
                   isVaultSource(card.source) ? (
                     <button
                       onClick={() =>
-                        window.open('/notes.html?path=' + encodeURIComponent(card.source), '_blank')
+                        window.open('/notes?path=' + encodeURIComponent(card.source), '_blank')
                       }
                       className="hover:text-violet-600 dark:hover:text-violet-300"
                       title={card.source}
@@ -693,7 +693,7 @@ export default function ReviewPage() {
           </section>
         )}
       </div>
-    </Layout>
+    </>
   )
 }
 

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { Link, Outlet, useNavigate } from 'react-router-dom'
 
 import PetWidget from './PetWidget'
 import { api } from './api'
+import { useModule } from './routes'
 
 // Theme + shared sidebar layout for all pages
 
@@ -38,25 +40,21 @@ function Logo() {
   )
 }
 
-// 「学」排第二位：主线就是它。/review.html（今日队列 + 习惯）
-// 按第 3 节封存 —— 页面还在，只从导航移走，因为「到期了要还债」的感觉正是被否
-// 掉的那一版。文件名仍是 review.html，改入口要动 vite.config.ts 和书签。
+// 「学」排第二位：主线就是它。`/review`（今日队列 + 习惯）刻意**不在导航里**——
+// 页面还在（路由表和书签都保留），只是「到期了要还债」那种感觉正是被否掉的那一版。
 const NAV = [
   { href: '/', label: '对话', icon: '💬', key: 'chat' },
-  { href: '/tutor.html', label: '学', icon: '🎓', key: 'tutor' },
-  { href: '/dashboard.html', label: '仪表盘', icon: '📊', key: 'dashboard' },
-  { href: '/notes.html', label: '笔记', icon: '📝', key: 'notes' },
-  { href: '/kb.html', label: '知识库', icon: '📚', key: 'kb' },
-  { href: '/settings.html', label: '设置', icon: '⚙️', key: 'settings' },
+  { href: '/tutor', label: '学', icon: '🎓', key: 'tutor' },
+  { href: '/dashboard', label: '仪表盘', icon: '📊', key: 'dashboard' },
+  { href: '/notes', label: '笔记', icon: '📝', key: 'notes' },
+  { href: '/kb', label: '知识库', icon: '📚', key: 'kb' },
+  { href: '/settings', label: '设置', icon: '⚙️', key: 'settings' },
 ] as const
 
-export default function Layout({
-  page,
-  children,
-}: {
-  page: 'chat' | 'kb' | 'settings' | 'dashboard' | 'notes' | 'review' | 'tutor'
-  children: React.ReactNode
-}) {
+export default function Layout() {
+  // 由当前路径推导，不是 prop：埋点和「最近对话」都要**每次路由变化**重新触发
+  const page = useModule()
+  const navigate = useNavigate()
   const [conversations, setConversations] = useState<{ id: number; title: string }[]>([])
 
   // open-count baseline. best-effort: a failing telemetry call must
@@ -87,7 +85,7 @@ export default function Layout({
               // on the chat page App already listens for this (tray menu uses it);
               // elsewhere hand the intent over via URL so App creates it on load
               if (page === 'chat') window.dispatchEvent(new Event('workbench:new-chat'))
-              else window.location.href = '/?new=1'
+              else navigate('/?new=1')
             }}
             className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 hover:brightness-110 dark:shadow-violet-900/60 dark:hover:shadow-violet-700/60"
           >
@@ -97,9 +95,9 @@ export default function Layout({
 
         <nav className="flex flex-col gap-1 px-3">
           {NAV.map((n) => (
-            <a
+            <Link
               key={n.key}
-              href={n.href}
+              to={n.href}
               className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
                 page === n.key
                   ? 'bg-violet-100 font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
@@ -108,7 +106,7 @@ export default function Layout({
             >
               <span className="text-[15px] leading-none">{n.icon}</span>
               {n.label}
-            </a>
+            </Link>
           ))}
         </nav>
 
@@ -119,13 +117,13 @@ export default function Layout({
             </p>
             <nav className="flex flex-col gap-0.5">
               {conversations.map((c) => (
-                <a
+                <Link
                   key={c.id}
-                  href={'/?conv=' + c.id}
+                  to={'/?conv=' + c.id}
                   className="truncate rounded-lg px-3 py-1.5 text-sm text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200"
                 >
                   {c.title}
-                </a>
+                </Link>
               ))}
             </nav>
           </div>
@@ -144,13 +142,9 @@ export default function Layout({
           </div>
         </div>
       </aside>
-      {/* chat and 学 own their scrolling: both keep a composer pinned at the
-          bottom, which a page-level overflow container would scroll away */}
-      {page === 'chat' || page === 'tutor' ? (
-        children
-      ) : (
-        <main className="flex-1 overflow-y-auto">{children}</main>
-      )}
+      {/* 滚动/高度容器已上提到 RouteShell（routes.tsx）——它与「页面能不能裸渲染」
+          是同一件事，两个地方都需要。 */}
+      <Outlet />
       <PetWidget />
     </div>
   )

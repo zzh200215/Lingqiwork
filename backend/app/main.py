@@ -2,11 +2,13 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import BASE_DIR, settings
@@ -245,17 +247,50 @@ class NoCacheStaticFiles(StaticFiles):
     - *.html / index are `no-cache` so a rebuild shows up on the next refresh
       (Vite hashes JS/CSS filenames, so fresh HTML always pulls fresh assets);
     - assets/*.js|css are content-hashed → long-lived immutable caching.
+
+    Also the SPA fallback: the frontend is now one shell with client-side routes
+    (`/kb`, `/tutor`…), so any unknown path that *looks like a route* gets
+    `index.html` back and the router decides what to render. Without this every
+    deep link 404s in the packaged form (dev never hits it — vite serves there).
     """
 
     async def get_response(self, path: str, scope):
-        response = await super().get_response(path, scope)
         # normalize Windows backslashes from os.path.join in StaticFiles.get_path
         rel = (path or "").lstrip("/\\").replace("\\", "/")
+        try:
+            response = await super().get_response(path, scope)
+        except HTTPException as e:
+            if e.status_code != 404 or not self._is_spa_route(rel, scope):
+                raise
+            response = await super().get_response("index.html", scope)
+            response.headers["Cache-Control"] = "no-cache"
+            return response
         if rel.endswith(".html") or rel in ("", "index.html"):
             response.headers["Cache-Control"] = "no-cache"
         elif rel.startswith("assets/"):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
+
+    @staticmethod
+    def _is_spa_route(rel: str, scope) -> bool:
+        """这个 404 该不该用 SPA 外壳兜住。
+
+        - 只认 GET/HEAD。走到这里时其实已经是 GET/HEAD 了（`StaticFiles.get_response`
+          对别的方法先抛 405），留这一条是让这个判断独立成立，而不是依赖父类的行为。
+        - `api/` `mcp/` 不归这里管（它们有自己的路由，且受 token 保护）；
+        - **缺的静态资源不兜**——否则 `assets/typo.js` 会拿到一份 HTML，浏览器报
+          的是 MIME 错误而不是干净的 404，排查起来南辕北辙。
+          但 `.html` 要兜：`/kb.html` 已经不是真实文件了（前端收成单个外壳），
+          而**存量书签小工具打的正是这个地址**——不兜就等于把它们全废掉。
+        """
+        if scope.get("method") not in ("GET", "HEAD"):
+            return False
+        # 裸 `mcp` / `api` 也要盖住：MCP 的端点正好是 `/mcp`，不是 `/mcp/...`
+        if rel in ("api", "mcp") or rel.startswith(("api/", "mcp/")):
+            return False
+        name = Path(rel).name
+        ext = name.rsplit(".", 1)[1].lower() if "." in name else ""
+        return ext in ("", "html")
 
 
 if STATIC_DIR.exists():

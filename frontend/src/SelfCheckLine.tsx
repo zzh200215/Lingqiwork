@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { api, type SelfCheck } from './api'
 
@@ -64,12 +65,12 @@ export default function SelfCheckLine() {
       {check.never_probed && check.models_total > 0 && (
         <span className="text-neutral-400">· 模型可用性还没测过</span>
       )}
-      <a
-        href="/settings.html"
+      <Link
+        to="/settings"
         className="ml-auto underline decoration-dotted underline-offset-2 hover:no-underline"
       >
         {check.never_probed || t === 'bad' ? '去测一下' : '详情'}
-      </a>
+      </Link>
     </div>
   )
 }

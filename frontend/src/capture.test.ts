@@ -62,8 +62,8 @@ describe('buildBookmarklet', () => {
     expect(bm).toContain('?clip=\'+u+\'&title=\'+t')
   })
 
-  it('目标是同源的 kb.html —— 顶层导航绕开 CORS，不能指向别的源', () => {
-    expect(bm).toContain("window.open('http://127.0.0.1:8000/kb.html?clip='")
+  it('目标是同源的 /kb 路由 —— 顶层导航绕开 CORS，不能指向别的源', () => {
+    expect(bm).toContain("window.open('http://127.0.0.1:8000/kb?clip='")
   })
 
   it('origin 末尾的斜杠不会拼出双斜杠', () => {

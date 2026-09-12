@@ -42,9 +42,12 @@ export function asSingleUrl(text: string): string | null {
  * 走 `window.open` 顶层导航而不是 `fetch`：CORS 只放行 vite dev server，且 https
  * 页面里跨源 fetch 会被浏览器拦——顶层导航不受这两条限制。
  * origin 由调用方给（`window.location.origin`），dev(5173) 与打包(8000) 都对。
+ *
+ * 目标是路由 `/kb`（不是 `/kb.html`）。已经拖到别人书签栏里的旧小工具仍写着
+ * `/kb.html`——路由层把 `.html` 当别名，那条路继续有效，别去动它。
  */
 export function buildBookmarklet(origin: string): string {
-  const target = `${origin.replace(/\/+$/, '')}/kb.html`
+  const target = `${origin.replace(/\/+$/, '')}/kb`
   return (
     'javascript:(()=>{' +
     'const u=encodeURIComponent(location.href),t=encodeURIComponent(document.title);' +

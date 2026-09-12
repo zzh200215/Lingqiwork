@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import FeedbackButtons from './FeedbackButtons'
-import Layout from './Layout'
 import {
   api,
   type BeliefThread,
@@ -292,7 +292,7 @@ export default function DashboardPage() {
   const taskRate = ts?.rate != null ? Math.round(ts.rate * 100) : null
 
   return (
-    <Layout page="dashboard">
+    <>
       <div className="mx-auto max-w-6xl px-6 py-8">
         <section className="relative overflow-hidden rounded-3xl border border-neutral-200 bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 p-6 shadow-sm dark:border-neutral-800 dark:from-violet-950/40 dark:via-neutral-900 dark:to-fuchsia-950/30">
           <div className="flex items-start gap-5">
@@ -415,7 +415,7 @@ export default function DashboardPage() {
                     .join(' · ')
                 : '还没开过口'
             }
-            href="/tutor.html"
+            href="/tutor"
           />
           <NarrativeCard
             tone="fuchsia"
@@ -423,7 +423,7 @@ export default function DashboardPage() {
             headline={`${stats?.memories ?? 0}`}
             label="零柒记下的事"
             sub={nar && nar.today_messages > 0 ? `今天聊了 ${nar.today_messages} 条` : '还在观察'}
-            href="/settings.html"
+            href="/settings"
           />
           <NarrativeCard
             tone="emerald"
@@ -431,7 +431,7 @@ export default function DashboardPage() {
             headline={nar ? `+${nar.today_vault_files}` : '0'}
             label="vault 今天新增"
             sub={stats ? `共 ${stats.vault_files} 篇笔记` : '加载中…'}
-            href="/kb.html"
+            href="/kb"
           />
           <NarrativeCard
             tone={ts && (ts.error ?? 0) > 0 ? 'rose' : 'sky'}
@@ -439,7 +439,7 @@ export default function DashboardPage() {
             headline={taskRate != null ? `${taskRate}%` : '—'}
             label="30 天成功率"
             sub={ts ? `${ts.ok}/${ts.runs_30d} 完成` : '还没有任务记录'}
-            href="/settings.html"
+            href="/settings"
           />
         </div>
 
@@ -809,9 +809,9 @@ export default function DashboardPage() {
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
               定时任务{stats && stats.tasks_total ? ` · ${stats.tasks_total} 个启用中` : ''}
             </h2>
-            <a href="/settings.html" className="text-xs text-violet-600 hover:underline dark:text-violet-400">
+            <Link to="/settings" className="text-xs text-violet-600 hover:underline dark:text-violet-400">
               管理任务 →
-            </a>
+            </Link>
           </div>
           {stats && stats.tasks.length > 0 ? (
             <ul className="mt-3 divide-y divide-neutral-100 dark:divide-neutral-800">
@@ -848,7 +848,7 @@ export default function DashboardPage() {
           </p>
         )}
       </div>
-    </Layout>
+    </>
   )
 }
 
@@ -894,8 +894,8 @@ function NarrativeCard({
     rose: 'from-rose-600 to-orange-500',
   }
   return (
-    <a
-      href={href}
+    <Link
+      to={href}
       className="group block rounded-2xl border border-neutral-200 bg-white p-5 transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md hover:shadow-violet-100/60 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-violet-500/40"
     >
       <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">{eyebrow}</p>
@@ -904,6 +904,6 @@ function NarrativeCard({
       </p>
       <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{label}</p>
       <p className="mt-2 text-[11px] font-medium text-violet-600 dark:text-violet-400">{sub}</p>
-    </a>
+    </Link>
   )
 }
