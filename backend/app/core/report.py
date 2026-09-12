@@ -204,7 +204,7 @@ async def resolve(model_id: str = ""):
     """默认 provider → (ProviderInfo, model)；解析不了返回 None。
 
     用单个 provider + `structured.extract_json` 的三级降级。产出是一次拉取式动作，
-    模型挂了在开流之前就被路由拦下（PLAN 第 9 节）。
+    模型挂了在开流之前就被路由拦下。
     """
     from app.core import providers
     from app.core.llm import ProviderInfo

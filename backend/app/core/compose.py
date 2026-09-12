@@ -67,7 +67,7 @@ __all__ = [
 
 
 async def _default_kb(query: str, top_k: int) -> list[dict]:
-    """引擎的「对照你自己的材料」：把话题多问几遍再检索（PLAN §10.2「检索」）。"""
+    """引擎的「对照你自己的材料」：把话题多问几遍再检索。"""
     from app.core import retriever
 
     return await retriever.deep_search(query, top_k)

@@ -325,7 +325,7 @@ def test_run_happy_path(wired, monkeypatch):
     assert report["prompt_sha"] == report_mod.prompt_sha(research._SYNTH_PROMPT)
 
 
-# ---------- 多轮深研究（PLAN §10.3 D）：发现缺口 → 再搜 → 信息饱和 ----------
+# ---------- 多轮深研究：发现缺口 → 再搜 → 信息饱和 ----------
 
 _REPORT_JSON = '{"title":"R","sections":[{"heading":"H","body":"B [1]"}],"used":[1]}'
 

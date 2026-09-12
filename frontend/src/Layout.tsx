@@ -59,7 +59,7 @@ export default function Layout({
 }) {
   const [conversations, setConversations] = useState<{ id: number; title: string }[]>([])
 
-  // open-count baseline (PLAN 第0周). best-effort: a failing telemetry call must
+  // open-count baseline. best-effort: a failing telemetry call must
   // never delay or break the page it is reporting on
   useEffect(() => {
     api.visit(page).catch(() => {})

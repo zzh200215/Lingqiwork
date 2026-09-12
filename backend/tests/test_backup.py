@@ -141,7 +141,7 @@ def test_manifest_spells_out_what_is_not_in_the_archive(live):
 @pytest.mark.skipif(not secrets._load(), reason="DPAPI unavailable off Windows")
 def test_archive_carries_secrets_only_as_ciphertext(live):
     """This zip is the thing you hand-carry between machines — that is exactly the
-    'once copied out it never comes back' case in PLAN §10.1 #5. A working key
+    'once copied out it never comes back' case. A working key
     must not be inside it, even though the config file is."""
     from app.core.prefs import save_config
 

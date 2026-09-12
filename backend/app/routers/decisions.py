@@ -1,7 +1,7 @@
 """决策日志 + 校准分 HTTP layer. Every rule lives in `app/core/decision_log.py`.
 
 `GET /api/decisions` 给全部条目 + 校准分；`POST` 记一条判断；`PUT /{id}/review` 记应验
-结果；`DELETE /{id}` 删一条。拉取式——没有任何定时任务或提醒碰这张表（PLAN 第 2 节）。
+结果；`DELETE /{id}` 删一条。拉取式——没有任何定时任务或提醒碰这张表。
 """
 
 from fastapi import APIRouter, HTTPException

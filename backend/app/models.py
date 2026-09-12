@@ -377,13 +377,13 @@ class HabitLog(Base):
 
 
 class UsageVisit(Base):
-    """One day the user actually opened a page — the "打开次数" baseline (PLAN 第0周).
+    """One day the user actually opened a page — the "打开次数" baseline.
 
     At most one row per (page, day), enforced by the unique index, so a reload
     never inflates the count. `day` is a LOCAL calendar date string for the same
     reason as `HabitLog.day`: the only question it answers is "did I open it that
     day", and every timezone-aware comparison in this codebase has been a bug.
-    The table exists because PLAN needs a 7-day usage baseline and nothing else
+    The table exists because a 7-day usage baseline was wanted and nothing else
     recorded "did the user open the app today" before.
     """
 
@@ -540,7 +540,7 @@ class EngineEvalRun(Base):
 
 
 class DecisionLog(Base):
-    """一条「判断 + 依据 + 信心」，以及事后回看的应验结果（PLAN §10.3 C：校准分）。
+    """一条「判断 + 依据 + 信心」，以及事后回看的应验结果（校准分）。
 
     **为什么要写「信心」。** 判断做出的时候人心里是有个把握程度的，但过几个月回头，只会
     记得蒙对的那几次。把信心在**当时**钉下来，才谈得上校准——「你当时说七成把握的那类事，
@@ -564,7 +564,7 @@ class DecisionLog(Base):
 
 
 class ModelUsage(Base):
-    """一次**操作**的模型用量（按模型汇总成一行）：PLAN §10.2「成本」。
+    """一次**操作**的模型用量（按模型汇总成一行）。
 
     **为什么要有它。** `messages`（聊天）与 `task_runs`（定时任务）各记一条，但**其余
     路径全都不记**——研究 / 产出 / 复盘 / 方案 / 对质 / 教学 / 圆桌 / 播客 / 卡片 /

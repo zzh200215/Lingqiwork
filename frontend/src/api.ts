@@ -295,7 +295,7 @@ export interface BeliefThread {
   items: { id: number; content: string; kind: string }[]
 }
 
-// ---------- 决策日志 + 校准分 (PLAN §10.3 C) ----------
+// ---------- 决策日志 + 校准分 ----------
 
 export type DecisionOutcome = '' | 'hit' | 'miss' | 'unclear'
 
@@ -339,7 +339,7 @@ export interface DecisionLogView {
   calibration: Calibration
 }
 
-// ---------- 用量与成本 (PLAN §10.2) ----------
+// ---------- 用量与成本 ----------
 
 export interface CostKindRow {
   in: number
@@ -797,7 +797,7 @@ export interface ArenaResult {
   seconds: number
 }
 
-/** 今日页「今天下一步」建议 (PLAN 第0周). */
+/** 今日页「今天下一步」建议. */
 export interface TodayNext {
   text: string
   tone: 'bad' | 'normal' | 'idle'

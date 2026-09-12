@@ -114,7 +114,7 @@ def _is_noise(chunk: str) -> bool:
 
 
 def chunk_text(text: str) -> list[str]:
-    """结构感知的切分（PLAN §10.2「检索」的语义分块）。
+    """结构感知的切分（语义分块）。
 
     三步：
     1. **丢掉纯符号块**（`---` 这类）——它们不承载内容，只是占名额。

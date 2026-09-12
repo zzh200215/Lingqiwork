@@ -10,7 +10,7 @@ import sys
 import time
 import urllib.request
 
-# --- API token (PLAN §10.1 #6): the smoke scripts are exactly the kind of
+# --- API token: the smoke scripts are exactly the kind of
 # external caller the guard exists for, so they present a token. Children
 # inherit it because env dicts spread os.environ. ---
 _WB_TOKEN = os.environ.setdefault("WB_API_TOKEN", "smoke-token")

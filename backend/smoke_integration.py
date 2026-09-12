@@ -307,7 +307,7 @@ def _sse_report(path: str, body: dict) -> dict | None:
 
 
 def leg_backup() -> None:
-    print("\n[6] 备份闭环（密钥以密文入包，见 PLAN §10.1 #5）")
+    print("\n[6] 备份闭环（密钥以密文入包）")
     status, body, _ = _call("POST", "/api/backup/run", {})
     if status != 200 or not body.get("ok"):
         bad("跑一次备份", f"got {status}: {body}")

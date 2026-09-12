@@ -945,7 +945,7 @@ export default function SettingsPage() {
     api.engineEvalLatest().then(setEngineEval).catch(() => {})
   }, [section, engineEval])
 
-  // 用量与成本：以前只有聊天与定时任务记账，其余路径一点都看不见（PLAN §10.2「成本」）
+  // 用量与成本：以前只有聊天与定时任务记账，其余路径一点都看不见
   const [cost, setCost] = useState<CostSummary | null>(null)
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-"""The /api/* and /mcp token guard (PLAN §10.1 #6).
+"""The /api/* and /mcp token guard.
 
 The middleware lives on `app.main`, so these use a real TestClient. The client is
 deliberately NOT entered as a context manager: entering it would run the app's

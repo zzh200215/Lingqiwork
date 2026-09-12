@@ -656,7 +656,7 @@ export async function streamDecide(
   return done
 }
 
-// ---------- 跨源对质 (PLAN §10.3 B) ----------
+// ---------- 跨源对质 ----------
 
 /** 一处对不上：两侧的来源编号 + 一句话说清哪一点撞上了。 */
 export interface ConflictPair {

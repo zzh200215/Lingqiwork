@@ -1,4 +1,4 @@
-"""Secrets are ciphertext at rest (PLAN §10.1 #5).
+"""Secrets are ciphertext at rest.
 
 The point of the whole module: a backup zip hand-carried to another machine must
 not carry working keys. These tests pin the sealing, the transparent read/write

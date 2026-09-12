@@ -21,7 +21,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-# --- API token (PLAN §10.1 #6): the smoke scripts are exactly the kind of
+# --- API token: the smoke scripts are exactly the kind of
 # external caller the guard exists for, so they present a token. Children
 # inherit it because env dicts spread os.environ. ---
 _WB_TOKEN = os.environ.setdefault("WB_API_TOKEN", "smoke-token")
@@ -81,7 +81,7 @@ async def mcp_drill() -> None:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    # /mcp 现在也要 token（PLAN §10.1 #6）：真实 MCP 客户端连进来同样得带 header。
+    # /mcp 现在也要 token：真实 MCP 客户端连进来同样得带 header。
     # SDK 只在 http_client 上收 header，所以要自己包一个带 header 的 client。
     import httpx2
 

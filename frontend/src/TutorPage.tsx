@@ -429,7 +429,7 @@ export default function TutorPage() {
     setCfBusy(false)
   }, [])
 
-  // 对质（PLAN §10.3 B）：先出 `frame`（我理解要比的是什么），再取材，然后 `finding`
+  // 对质：先出 `frame`（我理解要比的是什么），再取材，然后 `finding`
   // 把「哪两处对不上」扫出来——一处都没有就直接给结论，不再烧一次长篇成文。
   const runConflict = useCallback(async () => {
     const t = topic.trim()

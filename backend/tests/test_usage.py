@@ -1,4 +1,4 @@
-"""Offline tests for opening-count telemetry (PLAN 第0周).
+"""Offline tests for opening-count telemetry.
 
 Uses a scratch db (WB_DB_PATH env before import, same pattern as test_health.py).
 The rules tested: record_visit is idempotent per (page, day), only known pages

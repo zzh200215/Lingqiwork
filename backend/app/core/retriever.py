@@ -4,7 +4,7 @@ The BM25 corpus is rebuilt from ChromaDB documents whenever the index
 changes (generation counter). Chinese/English tokenization via jieba.
 Fusion uses Reciprocal Rank Fusion: score = sum(1 / (k + rank)), k=60.
 
-外面还有三件（PLAN §10.2「检索」）：
+外面还有三件：
 - **按来源限块** `_diversify`：一次 top-6 里出现过 3 条来自同一个文件（实测），喂给引擎的
   「你的材料」就变成同一页的三份。限块之后广度优先，不够再原序回填，不会比原来更少。
 - **结果缓存**：同一句查询不再重复付 BM25 + 向量 + cross-encoder 重排的钱。索引一变
@@ -208,7 +208,7 @@ def hybrid_search(query: str, top_k: int = 5, candidate_k: int = 20) -> list[dic
     return final
 
 
-# ---------- 多问几遍（PLAN §10.2「检索」） ----------
+# ---------- 多问几遍 ----------
 
 
 def search_multi(queries: list[str], top_k: int = 5) -> list[dict]:

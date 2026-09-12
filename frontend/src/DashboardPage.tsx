@@ -63,7 +63,7 @@ export default function DashboardPage() {
   // 信念演化时间线（记忆时间轴主题）：纯拉取式的自我观察，没有就整块不渲染
   const [beliefs, setBeliefs] = useState<BeliefThread[] | null>(null)
 
-  // 决策日志 + 校准分（PLAN §10.3 C）：把「判断 + 依据 + 当时的把握」在**当时**钉下来，
+  // 决策日志 + 校准分：把「判断 + 依据 + 当时的把握」在**当时**钉下来，
   // 几个月后回看才谈得上校准。拉取式——没有到期、没有队列、没有提醒（第 2 节）；
   // `outcome` 空着就是还没回看，没有任何东西会催它。
   const [decisions, setDecisions] = useState<DecisionLogView | null>(null)

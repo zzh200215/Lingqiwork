@@ -2,7 +2,7 @@
 
 四条已有链路的方位各不同：`research` 向外求真（这件事是什么）、`compose` 向内整合（我攒了
 什么）、`recap` 向后看（我最近在干什么）、`decide` 向前（我该怎么选）。这条是**横向**——
-不问「是什么」，问「这些材料彼此对不对得上」。PLAN §10.3 把它标成「从仓储升级成顾问的
+不问「是什么」，问「这些材料彼此对不对得上」——「从仓储升级成顾问的
 分界线，市面上基本空白」。
 
 **它凭什么比直接问模型强**：矛盾的其中一侧往往是你自己的记录（上次的结论、当时踩的坑），
@@ -285,7 +285,7 @@ async def frame_confrontation(
 
 
 async def _default_kb(query: str, top_k: int) -> list[dict]:
-    """引擎的「对照你自己的材料」：把话题多问几遍再检索（PLAN §10.2「检索」）。"""
+    """引擎的「对照你自己的材料」：把话题多问几遍再检索。"""
     from app.core import retriever
 
     return await retriever.deep_search(query, top_k)
@@ -363,7 +363,7 @@ async def gather(
     except Exception:  # noqa: BLE001 - 记忆挂了只是没有这一路
         log.warning("conflict memory gather failed", exc_info=True)
 
-    # 3) 外部来源：对质的另一侧。没有它，薄库上几乎无话可说（见 PLAN 第 3 节）
+    # 3) 外部来源：对质的另一侧。没有它，薄库上几乎无话可说
     seen_urls: set[str] = set()
     hits: list[dict] = []
     for q in queries or [subject]:

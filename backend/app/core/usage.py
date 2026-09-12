@@ -1,4 +1,4 @@
-"""Opening-count telemetry (PLAN 第0周: 连续 7 天记录打开次数).
+"""Opening-count telemetry: 连续 7 天记录打开次数.
 
 Sole job: answer "did the user open the app on which days". At most one row per
 (page, day) — the unique index in models.py makes record_visit idempotent, so a

@@ -284,7 +284,7 @@ async def _default_fetch(url: str) -> str:
 
 
 async def _default_kb(query: str, top_k: int) -> list[dict]:
-    """引擎的「对照你自己的材料」：把话题多问几遍再检索（PLAN §10.2「检索」）。
+    """引擎的「对照你自己的材料」：把话题多问几遍再检索。
 
     一次取材只走一次这条路，多一次便宜的改写调用换更全的回收，值得；改写失败会自己退回
     只搜原话。
