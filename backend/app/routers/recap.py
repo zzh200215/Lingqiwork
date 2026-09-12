@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.core import inflight
 from app.core import recap as core
 
 router = APIRouter(prefix="/api/recap", tags=["recap"])
@@ -40,6 +41,9 @@ async def recap_run(body: RecapIn | None = None):
 
     days = max(1, min(int((body.days if body else core.DAYS) or core.DAYS), 365))
 
+    if not inflight.try_acquire("recap"):
+        raise HTTPException(409, "上一次复盘还在跑——等它结束再开新的")
+
     async def gen():
         try:
             async for event, data in core.run(days=days):
@@ -47,6 +51,8 @@ async def recap_run(body: RecapIn | None = None):
         except Exception as e:  # noqa: BLE001 - mid-stream, so report as an event
             log.exception("recap failed")
             yield _sse("error", {"message": f"{type(e).__name__}: {e}"})
+        finally:
+            inflight.release("recap")
 
     return StreamingResponse(
         gen(),

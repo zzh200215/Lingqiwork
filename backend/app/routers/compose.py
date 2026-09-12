@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core import compose as core
+from app.core import inflight
 from app.core.compose import Report, Section
 
 router = APIRouter(prefix="/api/compose", tags=["compose"])
@@ -53,6 +54,9 @@ async def compose_run(body: ComposeIn):
     if not (providers.default_model_id() or ""):
         raise HTTPException(503, "没有已启用的 provider，请先在设置页配置模型")
 
+    if not inflight.try_acquire("compose"):
+        raise HTTPException(409, "上一次产出还在跑——等它结束再开新的")
+
     async def gen():
         try:
             async for event, data in core.run(topic):
@@ -60,6 +64,8 @@ async def compose_run(body: ComposeIn):
         except Exception as e:  # noqa: BLE001 - mid-stream, so report as an event
             log.exception("compose failed")
             yield _sse("error", {"message": f"{type(e).__name__}: {e}"})
+        finally:
+            inflight.release("compose")
 
     return StreamingResponse(
         gen(),
