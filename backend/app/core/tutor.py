@@ -1,12 +1,12 @@
 """对话式教学：说出想搞懂什么 → 先探理解 → 讲一段 → 出题 → 记下卡点。
 
-The direction settled on 2026-09-05 (PLAN.md 第 1 节), replacing 制卡 + 间隔复习.
+The direction settled on 2026-09-05, replacing 制卡 + 间隔复习.
 The load-bearing part is not the chat — any model does chat — it is that a
 session ends with a 概念 / 自评 / 卡点 triple, and that the next session on a
 related topic gets those triples back. If that recall never fires or never
-helps, PLAN.md 第 5 节 says to cut it, so it is kept in one module.
+helps, it gets cut, so it is kept in one module.
 
-RAG 取材 was deliberately absent in the first step (PLAN.md 第 6 节) and added
+RAG 取材 was deliberately absent in the first step and added
 afterwards as 第 7 节's first item (2026-09-06, gate lifted by the user): the
 teaching now draws on the user's own vault / clippings when they match, but
 stays silent when they don't. No tools, no scheduled jobs. Heavy imports stay
@@ -41,7 +41,7 @@ RECALL_MIN_SIM = 0.62  # cosine floor. 验收 asks that recall be *right*, not j
 # (measured in smoke_tutor_accept.py), so 0.68 would silence recall on exactly
 # the encounters it exists for. Lower is the other failure: at the original
 # guess of 0.45 「Rust 的所有权」 pulled 「asyncio 事件循环」 at 0.555 and two of
-# three recalled lines were wrong, which from the outside is PLAN.md 第 5 节's
+# three recalled lines were wrong, which from the outside is the
 # 「触发了但没用」 — recall killed for a tuning reason.
 #
 # What is left as a real boundary: a past session with no `aliases` (extraction
@@ -163,7 +163,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
 async def start(topic: str, repo: str = "", mode: str = "socratic") -> dict:
     """Open a session on `topic`. Pins the model so the teaching voice can't
     change mid-session; reports whether that model is known-broken so the page
-    can say so instead of failing on the first turn (PLAN.md 第 9 节).
+    can say so instead of failing on the first turn.
 
     `repo` 非空 = 代码库陪读：这场会话的取材只在 repos/<repo>/ 的 chunk 里找，
     仓库必须已在 prefs 的 repos 里索引过。
@@ -351,7 +351,7 @@ def format_recall(hits: list[dict]) -> str:
     )
 
 
-# ---------- 学习画像：全量概念的水平一览（PLAN.md 第 7 节，参考 ChatApp 用户画像） ----------
+# ---------- 学习画像：全量概念的水平一览（参考 ChatApp 用户画像） ----------
 
 
 async def profile() -> dict:
@@ -498,7 +498,7 @@ async def _future_dossier() -> str:
         return ""
 
 
-# ---------- 取材：讲你自己的材料，而不是通用答案（PLAN.md 第 7 节 第 1 条） ----------
+# ---------- 取材：讲你自己的材料，而不是通用答案 ----------
 
 
 def format_material(sources: list[dict]) -> str:
@@ -846,7 +846,7 @@ def _clean_aliases(raw, concept: str = "") -> str:
     Pure and separate from `_extract` because aliases exist only to be embedded:
     junk here (the concept echoed back, a comma string instead of a list, twenty
     of them) does not raise anywhere — it silently changes what recall matches
-    on, which is the one thing PLAN.md 第 4 节 calls this product's only value.
+    on, which is the one thing this product calls its only value.
     """
     if isinstance(raw, str):
         items: list = re.split(r"[、,，;；/|\n]+", raw)

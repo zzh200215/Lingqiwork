@@ -30,7 +30,7 @@ import {
   type TutorRecallHit,
 } from './stream'
 
-// 对话式教学 (PLAN.md 第 6 节 第一步). You name something to understand, it asks
+// 对话式教学 (第一步). You name something to understand, it asks
 // before it explains, and a session ends as 概念 / 自评 / 卡点.
 //
 // What is deliberately absent is the point: no due dates, no queue, no streak, no

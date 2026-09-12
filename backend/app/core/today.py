@@ -1,4 +1,4 @@
-"""「今天下一步」——现在只剩一件事：后台是不是坏了（PLAN.md 第 2、3 节）。
+"""「今天下一步」——现在只剩一件事：后台是不是坏了。
 
 Pure rule, no I/O, no model: the suggestion must work even when the default
 model is broken, because the exact shape of the 2026-09-04 incident is "后台挂

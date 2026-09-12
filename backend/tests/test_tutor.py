@@ -1,10 +1,10 @@
-"""Offline tests for 对话式教学 (PLAN.md 第 6 节 第一步).
+"""Offline tests for 对话式教学 (第一步).
 
 Scratch db via WB_DB_PATH before import, same pattern as test_usage.py. No model
 and no embedder are touched: `_embed`, `_stream` and `_extract` are the three
 seams, monkeypatched per test.
 
-What is actually pinned here is the part PLAN.md 第 4 节 calls the only unique
+What is actually pinned here is the part the product calls its only unique
 value — that a session ends as a 概念/自评/卡点 triple, that a later related topic
 gets it back, and that an *unrelated* topic does not.
 """

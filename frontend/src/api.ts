@@ -860,10 +860,10 @@ export async function streamNotesAi(
   }
 }
 
-// ---------- 对话式教学 (PLAN.md 第 6 节) ----------
+// ---------- 对话式教学 ----------
 
 /** end() 的返回：概念/别名/卡点之外，`material_nearby` 是「材料里还有」，
- * 只在自评总结里出现一次（PLAN.md 第 7 节，第 2 节护栏版——不是队列）。
+ * 只在自评总结里出现一次（护栏版——不是队列）。
  * `transfer` 是「换个场景试试」的检验问题，同样只在总结里出现一次。 */
 export interface TutorEndResult {
   id: number
@@ -1537,7 +1537,7 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       method: 'POST',
       body: JSON.stringify({ topic, repo: repo || '', mode: mode || 'socratic' }),
     }),
-  /** 懂了 / 半懂 / 没用 — the only manual input in the product (PLAN.md 第 4 节) */
+  /** 懂了 / 半懂 / 没用 — the only manual input in the product */
   tutorEnd: (session_id: number, verdict: 'got' | 'half' | 'useless') =>
     request<TutorEndResult>('/api/tutor/end', {
       method: 'POST',

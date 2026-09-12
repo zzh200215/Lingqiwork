@@ -1,7 +1,7 @@
 """对话式教学 HTTP layer. Every rule lives in `app/core/tutor.py`.
 
 Its own router rather than a branch inside `chat.py`: this step needs none of
-chat's RAG / tools / compare / image machinery, and PLAN.md 第 5 节 says the tutor
+chat's RAG / tools / compare / image machinery, and the tutor
 must be removable in one piece — deleting one router file and two tables should
 be the whole job.
 
@@ -45,7 +45,7 @@ def _sse(event: str, data: dict) -> str:
 @router.post("/start")
 async def start(body: StartIn):
     """Open a session. Reports `model_ok` so a dead model is visible up front
-    instead of on the first reply (PLAN.md 第 9 节)."""
+    instead of on the first reply."""
     try:
         return await core.start(body.topic, repo=body.repo, mode=body.mode)
     except ValueError as e:

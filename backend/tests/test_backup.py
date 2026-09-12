@@ -1,4 +1,4 @@
-"""Offline tests for 备份与恢复 (PLAN.md 第 8 节).
+"""Offline tests for 备份与恢复.
 
 第 8 节把「备份能恢复」列为唯一一件晚做就来不及的事：理解状态是这个产品唯一不可
 重建的资产。`smoke_restore.py` 拿真实归档做整套演练；这里钉的是对任何一个归档都

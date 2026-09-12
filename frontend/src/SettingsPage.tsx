@@ -1578,7 +1578,7 @@ export default function SettingsPage() {
             </label>
           </div>
           <div className="mb-3 rounded-xl bg-neutral-100 px-3 py-2 text-xs leading-relaxed text-neutral-500 dark:bg-neutral-800/60 dark:text-neutral-400">
-            复习已按 PLAN.md 第 3 节封存：不再有每日到期提醒，也不再有每周补讲。
+            复习已封存：不再有每日到期提醒，也不再有每周补讲。
             页面还在 <code>/review.html</code>，你自己想开就开；它不会再主动找你。
           </div>
           <button

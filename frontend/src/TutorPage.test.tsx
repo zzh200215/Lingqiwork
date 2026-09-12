@@ -102,7 +102,7 @@ describe('streamTutorSay', () => {
     expect(done.error).toBe('没有 provider')
   })
 
-  it('abort 信号转发给 fetch —— 中断传播的前端一半（PLAN.md 第 7 节）', async () => {
+  it('abort 信号转发给 fetch —— 中断传播的前端一半', async () => {
     const frames = [
       'event: delta\ndata: {"text":"讲"}\n\n',
       'event: done\ndata: {}\n\n',

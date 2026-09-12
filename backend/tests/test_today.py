@@ -1,4 +1,4 @@
-"""Offline tests for 「今天下一步」(PLAN.md 第 2、3 节).
+"""Offline tests for 「今天下一步」.
 
 `next_suggestion` is a pure function over a facts dict — no DB, no clock, no
 network — so the priority ordering is testable with plain dicts. The priority is

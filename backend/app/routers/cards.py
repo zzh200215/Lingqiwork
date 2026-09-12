@@ -212,8 +212,8 @@ async def search_material(q: str, top_k: int = 6):
     already came from that source — so the panel needs no mapping logic of its
     own and `kb.py` stays untouched.
 
-    First call after a cold start pulls in the embedder and reranker (~6s per
-    PLAN.md v0.10), so the caller must show a waiting state.
+    First call after a cold start pulls in the embedder and reranker (~6s),
+    so the caller must show a waiting state.
     """
     import asyncio
 

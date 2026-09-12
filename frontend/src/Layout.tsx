@@ -38,7 +38,7 @@ function Logo() {
   )
 }
 
-// 「学」排第二位：PLAN.md 第 1 节的主线就是它。/review.html（今日队列 + 习惯）
+// 「学」排第二位：主线就是它。/review.html（今日队列 + 习惯）
 // 按第 3 节封存 —— 页面还在，只从导航移走，因为「到期了要还债」的感觉正是被否
 // 掉的那一版。文件名仍是 review.html，改入口要动 vite.config.ts 和书签。
 const NAV = [

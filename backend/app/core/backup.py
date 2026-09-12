@@ -6,7 +6,7 @@ archived: it is fully rebuildable from vault via the KB rebuild endpoint.
 
 What is *not* in the archive is listed in the manifest rather than left to be
 discovered during a restore — see `NOT_INCLUDED`. `smoke_restore.py` rehearses
-the whole path (PLAN.md 第 8 节) and will tell you if any of this drifts.
+the whole path and will tell you if any of this drifts.
 """
 import json
 import logging

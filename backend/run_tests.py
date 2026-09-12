@@ -1,4 +1,4 @@
-"""Run backend tests one file per process (PLAN.md 第 9 节).
+"""Run backend tests one file per process.
 
 Every test file sets its own WB_DB_PATH, and the async engine binds the db file
 at first import — so running several files in one pytest process silently

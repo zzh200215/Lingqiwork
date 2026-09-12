@@ -32,9 +32,9 @@ KEEP_RUNS = 20  # per job_id, matching the per-task run log in core/tasks.py
 # 2026-09-04 `cards_remind` and `cards_remediate` were off and nothing said so —
 # they simply did not appear anywhere.
 #
-# Those two are now deliberately absent from this table: PLAN.md 第 3 节 封存了
-# 复习提醒，`cards.reschedule()` 永远不再注册它们。留在表里的话 `self_check` 会一直把
-# 它们算进 `jobs_missing`（「应该在跑但没注册」），而那正是第 9 节唯一在乎的信号 ——
+# Those two are now deliberately absent from this table: 复习提醒已封存，
+# `cards.reschedule()` 永远不再注册它们。留在表里的话 `self_check` 会一直把
+# 它们算进 `jobs_missing`（「应该在跑但没注册」），而那正是本模块唯一在乎的信号 ——
 # 一个永远亮着的假警报会把真故障淹掉。
 KNOWN_JOBS = {
     "daily_digest": "digest_enabled",

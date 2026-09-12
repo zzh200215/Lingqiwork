@@ -423,7 +423,7 @@ class JobRun(Base):
 class TutorSession(Base):
     """One 教学会话: you name something to understand, and it asks until you get it.
 
-    Deliberately NOT a Conversation row. The tutor is the one thing PLAN.md says
+    Deliberately NOT a Conversation row. The tutor is the one thing that
     must be removable in one piece if its failure signals fire, and a `kind`
     column on `conversations` would instead leak into every existing chat query.
 
@@ -431,7 +431,7 @@ class TutorSession(Base):
     so they default to "" rather than being nullable: a session with no verdict is
     a real state (you closed the tab), not a broken row.
 
-    The 「理解状态」PLAN.md asks for is this table grouped by concept — not a
+    The 「理解状态」 is this table grouped by concept — not a
     second table. A separate one would mean keeping two copies of the same fact
     in sync, and every write already passes through here.
     """
@@ -451,7 +451,7 @@ class TutorSession(Base):
     # 不能是空格：别名自己会带空格（「event loop 调度」），切碎了就成噪声。
     aliases: Mapped[str] = mapped_column(Text, default="")
     # Whether 「你上次卡过」 actually fired here. This is instrumentation, not a
-    # feature: PLAN.md 第 5 节 kills recall if it never triggers, and that call
+    # feature: recall gets cut if it never triggers, and that call
     # should not depend on remembering to hand-count it in LOG.md.
     recalled: Mapped[bool] = mapped_column(Boolean, default=False)
     # 历史压缩缓存（maple-os 参考项）：超出 HISTORY_LIMIT 的中段不是丢掉，而是

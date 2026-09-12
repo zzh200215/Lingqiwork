@@ -1,5 +1,5 @@
 """Global search across conversations + tutor turns (SQLite LIKE — fine at
-personal scale; PLAN.md 实测过语义检索对「精确找回」不可靠，全文才是对的工具).
+personal scale; 实测过语义检索对「精确找回」不可靠，全文才是对的工具).
 
 教学轮次从 2026-09-06 起一并覆盖（EvoForge 参考项：每个过去的会话都可搜索）：
 聊天命中带 conversation_id，教学命中带 session_id，前端按 source 跳转。

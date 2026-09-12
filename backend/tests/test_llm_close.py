@@ -1,4 +1,4 @@
-"""流式中断的取消传播（PLAN.md 第 7 节台账）：调用方取消时，上游 HTTP 流必须
+"""流式中断的取消传播（台账）：调用方取消时，上游 HTTP 流必须
 被显式关闭——没有 finally close，页面 abort 后底层响应要等 GC 兜底，上游继续
 烧完整个回复。anthropic 分支靠 `async with` 已是确定性关闭，这里钉 openai 分支。
 """

@@ -301,7 +301,7 @@ export interface TutorRecallHit {
   via?: 'concept' | 'alias'
 }
 
-/** One KB chunk the teaching drew on this turn (PLAN.md 第 7 节 取材). */
+/** One KB chunk the teaching drew on this turn (取材). */
 export interface TutorMaterialSource {
   source: string
   title: string

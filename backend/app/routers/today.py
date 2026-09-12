@@ -5,7 +5,7 @@ suggestion and the self-check line can never disagree about the backend being
 down). No model call anywhere: the suggestion must render even when the default
 model is broken — that is the entire point.
 
-卡片队列与习惯的事实按 PLAN.md 第 3 节封存，不再取 —— 顺带省掉了每次打开都跑一遍
+卡片队列与习惯的事实已封存，不再取 —— 顺带省掉了每次打开都跑一遍
 `cards.queue()` + `cards.stats()` + `habits.today_view()`。
 """
 import logging

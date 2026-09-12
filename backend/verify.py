@@ -1,4 +1,4 @@
-"""One entry point for the two heavier verification tiers (PLAN.md 第 9 节 验证节奏).
+"""One entry point for the two heavier verification tiers (验证节奏).
 
     T0  seconds   ad-hoc: run the one test file you just touched.
     T1  ~1-2 min  this script, no model calls:

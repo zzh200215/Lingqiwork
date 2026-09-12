@@ -526,7 +526,7 @@ def test_streak_counts_back_from_today_and_survives_yesterday_only():
     assert cards_mod._streak(set()) == 0
 
 
-# ---------- 封存：主动层必须是哑的（PLAN.md 第 2、3、6 节）----------
+# ---------- 封存：主动层必须是哑的 ----------
 
 
 def test_reschedule_registers_nothing_even_with_the_flags_on(monkeypatch):

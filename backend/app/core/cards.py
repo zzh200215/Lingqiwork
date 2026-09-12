@@ -257,7 +257,7 @@ def collect_material(
     Exactly one of source_path / text must be given. Three kinds of source_path:
     a vault-relative path, or a `repo:`/`dir:` spec for indexed material outside
     the vault. The `text` entry exists for everything with no file at all —
-    PLAN.md sits at the repo root and would never pass the containment check.
+    A file at the repo root would never pass the containment check.
 
     `max_chars` defaults to the model's input budget; the read-only pane passes
     PANE_MAX_CHARS instead, because a human selecting a span is not a prompt.
@@ -1119,7 +1119,7 @@ REMEDY_CARDS = 3
 
 
 def reschedule() -> None:
-    """封存：不再注册每日提醒与每周补讲（PLAN.md 第 2、3、6 节）。
+    """封存：不再注册每日提醒与每周补讲。
 
     这两个作业就是上一版「到期了要还债」的主动层 —— 20:00 弹一句「今天有 N 张卡到期」，
     周日 21:00 写一篇补讲。第 2 节的判断标准只有一条：任何机制一旦产生「欠着没做」的

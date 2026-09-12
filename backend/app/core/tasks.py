@@ -163,7 +163,7 @@ async def _resolve(model_id: str) -> tuple[ProviderConfig, str]:
 async def _candidates(model_id: str) -> list[tuple[ProviderInfo, str, str]]:
     """(info, model, label) 降级链（maple-os 参考项）：先解析到的主 provider，
     然后其余每个已启用 provider 各带上它的第一个模型。链的优先级就是启用列表
-    的顺序——这是隐式配置，不新增设置项（PLAN.md 第 9 节）。"""
+    的顺序——这是隐式配置，不新增设置项。"""
     primary, model = await _resolve(model_id)
     out = [
         (
