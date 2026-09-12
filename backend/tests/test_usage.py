@@ -43,7 +43,7 @@ async def _init_db() -> None:
 
 
 def test_valid_page_whitelist():
-    for good in ("chat", "review", "dashboard", "notes", "kb", "settings"):
+    for good in ("chat", "tutor", "work", "review", "dashboard", "notes", "kb", "settings"):
         assert core.valid_page(good) is True
     for bad in ("", "  ", "weird.html", "chat/", "CON"):
         assert core.valid_page(bad) is False

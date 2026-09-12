@@ -6,13 +6,14 @@
 import { useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-export type Module = 'chat' | 'tutor' | 'dashboard' | 'notes' | 'kb' | 'settings' | 'review'
+export type Module = 'chat' | 'tutor' | 'work' | 'dashboard' | 'notes' | 'kb' | 'settings' | 'review'
 
-/** 路径 → 模块。`/review` 在表里但**不进导航**：页面还在、书签还有效，
-    只是「到期了要还债」那种感觉正是被否掉的那一版（见 Layout 的注释）。 */
+/** 路径 → 模块。`/review` 现在是**进了导航的「今日」**（复习队列 + 习惯打卡）——
+    够不着是客观缺陷，已修；主动提醒本身仍然封存（复习是你想起来才做的事）。 */
 export const ROUTES: Record<string, Module> = {
   '/': 'chat',
   '/tutor': 'tutor',
+  '/work': 'work',
   '/dashboard': 'dashboard',
   '/notes': 'notes',
   '/kb': 'kb',
@@ -23,11 +24,12 @@ export const ROUTES: Record<string, Module> = {
 const TITLES: Record<Module, string> = {
   chat: '对话',
   tutor: '学',
+  work: '工作',
   dashboard: '仪表盘',
   notes: '笔记',
   kb: '知识库',
   settings: '设置',
-  review: '复盘',
+  review: '今日',
 }
 
 /** 把路径规范化成路由表里的形状；不是已知路由就返回 null。

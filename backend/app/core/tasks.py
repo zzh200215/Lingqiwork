@@ -316,6 +316,8 @@ async def run_task(
             if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
                 WATCH_HOOK(task_id)
             await _distill(snapshot, answer)
+            # 打分管在最后：它是一次额外的模型调用，别让它拖住下游任务（`_fire_chain`）
+            await _score_run(run_id, snapshot, sources, answer)
         else:
             await _finish_run(
                 run_id, "error", error=error, model_id=model_id,
@@ -535,6 +537,72 @@ async def _last_failure(task_id: int) -> str:
     if row is None or row.status != "error":
         return ""
     return (row.error or "").strip()
+
+
+def _judge_sources(hits: list[dict]) -> list[dict]:
+    """检索命中 → 判分器能吃的材料形状（`report.format_sources` 要 `n` 与 `kind`）。Pure.
+
+    检索给的是 `{source, text, score}`，判分器要的是编号材料——这里补上编号，
+    空正文的命中丢掉（它本来也判不了）。
+    """
+    out: list[dict] = []
+    for h in hits or []:
+        text = str(h.get("text") or "").strip()
+        if not text:
+            continue
+        src = str(h.get("source") or "").strip()
+        out.append(
+            {
+                "n": len(out) + 1,
+                "kind": "kb",
+                "title": str(h.get("title") or src),
+                "ref": src,
+                "text": text,
+            }
+        )
+    return out
+
+
+async def _score_run(run_id: int, t: dict, sources: list[dict], answer: str) -> None:
+    """跑完给这次产出打一个**接地分**（0-5）并落在 run 上——工作流的网。
+
+    为什么是它（§4-10）：工作流在你不看的时候跑，「跑成功但悄悄变差」不进 `last_status`。
+    分数掉下来是唯一看得见的信号。判据复用 `engine_eval` 的 LLM 判分，与五个成文引擎同一套。
+
+    **没材料就不打分**（没开检索 / 检索没命中）：没有尺子可量，别编一个分出来。
+    整体 best-effort——判分挂了不能让一次成功的运行变成失败。
+    """
+    pairs = _judge_sources(sources)
+    if not pairs or not (answer or "").strip():
+        return
+    try:
+        candidates = await _candidates(t.get("model_id") or "")
+    except Exception:  # noqa: BLE001 - 解析不到 provider，就只是这次没有分
+        log.debug("task grounding judge skipped: no provider", exc_info=True)
+        return
+    if not candidates:
+        return
+    info, model, _label = candidates[0]
+
+    from app.core import engine_eval
+
+    try:
+        grounded, reason = await engine_eval.judge_grounded(
+            info, model, "task", t.get("prompt") or t.get("name") or "", pairs, answer
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("task grounding judge failed", exc_info=True)
+        return
+
+    try:
+        async with SessionLocal() as db:
+            row = await db.get(TaskRun, run_id)
+            if row is not None:
+                row.grounded = grounded
+                row.judge_reason = (reason or "")[:200]
+                await db.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("task grounding score write failed", exc_info=True)
 
 
 async def _execute(t: dict, log_entries: list[dict]) -> dict:

@@ -778,6 +778,15 @@ export default function NotesPage() {
                           <span className="truncate">📄 {f.path}</span>
                         </button>
                         <span className="ml-1 shrink-0 text-[10px] text-neutral-400">{relTime(f.mtime)}</span>
+                        {/* 「成文 + 笔记」那一对：在这篇里成文，把另一篇摆在侧栏。
+                            走的是 `?path=` 深链（Phase 1 就有了），不新造协议。 */}
+                        <button
+                          onClick={() => aside.toggle('/notes?path=' + encodeURIComponent(f.path))}
+                          className="ml-1 hidden shrink-0 text-neutral-400 hover:text-violet-600 group-hover:block"
+                          title="在右侧并排打开这一篇 —— 一边写，一边翻"
+                        >
+                          ⧉
+                        </button>
                         <button
                           onClick={() => removeNote(f.path)}
                           className="ml-1 hidden shrink-0 text-neutral-400 hover:text-red-500 group-hover:block"

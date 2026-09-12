@@ -32,6 +32,7 @@ from app.routers import (
     dashboard,
     decide,
     decisions,
+    deliver,
     dirs,
     evals,
     feeds,
@@ -58,6 +59,7 @@ from app.routers import (
     today,
     tutor,
     usage,
+    work,
 )
 
 # surface app/core logs (watcher, indexer, embedder) — uvicorn sets root to WARNING
@@ -93,11 +95,16 @@ async def _migrate() -> None:
         ("messages", "tokens_out", "ALTER TABLE messages ADD COLUMN tokens_out INTEGER"),
         ("task_runs", "tokens_in", "ALTER TABLE task_runs ADD COLUMN tokens_in INTEGER"),
         ("task_runs", "tokens_out", "ALTER TABLE task_runs ADD COLUMN tokens_out INTEGER"),
+        # 工作流运行的尺子（§4-10）：接地分 0-5 + 一句话理由
+        ("task_runs", "grounded", "ALTER TABLE task_runs ADD COLUMN grounded INTEGER"),
+        ("task_runs", "judge_reason", "ALTER TABLE task_runs ADD COLUMN judge_reason TEXT DEFAULT ''"),
         # tutor history compression (maple-os 参考项：长会话中段压缩)
         ("tutor_sessions", "summary", "ALTER TABLE tutor_sessions ADD COLUMN summary TEXT DEFAULT ''"),
         ("tutor_sessions", "summary_upto", "ALTER TABLE tutor_sessions ADD COLUMN summary_upto INTEGER DEFAULT 0"),
         ("tutor_sessions", "repo", "ALTER TABLE tutor_sessions ADD COLUMN repo VARCHAR(100) DEFAULT ''"),
         ("tutor_sessions", "mode", "ALTER TABLE tutor_sessions ADD COLUMN mode VARCHAR(10) DEFAULT 'socratic'"),
+        # 卡点清单：待解 / 已解（NULL = 待解）
+        ("tutor_sessions", "stuck_resolved_at", "ALTER TABLE tutor_sessions ADD COLUMN stuck_resolved_at DATETIME"),
     ]
     async with engine.begin() as conn:
         for table, col, ddl in stmts:
@@ -201,6 +208,7 @@ app.include_router(beliefs.router)
 app.include_router(roundtable.router)
 app.include_router(research.router)
 app.include_router(compose.router)
+app.include_router(deliver.router)
 app.include_router(recap.router)
 app.include_router(decide.router)
 app.include_router(conflict.router)
@@ -229,6 +237,7 @@ app.include_router(health_router.router)
 app.include_router(today.router)
 app.include_router(tutor.router)
 app.include_router(usage.router)
+app.include_router(work.router)
 
 # MCP server（streamable HTTP，只读工具）挂在 /mcp；session manager 由 lifespan 启动。
 # 必须在静态文件的 / 挂载之前装（见 mcp_server 模块 docstring 的坑位说明）。

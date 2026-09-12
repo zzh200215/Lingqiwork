@@ -201,6 +201,9 @@ def _run_out(r: TaskRun) -> dict:
         "tool_calls": r.tool_calls,
         "error": r.error,
         "answer": r.answer,
+        # 接地分 0-5（§4-10）：null = 没打分（没材料 / 判分没跑成）
+        "grounded": r.grounded,
+        "judge_reason": r.judge_reason or "",
         "log": log_entries,
     }
 

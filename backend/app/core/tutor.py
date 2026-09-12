@@ -388,6 +388,65 @@ async def profile() -> dict:
     }
 
 
+CONCEPTS_CAP = 200  # 学习轨迹一屏放得下的量；超出按最近时间截断
+
+
+async def concepts() -> list[dict]:
+    """按概念分组的学习轨迹，**纯派生，不落库** —— 「我学到哪了」的真值。
+
+    `profile()` 只回答「哪些说通了 / 半懂」（两个裸清单），够用来校准讲解，但答不了
+    「这个概念什么时候碰的、卡在哪、以前卡过的点接回来过几次」。这里补的就是这个切面：
+    一个概念一行 = 最近一次自评 + 那次的卡点（**以及解没解**）+ 最后一次时间 + 会话次数
+    + 召回触发次数。
+
+    与 `stuck_points` 的分工：那是**逐条卡点记录**（同一概念可能有多条），这是**按概念
+    收敛后的当前状态**。与 `profile()` 同一条线：useless 不算数（教学没成，证明不了
+    水平），每个概念取最近一次——说通了后来又卡住，以新的为准。
+    """
+    try:
+        from sqlalchemy import select
+
+        from app.db import SessionLocal
+        from app.models import TutorSession, iso_utc
+
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TutorSession)
+                    .where(TutorSession.concept != "", TutorSession.verdict.in_(("got", "half")))
+                    .order_by(TutorSession.id)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 - 派生视图，坏了也不挡教学
+        log.warning("tutor concepts query failed", exc_info=True)
+        return []
+
+    agg: dict[str, dict] = {}
+    for r in rows:  # id 升序遍历：后写覆盖，即最近一次为准
+        cur = agg.setdefault(
+            r.concept,
+            {
+                "concept": r.concept,
+                "verdict": "",
+                "stuck": "",
+                "stuck_resolved": False,
+                "last_at": "",
+                "last_session_id": 0,
+                "sessions": 0,
+                "recalled": 0,
+            },
+        )
+        cur["verdict"] = r.verdict
+        cur["stuck"] = r.stuck or ""
+        cur["stuck_resolved"] = r.stuck_resolved_at is not None
+        cur["last_at"] = iso_utc(r.created_at)
+        cur["last_session_id"] = r.id
+        cur["sessions"] += 1
+        cur["recalled"] += 1 if r.recalled else 0
+    ordered = sorted(agg.values(), key=lambda c: c["last_at"], reverse=True)
+    return ordered[:CONCEPTS_CAP]
+
+
 PROFILE_LIST_CAP = 12  # 注入块里每个清单最多列这么多概念，全量在设置页看
 
 
@@ -903,6 +962,114 @@ class TutorExtract(BaseModel):
         return str(v).strip()
 
 
+DIGEST_MAX_POINTS = 12  # 一次拆这么多；再多就不是「逐点去搞懂」，而是又一张待办清单
+DIGEST_MATERIAL_CHARS = 6000  # 拆点看的是材料在讲什么，用不着整篇；头部够定性
+
+
+class TutorDigestPoint(BaseModel):
+    title: str = ""  # 一句话的点，尽量是他自己会问出口的那种问法
+    why: str = ""  # 为什么容易卡 / 它在材料里的位置
+
+    @field_validator("title", "why", mode="before")
+    @classmethod
+    def _as_text(cls, v):
+        if v is None or isinstance(v, (list, dict)):
+            return ""
+        return str(v).strip()
+
+
+class TutorDigest(BaseModel):
+    points: list[TutorDigestPoint] = Field(default_factory=list)
+
+    @field_validator("points", mode="before")
+    @classmethod
+    def _as_list(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, dict):  # 有的模型会给单个对象而不是数组
+            return [v]
+        if not isinstance(v, list):
+            return []
+        # 数组里混进字符串/数字是常见抖动：丢掉它们，别让一条杂物毁掉整批点
+        return [x for x in v if isinstance(x, dict)]
+
+
+_DIGEST_PROMPT = """你在帮一个人把手上这份材料拆成「要搞懂的点」——每个点之后会单独开一场教学去搞懂它。
+
+只输出一个 JSON 对象，不要任何解释：
+{{"points": [{{"title": "…", "why": "…"}}]}}
+
+规则：
+- 只挑**值得单独开一场教学**的点：一个概念、一个机制、一处容易搞错的地方。
+- 不要挑目录式的概括（「本文介绍了 X 的用法」），也不要太泛（「理解整个系统」）。
+- title 写成他会问出口的那句话，别堆名词。
+- why 一句话说清「为什么这里容易卡」或「它在材料里的位置」，不超过 40 字。
+- 按材料里的先后顺序，最多 {limit} 个。
+- 材料里没讲的不要编。
+"""
+
+
+async def _digest_points(material: str, label: str, model_id: str) -> list[dict]:
+    """一次结构化调用 → [{title, why}]。拆不出来就抛，交给 `digest()` 兜成人话。
+    Test seam: monkeypatch me.
+    """
+    from app.core.llm import ProviderInfo
+    from app.core.structured import extract_json
+    from app.routers.chat import resolve_model
+
+    resolved = await resolve_model(model_id)
+    p = resolved.provider
+    obj, meta = await extract_json(
+        ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key),
+        resolved.model,
+        [
+            {"role": "system", "content": _DIGEST_PROMPT.format(limit=DIGEST_MAX_POINTS)},
+            {"role": "user", "content": f"材料：{label}\n\n{material}"},
+        ],
+        TutorDigest,
+    )
+    if obj is None:
+        raise ValueError(meta.error or "模型没有给出可用的结果")
+    out: list[dict] = []
+    for pt in obj.points:
+        title = pt.title[:120]
+        if not title:
+            continue
+        out.append({"title": title, "why": pt.why[:80]})
+        if len(out) >= DIGEST_MAX_POINTS:
+            break
+    return out
+
+
+async def digest(source_path: str = "", text: str = "") -> dict:
+    """一份材料 → 「要搞懂的点」。**两条线的交汇点**：材料进来是收敛的，哪几点要搞懂是发散的。
+
+    这里只做一件事：读材料、挑点。逐点开教学走现成的 `start()`，出卡走现成的卡片链，
+    理解状态靠 `end()` 回写——不重复造任何一段，也**不落库**：点是一次性的建议，你点开
+    哪一条才作数（真值仍然只有 tutor_sessions）。
+    """
+    from app.core import cards as _cards
+
+    source, label, material = _cards.collect_material(source_path=source_path, text=text)
+
+    from app.core import providers
+
+    model_id = providers.default_model_id() or ""
+    if not model_id:
+        return {
+            "source": source,
+            "source_label": label,
+            "points": [],
+            "error": "还没有可用的模型，先去设置里配一个",
+        }
+    try:
+        points = await _digest_points(material[:DIGEST_MATERIAL_CHARS], label, model_id)
+    except Exception as e:  # noqa: BLE001 - 拆点挂了，材料本身不该跟着丢
+        log.warning("tutor digest failed", exc_info=True)
+        return {"source": source, "source_label": label, "points": [], "error": f"拆点失败：{e}"}
+    return {"source": source, "source_label": label, "points": points, "error": ""}
+
+
 async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str, str, str]:
     """One non-streaming call → (concept, aliases, stuck, transfer), all '' on failure.
 
@@ -1017,6 +1184,9 @@ async def end(session_id: int, verdict: str) -> dict:
                 if row is not None:
                     row.concept, row.aliases, row.stuck = concept, aliases, stuck
                     await db.commit()
+            if verdict == "got":
+                # 「结束回写」：说通了这个概念，它到此为止的卡点一并关掉
+                await _resolve_concept_stucks(concept, session_id)
             nearby = await _nearby_material(concept, _SESSION_SOURCES.pop(session_id, None))
     _SESSION_SOURCES.pop(session_id, None)  # useless / 没提取出概念也要清掉残留
     return {
@@ -1082,7 +1252,11 @@ async def stuck_points(limit: int = 200) -> list[dict]:
     out of it would silently drop everything past that: a stuck point recorded in
     session #52 would be invisible forever. This scans all history instead. Like
     recall, `useless` verdicts are skipped — the teaching missed, the line proves
-    nothing. A record, not a queue (第 2 节): no counts, no nudges.
+    nothing.
+
+    `resolved_at` 非空 = 这条已经解了（同一概念后来说通了，或你手动关掉）。卡点本身
+    照旧留在 `stuck` 里当记录；状态是另一轴，所以这里**不过滤**——待解/已解怎么摆是
+    界面的事，但全量得看得到。
     """
     from sqlalchemy import select
 
@@ -1105,9 +1279,56 @@ async def stuck_points(limit: int = 200) -> list[dict]:
             "stuck": r.stuck,
             "verdict": r.verdict,
             "created_at": iso_utc(r.created_at),
+            "resolved_at": iso_utc(r.stuck_resolved_at) if r.stuck_resolved_at else "",
         }
         for r in rows
     ]
+
+
+async def _resolve_concept_stucks(concept: str, upto_id: int) -> int:
+    """说通了一个概念 → 它到此为止记下的卡点全部关掉（「结束回写」）。
+
+    `upto_id` 含当前这一场：自评「搞懂了」而这一场又记了卡点，意思是「说通了，
+    当时卡在 X」——卡点留着当记录，状态跟着自评走。返回关掉了几条。
+    """
+    from sqlalchemy import update
+
+    from app.db import SessionLocal
+    from app.models import TutorSession, utcnow
+
+    async with SessionLocal() as db:
+        res = await db.execute(
+            update(TutorSession)
+            .where(
+                TutorSession.concept == concept,
+                TutorSession.stuck != "",
+                TutorSession.stuck_resolved_at.is_(None),
+                TutorSession.id <= upto_id,
+            )
+            .values(stuck_resolved_at=utcnow())
+        )
+        await db.commit()
+        return int(res.rowcount or 0)
+
+
+async def resolve_stuck(session_id: int, resolved: bool = True) -> dict:
+    """手动把一条卡点标成已解 / 待解。
+
+    这不是主要出口（自动回写在 `end()` 里），兜的是「我不打算再管这个了」——
+    没有它，清单只增不减。
+    """
+    from app.db import SessionLocal
+    from app.models import TutorSession, utcnow
+
+    async with SessionLocal() as db:
+        row = await db.get(TutorSession, session_id)
+        if row is None:
+            raise ValueError(f"会话 {session_id} 不存在")
+        if not (row.stuck or "").strip():
+            raise ValueError("这一场没有记卡点")
+        row.stuck_resolved_at = utcnow() if resolved else None
+        await db.commit()
+    return {"id": session_id, "resolved": bool(resolved)}
 
 
 async def stuck_blocks(days: int = 90, cap: int = 8) -> list[tuple[str, str]]:

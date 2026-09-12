@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import ReactMarkdown from 'react-markdown'
-import rehypeHighlight from 'rehype-highlight'
-import remarkGfm from 'remark-gfm'
 
 import CardMaker from './CardMaker'
-import CodeBlock from './CodeBlock'
 import HabitStrip, { type HabitStripHandle } from './HabitStrip'
+import { Markdown } from './markdown'
 import SelfCheckLine from './SelfCheckLine'
 import { api, type CardGrade, type CardItem, type CardStats, type TodayNext } from './api'
 
@@ -39,20 +36,6 @@ const UNDO_WINDOW_MS = 5000
 
 /** `repo:` / `dir:` cards live outside the vault, where the /notes route cannot reach. */
 const isVaultSource = (s: string) => !!s && !s.startsWith('repo:') && !s.startsWith('dir:')
-
-function Markdown({ children }: { children: string }) {
-  return (
-    <div className="prose prose-sm max-w-none dark:prose-invert">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }]]}
-        components={{ pre: CodeBlock }}
-      >
-        {children}
-      </ReactMarkdown>
-    </div>
-  )
-}
 
 export default function ReviewPage() {
   const [phase, setPhase] = useState<Phase>('loading')
@@ -462,29 +445,13 @@ export default function ReviewPage() {
                 className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border px-3 py-2.5 text-xs ${
                   next.tone === 'bad'
                     ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300'
-                    : next.tone === 'normal'
-                      ? 'border-violet-200 bg-violet-50/60 text-violet-700 dark:border-violet-700/50 dark:bg-violet-500/5 dark:text-violet-300'
-                      : 'border-neutral-200/80 text-neutral-500 dark:border-neutral-800/80 dark:text-neutral-400'
+                    : 'border-neutral-200/80 text-neutral-500 dark:border-neutral-800/80 dark:text-neutral-400'
                 }`}
               >
+                {/* 这一条**只报障**：模型挂了 / 作业连着失败。`today.py` 里待办那几档
+                    按封存删掉了，所以只剩下「去设置」这一个动作——不要再长出别的按钮。 */}
                 <span className="shrink-0">👋 今天</span>
                 <span>{next.text}</span>
-                {next.action.kind === 'review' && (
-                  <button
-                    onClick={start}
-                    className="ml-auto shrink-0 rounded-lg border border-violet-300 px-2.5 py-1 font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
-                  >
-                    {next.action.label} ⏎
-                  </button>
-                )}
-                {next.action.kind === 'make_card' && (
-                  <button
-                    onClick={() => setMakerOpen(true)}
-                    className="ml-auto shrink-0 rounded-lg border border-violet-300 px-2.5 py-1 font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
-                  >
-                    {next.action.label} <kbd className="text-[10px]">N</kbd>
-                  </button>
-                )}
                 {next.action.kind === 'settings' && (
                   <Link
                     to="/settings"

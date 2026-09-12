@@ -33,7 +33,7 @@ atexit.register(_cleanup)
 os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
 os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 
-from sqlalchemy import delete  # noqa: E402
+from sqlalchemy import delete, select  # noqa: E402
 
 from app.core import tasks as core  # noqa: E402
 from app.db import SessionLocal, engine  # noqa: E402
@@ -544,3 +544,109 @@ async def test_distill_failure_does_not_fail_the_task(monkeypatch):
     r = await core.run_task(task_id, manual=True)
     assert r["status"] == "ok"
     save_config({"automemory_enabled": False})
+
+
+# ---------- 尺子：运行接地分（§4-10） ----------
+
+
+def test_judge_sources_normalizes_hits_into_numbered_materials():
+    out = core._judge_sources(
+        [
+            {"source": "notes/a.md", "text": "内容A"},
+            {"source": "notes/b.md", "text": "   "},  # 空正文 → 丢掉，它本来也判不了
+            {"source": "notes/c.md", "title": "C 的标题", "text": "内容C"},
+        ]
+    )
+    assert [s["n"] for s in out] == [1, 2]  # 重新编号，不留空洞
+    assert [s["ref"] for s in out] == ["notes/a.md", "notes/c.md"]
+    assert out[1]["title"] == "C 的标题" and out[1]["kind"] == "kb"
+
+
+def _execute_with(sources: list[dict]):
+    async def fake_execute(t: dict, log_entries: list) -> dict:
+        return {
+            "answer": "答案 [来源 1]",
+            "sources": sources,
+            "model_id": "p1/p1-m",
+            "rounds": 1,
+            "tool_calls": 0,
+        }
+
+    return fake_execute
+
+
+async def _last_run() -> TaskRun:
+    async with SessionLocal() as db:
+        return (
+            await db.execute(select(TaskRun).order_by(TaskRun.id.desc()).limit(1))
+        ).scalar_one()
+
+
+async def test_successful_run_records_a_grounding_score(monkeypatch):
+    """跑完一条用了检索的任务，run 上带着接地分——工作流无人值守时唯一会说话的东西。"""
+    await _clear()
+    await _add_providers("p1")
+    monkeypatch.setattr(
+        core, "_execute", _execute_with([{"source": "notes/a.md", "text": "内容A"}])
+    )
+
+    from app.core import engine_eval
+
+    seen: dict = {}
+
+    async def fake_judge(info, model, engine, topic, sources, produced, **kw):
+        seen.update(engine=engine, topic=topic, n=len(sources), produced=produced)
+        return 4, "每条都能在材料里找到依据"
+
+    monkeypatch.setattr(engine_eval, "judge_grounded", fake_judge)
+
+    task_id = await _add_task("带检索的任务")
+    assert (await core.run_task(task_id, manual=True))["status"] == "ok"
+
+    run = await _last_run()
+    assert run.grounded == 4 and run.judge_reason == "每条都能在材料里找到依据"
+    assert seen["engine"] == "task" and seen["n"] == 1
+    assert seen["topic"] == "do 带检索的任务"  # 判分要看得懂任务问的是什么
+
+
+async def test_run_without_material_gets_no_score(monkeypatch):
+    """没开检索 / 检索没命中 → 没有尺子可量，不许编一个分出来。"""
+    await _clear()
+    await _add_providers("p1")
+    monkeypatch.setattr(core, "_execute", _execute_with([]))
+
+    from app.core import engine_eval
+
+    called: list = []
+
+    async def fake_judge(*a, **kw):
+        called.append(1)
+        return 5, ""
+
+    monkeypatch.setattr(engine_eval, "judge_grounded", fake_judge)
+
+    task_id = await _add_task("没检索的任务")
+    assert (await core.run_task(task_id, manual=True))["status"] == "ok"
+
+    assert (await _last_run()).grounded is None
+    assert called == []  # 连一次判分调用都不该发生
+
+
+async def test_judge_failure_does_not_fail_the_run(monkeypatch):
+    """判分挂了不能让一次成功的运行变成失败——它是网，不是路。"""
+    await _clear()
+    await _add_providers("p1")
+    monkeypatch.setattr(
+        core, "_execute", _execute_with([{"source": "notes/a.md", "text": "内容A"}])
+    )
+
+    from app.core import engine_eval
+
+    async def boom(*a, **kw):
+        raise RuntimeError("判分模型挂了")
+
+    monkeypatch.setattr(engine_eval, "judge_grounded", boom)
+
+    task_id = await _add_task("判分挂了的任务")
+    assert (await core.run_task(task_id, manual=True))["status"] == "ok"
+    assert (await _last_run()).grounded is None

@@ -556,6 +556,170 @@ async def test_profile_takes_the_latest_verdict_and_skips_useless():
     assert prof["half"] == ["React useEffect 依赖数组"]
 
 
+async def test_concepts_group_by_concept_and_keep_the_latest_state():
+    """「我学到哪了」：一个概念一行，取**最近一次**的自评与卡点；会话次数与召回次数
+    累计；useless 不算数、空概念不进；按最近时间倒序。"""
+    await _reset()
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    await _seed_at(
+        "早", "asyncio 事件循环", "half", now - timedelta(days=5),
+        stuck="以为 await 把控制权交回操作系统", recalled=True,
+    )
+    await _seed_at("晚", "asyncio 事件循环", "got", now - timedelta(days=1))
+    await _seed_at("另一件", "React useEffect 依赖数组", "half", now - timedelta(days=2))
+    await _seed_at("没用那次", "SQLite WAL", "useless", now)
+    await _seed_at("没概念", "", "got", now)
+
+    rows = await core.concepts()
+    assert [c["concept"] for c in rows] == ["asyncio 事件循环", "React useEffect 依赖数组"]
+
+    first = rows[0]
+    assert first["verdict"] == "got"  # 最近一次自评为准
+    assert first["stuck"] == ""  # 卡点同样以最近一次为准（最近那次没卡）
+    assert first["sessions"] == 2
+    assert first["recalled"] == 1  # 那次召回触发过
+    assert first["last_session_id"] > 0
+    assert first["last_at"]
+
+    second = rows[1]
+    assert second["verdict"] == "half" and second["sessions"] == 1 and second["recalled"] == 0
+
+
+async def test_concepts_carry_whether_the_stuck_is_resolved():
+    """概念行上的卡点带状态：待解 / 已解。取的是该概念**最近一次**那场——和 stuck 同源。"""
+    await _reset()
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    open_id = await _seed_at(
+        "没解", "asyncio 事件循环", "half", now - timedelta(days=2), stuck="卡在 await"
+    )
+    done_id = await _seed_at(
+        "解了", "SQLite WAL", "half", now - timedelta(days=1), stuck="把 WAL 当成压缩"
+    )
+    await core.resolve_stuck(done_id)
+
+    by_concept = {c["concept"]: c for c in await core.concepts()}
+    assert by_concept["asyncio 事件循环"]["stuck_resolved"] is False
+    assert by_concept["SQLite WAL"]["stuck_resolved"] is True
+    assert by_concept["asyncio 事件循环"]["last_session_id"] == open_id
+
+
+async def test_concepts_empty_when_nothing_qualifies():
+    await _reset()
+    assert await core.concepts() == []
+
+
+# ---------- 材料消化：一份材料 → 要搞懂的点 ----------
+
+
+async def test_digest_splits_a_pasted_material_into_points(monkeypatch):
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    seen: dict = {}
+
+    async def fake_points(material, label, model_id):
+        seen["label"], seen["model_id"], seen["material"] = label, model_id, material
+        return [{"title": "await 到底把控制权交给了谁", "why": "最容易含糊的一步"}]
+
+    monkeypatch.setattr(core, "_digest_points", fake_points)
+    got = await core.digest(text="x" * 200)
+
+    assert got["points"] == [{"title": "await 到底把控制权交给了谁", "why": "最容易含糊的一步"}]
+    assert got["error"] == "" and got["source"] == ""
+    assert seen["label"] == "粘贴文本" and seen["model_id"] == "p/m"
+
+
+async def test_digest_reads_a_vault_file(monkeypatch):
+    await _reset()
+    from app.config import VAULT_DIR
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    p = VAULT_DIR / "notes" / "材料.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("# 材料\n" + "内容" * 100, encoding="utf-8")
+    seen: dict = {}
+
+    async def fake_points(material, label, model_id):
+        seen["material"] = material
+        return [{"title": "T", "why": ""}]
+
+    monkeypatch.setattr(core, "_digest_points", fake_points)
+    got = await core.digest(source_path="notes/材料.md")
+
+    assert got["source"] == "notes/材料.md"
+    assert got["points"] == [{"title": "T", "why": ""}]
+    assert "内容" in seen["material"]  # 真读到了文件，不是空转
+
+
+async def test_digest_needs_exactly_one_of_path_and_text():
+    await _reset()
+    with pytest.raises(ValueError):
+        await core.digest()
+    with pytest.raises(ValueError):
+        await core.digest(source_path="notes/x.md", text="也给了")
+
+
+async def test_digest_reports_a_dead_model_instead_of_raising(monkeypatch):
+    """没模型 / 拆失败都不是异常：`points: []` + 一句人话，材料本身不该跟着丢。"""
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "")
+    got = await core.digest(text="x" * 200)
+    assert got["points"] == [] and got["error"]
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+
+    async def boom(material, label, model_id):
+        raise ValueError("模型没有给出可用的结果")
+
+    monkeypatch.setattr(core, "_digest_points", boom)
+    got2 = await core.digest(text="x" * 200)
+    assert got2["points"] == [] and "拆点失败" in got2["error"]
+
+
+async def test_digest_points_drops_blanks_and_caps_the_list(monkeypatch):
+    from app.core import structured
+
+    class _Resolved:
+        model = "m"
+        provider = SimpleNamespace(kind="openai", base_url="", api_key="")
+
+    async def fake_resolve(model_id):
+        return _Resolved()
+
+    monkeypatch.setattr("app.routers.chat.resolve_model", fake_resolve)
+
+    async def fake_extract(info, model, messages, schema):
+        rows = [{"title": f"点{i}", "why": "w"} for i in range(20)] + [{"title": "   "}]
+        return schema.model_validate({"points": rows}), SimpleNamespace(error="")
+
+    monkeypatch.setattr(structured, "extract_json", fake_extract)
+    pts = await core._digest_points("材料", "标签", "m")
+
+    assert len(pts) == core.DIGEST_MAX_POINTS  # 封顶，不会变成一张待办长清单
+    assert pts[0] == {"title": "点0", "why": "w"}
+    assert all(p["title"].strip() for p in pts)  # 空标题的点丢掉
+
+
+def test_digest_schema_tolerates_the_shapes_models_actually_return():
+    """模型爱给单个对象、爱给 null、爱在数组里塞杂物——结构先归一，内容再筛。"""
+    assert core.TutorDigest.model_validate({"points": None}).points == []
+    single = core.TutorDigest.model_validate({"points": {"title": "T", "why": "W"}})
+    assert single.points[0].title == "T" and single.points[0].why == "W"
+    mixed = core.TutorDigest.model_validate(
+        {"points": [{"title": None, "why": ["x"]}, "junk", {"title": "真点"}]}
+    )
+    # 非字典的杂物直接丢掉；字典残留空标题（内容层的筛选在 _digest_points 里）
+    assert [p.title for p in mixed.points] == ["", "真点"]
+
+
 def test_format_profile_empty_when_nothing_at_all():
     assert core.format_profile({"known": [], "half": []}, []) == ""
 
@@ -779,6 +943,70 @@ async def test_stuck_points_scans_all_history_not_just_the_rail(monkeypatch):
     ]
 
 
+async def test_stuck_points_carry_the_resolved_flag(monkeypatch):
+    """卡点分待解 / 已解：`resolved_at` 非空 = 已解。卡点本身照旧留着（记录是记录）。"""
+    await _reset()
+    open_id = await _seed("没解", "asyncio 事件循环", "half", stuck="卡在 await 的时机")
+    done_id = await _seed("解了", "SQLite WAL", "half", stuck="把 WAL 当成压缩了")
+    await core.resolve_stuck(done_id)
+
+    rows = {r["id"]: r for r in await core.stuck_points()}
+    assert rows[open_id]["resolved_at"] == ""
+    assert rows[done_id]["resolved_at"]
+    assert rows[done_id]["stuck"] == "把 WAL 当成压缩了"  # 状态是另一轴，正文不动
+
+
+async def test_resolve_stuck_reopens_and_refuses_a_stuckless_session(monkeypatch):
+    await _reset()
+    sid = await _seed("有卡点", "asyncio 事件循环", "half", stuck="卡在 X")
+    await core.resolve_stuck(sid)
+    await core.resolve_stuck(sid, False)
+    assert {r["id"]: r["resolved_at"] for r in await core.stuck_points()}[sid] == ""
+
+    plain = await _seed("没卡点", "别的概念", "half")  # stuck="" → 不是卡点
+    with pytest.raises(ValueError):
+        await core.resolve_stuck(plain)
+    with pytest.raises(ValueError):
+        await core.resolve_stuck(999999)
+
+
+async def test_ending_got_writes_back_and_closes_earlier_stucks_on_the_concept(monkeypatch):
+    """「结束回写」：同一概念后一场自评「搞懂了」，此前记下的卡点自动关掉。
+    别的话不对的概念不动——回写按概念走，不按时间乱扫。"""
+    await _reset()
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    same = await _seed("旧一场", "asyncio 事件循环", "half", stuck="卡在 await")
+    other = await _seed("别的事", "SQLite WAL", "half", stuck="卡在 WAL")
+    sid = await _live(monkeypatch, "asyncio 再来一场")
+
+    async def fake_extract(session_id, topic, model_id):
+        return "asyncio 事件循环", "", "这次没卡", ""
+
+    monkeypatch.setattr(core, "_extract", fake_extract)
+    await core.end(sid, "got")
+
+    resolved = {r["id"]: r["resolved_at"] for r in await core.stuck_points()}
+    assert resolved[same]  # 同概念 → 关掉
+    assert resolved[sid]  # 本场也关：说通了，「当时卡在 X」跟着自评走
+    assert resolved[other] == ""  # 别的概念不碰
+
+
+async def test_ending_half_does_not_write_back(monkeypatch):
+    await _reset()
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    same = await _seed("旧一场", "asyncio 事件循环", "half", stuck="卡在 await")
+    sid = await _live(monkeypatch, "asyncio 再讲一遍")
+
+    async def fake_extract(session_id, topic, model_id):
+        return "asyncio 事件循环", "", "还是卡在 await", ""
+
+    monkeypatch.setattr(core, "_extract", fake_extract)
+    await core.end(sid, "half")
+
+    resolved = {r["id"]: r["resolved_at"] for r in await core.stuck_points()}
+    assert resolved[same] == "" and resolved[sid] == ""
+
+
 async def test_end_skips_nearby_for_useless_and_survives_a_dead_index(monkeypatch):
     await _reset()
     sid = await _live(monkeypatch, "asyncio")
@@ -876,13 +1104,27 @@ async def test_end_passes_the_transfer_question_through(monkeypatch):
 # ---------- 开场建议：记录的就近入口，不是队列 ----------
 
 
-async def _seed_at(topic: str, concept: str, verdict: str, created_at) -> int:
+async def _seed_at(
+    topic: str,
+    concept: str,
+    verdict: str,
+    created_at,
+    stuck: str = "",
+    recalled: bool = False,
+) -> int:
     """created_at 显式给定：starters 按「每个概念最近一次」排序，得可复现。"""
     from app.db import SessionLocal
     from app.models import TutorSession
 
     async with SessionLocal() as db:
-        row = TutorSession(topic=topic, concept=concept, verdict=verdict, created_at=created_at)
+        row = TutorSession(
+            topic=topic,
+            concept=concept,
+            verdict=verdict,
+            created_at=created_at,
+            stuck=stuck,
+            recalled=recalled,
+        )
         db.add(row)
         await db.commit()
         await db.refresh(row)

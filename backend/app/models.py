@@ -204,6 +204,11 @@ class TaskRun(Base):
     log_json: Mapped[str] = mapped_column(Text, default="[]")  # [{tool, args, ok, result}]
     tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 尺子（§4-10）：这次产出对该任务检索到的材料的接地分 0-5（`core/engine_eval` 的
+    # LLM 判分）。NULL = 没打分——没开检索 / 没命中材料 / 判分没跑成。它是工作流在
+    # **无人值守**时唯一会说话的东西：静默劣化不进 last_status，但分数掉得下来。
+    grounded: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    judge_reason: Mapped[str] = mapped_column(Text, default="")
 
 
 class EvalItem(Base):
@@ -466,6 +471,12 @@ class TutorSession(Base):
     model_id: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # 这条卡点解了没有。NULL = 待解。**主要的出口不是手动关，是自动回写**：同一概念
+    # 后一场自评「搞懂了」时 `end()` 把此前的卡点一并关掉。手动关闭只兜「我不打算再
+    # 管这个了」——不然清单只增不减。`stuck` 本身不动：卡点留着当记录，状态是另一轴。
+    stuck_resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

@@ -41,11 +41,13 @@ function Logo() {
   )
 }
 
-// 「学」排第二位：主线就是它。`/review`（今日队列 + 习惯）刻意**不在导航里**——
-// 页面还在（路由表和书签都保留），只是「到期了要还债」那种感觉正是被否掉的那一版。
+// 「学」「工作」挨着：两条线是主线。`/review`（今日：复习队列 + 习惯打卡）也进导航——
+// 页面一直在，只是从前只有一处 11px 的隐藏链接够得着，那才是缺陷。
 const NAV = [
   { href: '/', label: '对话', icon: '💬', key: 'chat' },
   { href: '/tutor', label: '学', icon: '🎓', key: 'tutor' },
+  { href: '/work', label: '工作', icon: '🗂', key: 'work' },
+  { href: '/review', label: '今日', icon: '☀️', key: 'review' },
   { href: '/dashboard', label: '仪表盘', icon: '📊', key: 'dashboard' },
   { href: '/notes', label: '笔记', icon: '📝', key: 'notes' },
   { href: '/kb', label: '知识库', icon: '📚', key: 'kb' },

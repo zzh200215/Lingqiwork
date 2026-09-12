@@ -506,6 +506,75 @@ export async function streamCompose(
   return done
 }
 
+export interface DeliverSourceRef {
+  n: number
+  /** 'kb' = 你的知识库；'memory' = 长期记忆；'journal' = 日记 */
+  kind: 'kb' | 'memory' | 'journal' | string
+  title: string
+  /** vault 相对路径（kb）；记忆与日记没有单一路径，为空 */
+  ref: string
+}
+
+export interface DeliverReport {
+  title: string
+  sections: { heading: string; body: string }[]
+  /** 正文里真正引用到的来源编号 */
+  used: number[]
+  sources: DeliverSourceRef[]
+  model_id?: string
+  /** 这版提示词（体裁×读者拼出来的）的指纹——质量闭环按它分版本统计 */
+  prompt_sha?: string
+  /** 这次交付的体裁与读者——存进 vault 之后还看得出这份是给谁写的 */
+  genre?: string
+  audience?: string
+}
+
+export interface DeliverDone {
+  ok: boolean
+  error?: string
+  report?: DeliverReport
+}
+
+/** Progress stages: gathering / sources / writing / draft（可多帧）. */
+export type DeliverStage = (event: string, data: Record<string, unknown>) => void
+
+/**
+ * One deliverable run（把你自己积累的材料改写成一份能交出去的体裁）。Same shape as
+ * `streamCompose`, plus the two knobs that define the output: 体裁（结构与篇幅）与读者（详略与口气）。
+ */
+export async function streamDeliver(
+  topic: string,
+  genre: string,
+  audience: string,
+  onStage: DeliverStage,
+  signal?: AbortSignal
+): Promise<DeliverDone> {
+  const res = await fetch('/api/deliver', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic, genre, audience }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = `交付失败: ${res.status}`
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* keep status line */
+    }
+    throw new Error(detail)
+  }
+
+  let done: DeliverDone = { ok: false, error: '流提前结束' }
+  for await (const [event, data] of sseFrames(res)) {
+    if (event === 'report') done = { ok: true, report: data as unknown as DeliverReport }
+    else if (event === 'error')
+      done = { ok: false, error: String((data as { message?: string }).message ?? '出错了') }
+    else onStage(event, data)
+  }
+  return done
+}
+
 export interface RecapSourceRef {
   n: number
   /** belief = 信念线；teach = 学习画像；stuck = 卡点；journal = 日记；files = 最近动的文件 */

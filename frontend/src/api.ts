@@ -447,6 +447,10 @@ export interface TaskRunItem {
   tool_calls: number
   error: string
   answer: string
+  /** 接地分 0-5（LLM 判分：这次的答案 vs 本次检索到的材料）。null = 没打分（没材料 / 判分没跑成）。 */
+  grounded: number | null
+  /** 判分给的一句话理由 */
+  judge_reason: string
   log: TaskRunLogEntry[]
 }
 
@@ -800,8 +804,32 @@ export interface ArenaResult {
 /** 今日页「今天下一步」建议. */
 export interface TodayNext {
   text: string
-  tone: 'bad' | 'normal' | 'idle'
-  action: { kind: 'settings' | 'review' | 'make_card' | 'none'; label: string }
+  tone: 'bad' | 'idle'
+  action: { kind: 'settings' | 'none'; label: string }
+}
+
+/** 一条已生成的产出。`kind` 是哪个引擎写的，`path` 是 vault 相对路径（可直接交给
+ *  笔记页打开——它和用户自己的笔记同在一片 vault 里）。 */
+export interface WorkOutput {
+  kind: 'research' | 'compose' | 'recap' | 'decide' | 'conflict' | 'task' | 'deliver'
+  label: string
+  path: string
+  title: string
+  date: string
+  mtime: number
+}
+
+/** 交付（工作侧成文）：一种体裁或一种读者。定义在后端 `core/deliver.py`，前端不硬编码。 */
+export interface DeliverOption {
+  id: string
+  label: string
+}
+
+export interface DeliverCatalogue {
+  genres: DeliverOption[]
+  audiences: DeliverOption[]
+  default_genre: string
+  default_audience: string
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -904,6 +932,37 @@ export interface TutorStuckRow {
   stuck: string
   verdict: string
   created_at: string
+  /** 非空 = 已解（同一概念后来说通了自动回写，或手动关掉）。空 = 待解。 */
+  resolved_at: string
+}
+
+/** 「我学到哪了」——按概念收敛后的当前状态（纯派生，无新表）。
+ * 与 TutorStuckRow 的分工：那是逐条卡点记录，这是每个概念的一行。
+ * verdict/stuck 都取该概念**最近一次**会话的值。 */
+export interface TutorConceptRow {
+  concept: string
+  verdict: 'got' | 'half'
+  stuck: string
+  /** 这条卡点解没解（同样取最近一次那场）。 */
+  stuck_resolved: boolean
+  last_at: string
+  last_session_id: number
+  sessions: number
+  recalled: number
+}
+
+/** 「材料消化」拆出来的一个点：一句话 + 它为什么容易卡。不落库。 */
+export interface TutorDigestPoint {
+  title: string
+  why: string
+}
+
+/** 一份材料 → 要搞懂的点。`error` 非空时 points 为空（没模型 / 拆失败），材料本身没丢。 */
+export interface TutorDigestResult {
+  source: string
+  source_label: string
+  points: TutorDigestPoint[]
+  error: string
 }
 
 /** A row in the history rail. `turn_count` is a number here; `TutorDetail.turns`
@@ -1237,7 +1296,7 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
 
   /** 生成质量闭环：一次 👍/👎，挂在 (kind, 提示词版本, 模型) 上 */
   qualityFeedback: (payload: {
-    kind: 'research' | 'compose' | 'recap' | 'decide' | 'conflict'
+    kind: 'research' | 'compose' | 'recap' | 'decide' | 'conflict' | 'deliver'
     verdict: 'good' | 'bad'
     prompt_sha?: string
     model_id?: string
@@ -1530,6 +1589,25 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     }),
   todayNext: () => request<TodayNext>('/api/today/next'),
 
+  // ---------- 工作：已经生成出来的产出 ----------
+  /** 产出清单：五个引擎落在 vault 里的成品。真值是文件系统，没有登记表。 */
+  workOutputs: (limit = 200) => request<{ outputs: WorkOutput[] }>(`/api/work/outputs?limit=${limit}`),
+
+  // ---------- 工作：交付（把材料改写成能交出去的体裁） ----------
+  /** 体裁 × 读者的定义（唯一真值在后端） */
+  deliverGenres: () => request<DeliverCatalogue>('/api/deliver/genres'),
+  /** 把上一次的交付落成 vault/deliver/ 里的一篇 md 并进索引 */
+  deliverSave: (payload: {
+    title: string
+    sections: { heading: string; body: string }[]
+    used: number[]
+    sources: { n: number; kind: string; title: string; ref: string }[]
+  }) =>
+    request<{ filename: string; title: string; chunks: number }>('/api/deliver/save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   // ---------- 对话式教学 ----------
   /** repo 非空 = 代码库陪读：会话取材限定在该仓库；mode = socratic | feynman */
   tutorStart: (topic: string, repo?: string, mode?: 'socratic' | 'feynman' | 'future') =>
@@ -1550,6 +1628,19 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     request<TutorProfile>('/api/tutor/profile'),
   tutorStuck: (limit = 200) =>
     request<{ stuck: TutorStuckRow[] }>(`/api/tutor/stuck?limit=${limit}`),
+  tutorConcepts: () => request<{ concepts: TutorConceptRow[] }>('/api/tutor/concepts'),
+  /** 一份材料 → 「要搞懂的点」。逐点去搞懂走 tutorStart（话题就是那个点）。 */
+  tutorDigest: (body: { source_path?: string; text?: string }) =>
+    request<TutorDigestResult>('/api/tutor/digest', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  /** 手动把一条卡点标成已解 / 待解。主要出口是自动回写（同一概念后来说通了）。 */
+  tutorResolveStuck: (session_id: number, resolved = true) =>
+    request<{ id: number; resolved: boolean }>(`/api/tutor/stuck/${session_id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ resolved }),
+    }),
   tutorStarters: () => request<{ starters: TutorStarter[] }>('/api/tutor/starters'),
   tutorSession: (id: number) => request<TutorDetail>(`/api/tutor/sessions/${id}`),
   tutorStats: (days = 14) => request<TutorStats>(`/api/tutor/stats?days=${days}`),

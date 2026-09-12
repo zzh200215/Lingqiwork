@@ -16,11 +16,13 @@ import NotesPage from './NotesPage'
 import ReviewPage from './ReviewPage'
 import SettingsPage from './SettingsPage'
 import TutorPage from './TutorPage'
+import WorkPage from './WorkPage'
 import { ROUTES, RouteShell, type Module } from './routes'
 
 const PAGES: Record<Module, ReactNode> = {
   chat: <App />,
   tutor: <TutorPage />,
+  work: <WorkPage />,
   dashboard: <DashboardPage />,
   notes: <NotesPage />,
   kb: <KBPage />,

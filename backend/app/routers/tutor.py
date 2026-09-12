@@ -38,6 +38,11 @@ class EndIn(BaseModel):
     verdict: str  # got | half | useless
 
 
+class DigestIn(BaseModel):
+    source_path: str = ""  # vault 相对路径，或 `repo:` / `dir:` 规格
+    text: str = ""  # 直接粘一段文字（与 source_path 二选一）
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -48,6 +53,18 @@ async def start(body: StartIn):
     instead of on the first reply."""
     try:
         return await core.start(body.topic, repo=body.repo, mode=body.mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/digest")
+async def digest(body: DigestIn):
+    """一份材料 → 「要搞懂的点」。逐点去搞懂走 `/start`（话题就是那个点）。
+
+    拆不出来时**不报错**：`points: []` + 一句人话的 `error`，材料本身还在。
+    """
+    try:
+        return await core.digest(source_path=body.source_path, text=body.text)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -89,8 +106,27 @@ async def list_sessions(limit: int = 50):
 
 @router.get("/stuck")
 async def list_stuck(limit: int = 200):
-    """全量卡点：不受右栏会话列表 50 条的显示上限约束。"""
+    """全量卡点：不受右栏会话列表 50 条的显示上限约束。带 `resolved_at`。"""
     return {"stuck": await core.stuck_points(limit)}
+
+
+class ResolveStuckIn(BaseModel):
+    resolved: bool = True
+
+
+@router.post("/stuck/{session_id}/resolve")
+async def resolve_stuck(session_id: int, body: ResolveStuckIn):
+    """手动把一条卡点标成已解 / 待解。主要出口是自动回写（同一概念后来说通了）。"""
+    try:
+        return await core.resolve_stuck(session_id, body.resolved)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/concepts")
+async def list_concepts():
+    """按概念分组的学习轨迹（「我学到哪了」）：纯派生，无新表。"""
+    return {"concepts": await core.concepts()}
 
 
 @router.get("/starters")

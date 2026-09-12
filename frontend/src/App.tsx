@@ -1427,7 +1427,9 @@ function ChatView() {
           </div>
         )}
         <div className="relative mx-auto flex max-w-3xl items-end gap-2">
-          <div className="relative flex-1">
+          {/* min-w-0：输入框自己的固有宽度（textarea 按字符数算）不肯缩，
+              右边的按钮又都是固定宽。窄窗格（分栏侧栏最窄 260）里这一行会顶出去。 */}
+          <div className="relative min-w-0 flex-1">
             <input
               ref={fileInputRef}
               type="file"

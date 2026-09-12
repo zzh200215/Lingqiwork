@@ -5,7 +5,7 @@ import { api } from './api'
 /**
  * 生成质量闭环的那一次点击。
  *
- * research / compose / recap / decide 四条链路都通过 `core/report.py` 成文，但此前**没有
+ * research / compose / recap / decide / deliver 几条链路都通过 `core/report.py` 成文，但此前**没有
  * 任何地方记录过"这次我满意吗"**——只有聊天消息有 feedback、教学有自评。结果是：改了提示词、
  * 换了 provider，只能靠"看起来对不对"判断；而四个引擎共用一条脊梁，一次提示词回归
  * 同时打穿四个功能。
@@ -21,7 +21,7 @@ export default function FeedbackButtons({
   modelId,
   artifactRef,
 }: {
-  kind: 'research' | 'compose' | 'recap' | 'decide' | 'conflict'
+  kind: 'research' | 'compose' | 'recap' | 'decide' | 'conflict' | 'deliver'
   promptSha?: string
   modelId?: string
   artifactRef?: string
