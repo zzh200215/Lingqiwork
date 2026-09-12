@@ -96,7 +96,7 @@ class TaskTriggerWatcher:
         # deletions are filtered by the caller — only content-bearing events get here
         path = Path(raw_path)
         return (
-            ingest.is_supported(path)
+            ingest.is_triggerable(path)
             and "__pycache__" not in path.parts
             and not path.name.startswith(".")
         )
@@ -129,7 +129,8 @@ class TaskTriggerWatcher:
             return
         now = time.monotonic()
         for task_id, watch_path in watched:
-            if not any(self._match(watch_path, p) for p in changed_paths):
+            matched = [p for p in changed_paths if self._match(watch_path, p)]
+            if not matched:
                 continue
             with self._lock:
                 if task_id in self._running:
@@ -138,13 +139,14 @@ class TaskTriggerWatcher:
                     continue
                 self._last_fire[task_id] = now
                 self._running.add(task_id)
-            asyncio.run_coroutine_threadsafe(self._run_task(task_id), sched.LOOP)
+            # 把**是哪个文件**一起交下去：转写步骤得知道该转谁（§4-13）
+            asyncio.run_coroutine_threadsafe(self._run_task(task_id, matched), sched.LOOP)
 
-    async def _run_task(self, task_id: int) -> None:
+    async def _run_task(self, task_id: int, files: list[str]) -> None:
         from app.core import tasks as core
 
         try:
-            result = await core.run_task(task_id, trigger="watch")
+            result = await core.run_task(task_id, trigger="watch", watch_files=files)
             log.info("watch-triggered task %s finished: %s", task_id, result.get("status"))
         except Exception:  # noqa: BLE001 - a failed trigger must not kill the watcher
             log.exception("watch-triggered task %s crashed", task_id)

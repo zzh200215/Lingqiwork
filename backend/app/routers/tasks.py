@@ -8,6 +8,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import VAULT_DIR
 from app.core import tasks as core
 from app.db import get_db
 from app.models import ScheduledTask, TaskRun
@@ -35,10 +36,12 @@ class TaskIn(BaseModel):
     max_rounds: int = 12
     retry: int = 1
     notify_on_error: bool = False
-    trigger_kind: str = "cron"  # cron | watch
+    trigger_kind: str = "cron"  # cron | watch | chain
     watch_path: str = ""
     chain_next_id: int | None = None
     require_approval: bool = False  # 人工卡点：跑完等人点头再触发下游
+    action: str = "prompt"  # prompt | transcribe
+    landing_dir: str = ""  # 产物落哪个 vault 子目录（空 = tasks/）
 
     @field_validator("name")
     @classmethod
@@ -71,9 +74,21 @@ class TaskIn(BaseModel):
     @field_validator("trigger_kind")
     @classmethod
     def trigger_valid(cls, v: str) -> str:
-        if v not in ("cron", "watch"):
-            raise ValueError("trigger_kind 必须是 cron 或 watch")
+        if v not in ("cron", "watch", "chain"):
+            raise ValueError("trigger_kind 必须是 cron、watch 或 chain")
         return v
+
+    @field_validator("action")
+    @classmethod
+    def action_valid(cls, v: str) -> str:
+        if v not in ("prompt", "transcribe"):
+            raise ValueError("action 必须是 prompt 或 transcribe")
+        return v
+
+    @field_validator("landing_dir")
+    @classmethod
+    def landing_clean(cls, v: str) -> str:
+        return core.normalize_watch_path(v)
 
     @field_validator("watch_path")
     @classmethod
@@ -116,6 +131,8 @@ class TaskPatch(BaseModel):
     watch_path: str | None = None
     chain_next_id: int | None = None
     require_approval: bool | None = None
+    action: str | None = None
+    landing_dir: str | None = None
 
     @field_validator("cron")
     @classmethod
@@ -132,9 +149,21 @@ class TaskPatch(BaseModel):
     @field_validator("trigger_kind")
     @classmethod
     def trigger_valid(cls, v: str | None) -> str | None:
-        if v is not None and v not in ("cron", "watch"):
-            raise ValueError("trigger_kind 必须是 cron 或 watch")
+        if v is not None and v not in ("cron", "watch", "chain"):
+            raise ValueError("trigger_kind 必须是 cron、watch 或 chain")
         return v
+
+    @field_validator("action")
+    @classmethod
+    def action_valid(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("prompt", "transcribe"):
+            raise ValueError("action 必须是 prompt 或 transcribe")
+        return v
+
+    @field_validator("landing_dir")
+    @classmethod
+    def landing_clean(cls, v: str | None) -> str | None:
+        return core.normalize_watch_path(v) if v is not None else None
 
     @field_validator("watch_path")
     @classmethod
@@ -177,6 +206,8 @@ def _out(t: ScheduledTask) -> dict:
         "watch_path": t.watch_path or "",
         "chain_next_id": t.chain_next_id,
         "require_approval": bool(t.require_approval),
+        "action": t.action or "prompt",
+        "landing_dir": t.landing_dir or "",
         "conversation_id": t.conversation_id,
         "last_run": t.last_run.isoformat(timespec="seconds") if t.last_run else None,
         "last_status": t.last_status,
@@ -207,6 +238,7 @@ def _run_out(r: TaskRun) -> dict:
         # 接地分 0-5（§4-10）：null = 没打分（没材料 / 判分没跑成）
         "grounded": r.grounded,
         "judge_reason": r.judge_reason or "",
+        "run_dir": r.run_dir or "",
         "log": log_entries,
     }
 
@@ -338,6 +370,74 @@ async def approve_run(run_id: int):
 async def reject_run(run_id: int):
     """人工卡点：驳回——流程到此为止（这一步的产出留着，由你处置）。"""
     return await _review(run_id, approve=False)
+
+
+# ---------- 预设工作流 ----------
+
+MEETING_DIR = "meetings"
+
+# 会议闭环的四步（§4-13）。第一个名字即身份——preset 靠它判断装没装过。
+_MEETING_STEPS: tuple[tuple[str, str, str], ...] = (
+    ("会议·转写", "transcribe", "把落进 meetings/inbox/ 的会议录音转成文字。"),
+    (
+        "会议·纪要",
+        "prompt",
+        "下面是这场会议的转写。写一份会议纪要，分「议题 / 结论 / 悬而未决」三节。"
+        "只写转写里出现过的内容，没提到的不许编；听不清的地方写「（听不清）」。",
+    ),
+    (
+        "会议·待办",
+        "prompt",
+        "下面是这场会议的纪要。逐条列出会后要做的事：做什么、谁来做、什么时候。"
+        "纪要里没写负责人的就留空，别自己安一个；一条都没有就直说「这次会议没有明确的待办」。",
+    ),
+    (
+        "会议·跟进短稿",
+        "prompt",
+        "下面是这场会议的纪要。写一段会后可以直接发出去的跟进短消息：3-5 句，"
+        "说清结论与下一步。口气平实，不要客套开头，不要称呼与落款。",
+    ),
+)
+_MEETING_NAMES = {name for name, _, _ in _MEETING_STEPS}
+
+
+@router.post("/preset/meeting")
+async def install_meeting_preset(db: AsyncSession = Depends(get_db)):
+    """一键装好会议闭环：inbox 目录 + 四步链。**幂等**——装过就原样返回。
+
+    没有它，"一段录音进去"要先手搓四个任务再串链，等于够不着。
+    """
+    first = _MEETING_STEPS[0][0]
+    rows = (await db.execute(select(ScheduledTask).order_by(ScheduledTask.id))).scalars().all()
+    if any(t.name == first for t in rows):
+        return {"created": 0, "tasks": [_out(t) for t in rows if t.name in _MEETING_NAMES]}
+
+    (VAULT_DIR / MEETING_DIR / "inbox").mkdir(parents=True, exist_ok=True)
+
+    made: list[ScheduledTask] = []
+    for i, (name, action, prompt) in enumerate(_MEETING_STEPS):
+        step = ScheduledTask(
+            name=name,
+            prompt=prompt,
+            cron="0 9 * * *",  # 下游链条不靠 cron 跑（trigger_kind=chain 根本不注册），值只占位
+            action=action,
+            landing_dir=MEETING_DIR,
+            save_to_vault=True,
+            tools_enabled=False,
+            mode="simple",
+            trigger_kind="watch" if i == 0 else "chain",
+            watch_path=f"{MEETING_DIR}/inbox" if i == 0 else "",
+        )
+        db.add(step)
+        made.append(step)
+    await db.flush()  # 先拿到 id 才串得起链
+    for cur, nxt in zip(made, made[1:]):
+        cur.chain_next_id = nxt.id
+    await db.commit()
+    for step in made:
+        await db.refresh(step)
+    core.reschedule()
+    return {"created": len(made), "tasks": [_out(s) for s in made]}
 
 
 class ParseIn(BaseModel):

@@ -17,6 +17,7 @@ import {
   type DeliverCatalogue,
   type ScheduledTask,
   type TaskRunItem,
+  type WorkMeeting,
   type WorkOutput,
 } from './api'
 import FeedbackButtons from './FeedbackButtons'
@@ -224,6 +225,10 @@ export default function WorkPage() {
   const [runs, setRuns] = useState<TaskRunItem[]>([])
   const [wfBusy, setWfBusy] = useState<number | null>(null)
   const [wfrBusy, setWfrBusy] = useState<number | null>(null) // 正在放行/驳回的那次运行
+  const [presetBusy, setPresetBusy] = useState(false)
+
+  // 会议（§4-13）：一场一个文件夹，录音能回听
+  const [meetings, setMeetings] = useState<WorkMeeting[]>([])
 
   // 交付：体裁 × 读者的定义来自后端（唯一真值），话题由你给。
   const [catalogue, setCatalogue] = useState<DeliverCatalogue | null>(null)
@@ -250,9 +255,14 @@ export default function WorkPage() {
     api.listTasks().then(setTasks).catch(() => {})
   }, [])
 
+  const refreshMeetings = useCallback(() => {
+    api.workMeetings().then((r) => setMeetings(r.meetings)).catch(() => {})
+  }, [])
+
   useEffect(() => {
     refreshOutputs()
     refreshTasks()
+    refreshMeetings()
     api
       .deliverGenres()
       .then((c) => {
@@ -261,7 +271,7 @@ export default function WorkPage() {
         setAudience(c.default_audience)
       })
       .catch(() => {}) // 体裁拉不到就不显示生成面板，清单照常用
-  }, [refreshOutputs, refreshTasks])
+  }, [refreshOutputs, refreshTasks, refreshMeetings])
 
   // 切页时掐断还在跑的生成（照 tutor 页）
   useEffect(() => () => abort.current?.abort(), [])
@@ -324,6 +334,19 @@ export default function WorkPage() {
     },
     [openRuns, refreshTasks, refreshOutputs]
   )
+
+  /** 一键装会议闭环：装完工作流区就有四步链了（幂等，重复点不会装第二遍）。 */
+  const installPreset = useCallback(async () => {
+    setPresetBusy(true)
+    try {
+      await api.installMeetingPreset()
+      refreshTasks()
+    } catch {
+      /* 装不上就什么都不变 */
+    } finally {
+      setPresetBusy(false)
+    }
+  }, [refreshTasks])
 
   const run = useCallback(async () => {
     const t = topic.trim()
@@ -391,8 +414,8 @@ export default function WorkPage() {
   const nameOf = (id: number | null) =>
     id == null ? '' : (tasks.find((t) => t.id === id)?.name ?? '')
 
-  function openInNotes(o: WorkOutput) {
-    navigate(`/notes?path=${encodeURIComponent(o.path)}`)
+  function openPath(rel: string) {
+    navigate(`/notes?path=${encodeURIComponent(rel)}`)
   }
 
   return (
@@ -514,7 +537,17 @@ export default function WorkPage() {
           <div className="rounded-xl border border-dashed border-neutral-300 px-5 py-6 text-center dark:border-neutral-700">
             <p className="text-sm text-neutral-500 dark:text-neutral-400">还没有工作流。</p>
             <p className="pt-1.5 text-xs text-neutral-400">
-              在「设置 · 定时任务」里配一条，它就会出现在这里。
+              在「设置 · 定时任务」里配一条，或者直接装一条现成的：
+            </p>
+            <button
+              onClick={() => void installPreset()}
+              disabled={presetBusy}
+              className="mt-2.5 rounded-xl border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+            >
+              {presetBusy ? '正在装…' : '装一条会议流程'}
+            </button>
+            <p className="pt-2 text-[11px] text-neutral-400">
+              装好后，把会议录音丢进 vault/meetings/inbox/ 就会自己转写、出纪要与待办
             </p>
           </div>
         ) : (
@@ -538,6 +571,47 @@ export default function WorkPage() {
           </ul>
         )}
       </section>
+
+      {meetings.length > 0 ? (
+        <section className="mb-6">
+          <div className="flex items-baseline justify-between pb-1">
+            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">会议</h2>
+            <span className="text-xs text-neutral-400">一场一个文件夹，原声留着可回听</span>
+          </div>
+          <ul className="divide-y divide-neutral-100 dark:divide-neutral-800/70">
+            {meetings.map((m) => (
+              <li key={m.path} className="py-3">
+                <div className="flex items-baseline gap-2">
+                  <span className="min-w-0 flex-1 truncate text-sm text-neutral-700 dark:text-neutral-200">
+                    {m.title}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-neutral-400">{m.date.slice(5)}</span>
+                </div>
+                {m.audio ? (
+                  <audio
+                    controls
+                    preload="none"
+                    src={api.audioUrl(m.audio)}
+                    className="mt-1.5 h-8 w-full max-w-md"
+                  />
+                ) : null}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {m.files.map((f) => (
+                    <button
+                      key={f.path}
+                      onClick={() => openPath(f.path)}
+                      title={f.path}
+                      className="rounded-full border border-neutral-200 px-2.5 py-0.5 text-[11px] text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300"
+                    >
+                      {f.title}
+                    </button>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {err ? (
         <p className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
@@ -595,7 +669,7 @@ export default function WorkPage() {
                   {o.label}
                 </span>
                 <button
-                  onClick={() => openInNotes(o)}
+                  onClick={() => openPath(o.path)}
                   title={o.path}
                   className="min-w-0 flex-1 text-left"
                 >

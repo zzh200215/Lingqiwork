@@ -184,6 +184,13 @@ class ScheduledTask(Base):
     # 人工卡点（§4-12）：这一步跑完停在 `awaiting_approval`，等人点头才触发下游。
     # 从 `decide` 借来的模式——「先摆出来给人看，再往下走」。
     require_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 这一步做什么（§4-13）：prompt = 跑提示词（默认，现状）；transcribe = 把触发它的
+    # 那段录音交给本地 ASR 转写——不走模型，产出就是转写文本。
+    action: Mapped[str] = mapped_column(String(12), default="prompt")
+    # 产物落哪个 vault 子目录（空 = tasks/）。沿 chain 继承，因此一条流水线的各步
+    # 写进同一个文件夹——「同一个会议」就是这么来的；录音触发时还会再套一层
+    # `<日期>-<录音名>/`。
+    landing_dir: Mapped[str] = mapped_column(String(300), default="")
 
 
 class TaskRun(Base):
@@ -212,6 +219,9 @@ class TaskRun(Base):
     # **无人值守**时唯一会说话的东西：静默劣化不进 last_status，但分数掉得下来。
     grounded: Mapped[int | None] = mapped_column(Integer, nullable=True)
     judge_reason: Mapped[str] = mapped_column(Text, default="")
+    # 这次运行落进的目录（vault 相对，空 = vault/tasks/）。记在 run 上是因为链条
+    # 可能在人工卡点上停一轮再续跑——那时得知道当初落的是哪个文件夹（§4-13）。
+    run_dir: Mapped[str] = mapped_column(String(300), default="")
 
 
 class EvalItem(Base):

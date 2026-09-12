@@ -11,11 +11,17 @@
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from app.config import VAULT_DIR
+from app.core import ingest
 
 router = APIRouter(prefix="/api/work", tags=["work"])
+
+# 会议闭环（§4-13）：一场会议 = `vault/meetings/<日期>-<名>/` 一个文件夹
+_MEETING_DIR = "meetings"
+_MEETING_INBOX = "inbox"
 
 # (目录, kind, 标签)。顺序即界面上的分组顺序。
 _GENERATED_DIRS: tuple[tuple[str, str, str], ...] = (
@@ -95,3 +101,70 @@ async def list_outputs(limit: int = 200):
 
     rows.sort(key=lambda r: r["mtime"], reverse=True)
     return {"outputs": rows[:cap]}
+
+
+def _meeting(d: Path) -> dict | None:
+    """一个会议文件夹 → 一行。没有 md 产物就不是一场会议（inbox 的空壳、半成品都跳过）。"""
+    try:
+        entries = sorted(p for p in d.iterdir() if p.is_file())
+    except OSError:
+        return None
+    files = [p for p in entries if p.suffix.lower() == ".md"]
+    if not files:
+        return None
+    audio = next((p for p in entries if p.suffix.lower() in ingest.AUDIO_EXT), None)
+    # 拿纪要做这一场的标题——它才是这场会议的"脸"
+    head = next((p for p in files if "纪要" in p.stem), files[0])
+    mtime = int(d.stat().st_mtime)
+    date = d.name[:10] if _looks_dated(d.name) else datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+    return {
+        "name": d.name,
+        "path": d.relative_to(VAULT_DIR).as_posix(),
+        "date": date,
+        "title": _title_of(head),
+        "mtime": mtime,
+        "audio": audio.relative_to(VAULT_DIR).as_posix() if audio else "",
+        "files": [
+            {"path": p.relative_to(VAULT_DIR).as_posix(), "title": _title_of(p)} for p in files
+        ],
+    }
+
+
+@router.get("/meetings")
+async def list_meetings(limit: int = 100):
+    """会议闭环的成品。**一场一行**——录音、转写、纪要、待办、短稿是同一件事的五个面，
+    平铺成五行反而看不出它们是一起的。
+    """
+    cap = max(1, min(int(limit or 100), 500))
+    root = VAULT_DIR / _MEETING_DIR
+    rows: list[dict] = []
+    if root.is_dir():
+        for d in root.iterdir():
+            if not d.is_dir() or d.name.startswith(".") or d.name == _MEETING_INBOX:
+                continue
+            row = _meeting(d)
+            if row:
+                rows.append(row)
+    rows.sort(key=lambda m: m["mtime"], reverse=True)
+    return {"meetings": rows[:cap]}
+
+
+@router.get("/audio")
+async def get_audio(path: str):
+    """原声回放（§4-13）。`<audio src>` 带不了请求头，走的是 cookie——和图片同一条路。
+
+    只认 vault 内、且后缀是音频的文件：这个端点不该变成「读任意文件」的入口。
+    """
+    rel = (path or "").strip()
+    if not rel:
+        raise HTTPException(400, "path is required")
+    try:
+        p = (VAULT_DIR / rel).resolve()
+        p.relative_to(VAULT_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "path escapes the vault") from None
+    if p.suffix.lower() not in ingest.AUDIO_EXT:
+        raise HTTPException(400, "不是音频文件")
+    if not p.is_file():
+        raise HTTPException(404, "音频不存在")
+    return FileResponse(p)

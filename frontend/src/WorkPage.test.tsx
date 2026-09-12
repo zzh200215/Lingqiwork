@@ -11,12 +11,16 @@ import type {
   ScheduledTask,
   TaskRunItem,
   TaskRunResult,
+  WorkMeeting,
   WorkOutput,
 } from './api'
 
 vi.mock('./api', () => ({
   api: {
     workOutputs: vi.fn(),
+    workMeetings: vi.fn(),
+    audioUrl: (p: string) => `/api/work/audio?path=${encodeURIComponent(p)}`,
+    installMeetingPreset: vi.fn(),
     deliverGenres: vi.fn(),
     deliverSave: vi.fn(),
     listTasks: vi.fn(),
@@ -82,6 +86,8 @@ function task(id: number, name: string, patch: Partial<ScheduledTask> = {}): Sch
     watch_path: '',
     chain_next_id: null,
     require_approval: false,
+    action: 'prompt',
+    landing_dir: '',
     conversation_id: null,
     last_run: null,
     last_status: '',
@@ -121,6 +127,7 @@ const RUN: TaskRunItem = {
   answer: '答案',
   grounded: 4,
   judge_reason: '每条都能在材料里找到依据',
+  run_dir: '',
   log: [],
 }
 
@@ -143,6 +150,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.mocked(api.workOutputs).mockResolvedValue({ outputs: OUTPUTS })
+  vi.mocked(api.workMeetings).mockResolvedValue({ meetings: [] })
   vi.mocked(api.deliverGenres).mockResolvedValue(CATALOGUE)
   vi.mocked(api.listTasks).mockResolvedValue(TASKS)
   vi.mocked(api.listTaskRuns).mockResolvedValue([RUN])
@@ -222,6 +230,49 @@ describe('WorkPage · 工作流', () => {
 
     fireEvent.click(await screen.findByText('驳回'))
     await waitFor(() => expect(api.rejectRun).toHaveBeenCalledWith(9))
+  })
+})
+
+describe('WorkPage · 会议', () => {
+  const MEETING: WorkMeeting = {
+    name: '2026-09-10-周会',
+    path: 'meetings/2026-09-10-周会',
+    date: '2026-09-10',
+    title: '第 37 周周会',
+    mtime: 100,
+    audio: 'meetings/2026-09-10-周会/audio.m4a',
+    files: [
+      { path: 'meetings/2026-09-10-周会/会议·纪要-2026-09-10-1030.md', title: '会议纪要' },
+      { path: 'meetings/2026-09-10-周会/会议·待办-2026-09-10-1030.md', title: '待办' },
+    ],
+  }
+
+  it('一场一行：标题、日期、原声回听、产物都在', async () => {
+    vi.mocked(api.workMeetings).mockResolvedValue({ meetings: [MEETING] })
+    const { container } = renderPage()
+
+    expect(await screen.findByText('第 37 周周会')).toBeTruthy()
+    expect(screen.getByText('09-10')).toBeTruthy()
+    const player = container.querySelector('audio')
+    expect(player?.getAttribute('src')).toContain('/api/work/audio?path=')
+    // 产物点得开（不是平铺成四行，而是一场下面的几个入口）
+    expect(screen.getByText('会议纪要')).toBeTruthy()
+    expect(screen.getByText('待办')).toBeTruthy()
+  })
+
+  it('没有会议时不占地方', async () => {
+    renderPage()
+    await screen.findByText('还没有工作流。')
+    expect(screen.queryByText('会议')).toBeNull()
+  })
+
+  it('工作流空态能一键装一条会议流程', async () => {
+    vi.mocked(api.listTasks).mockResolvedValue([])
+    vi.mocked(api.installMeetingPreset).mockResolvedValue({ created: 4, tasks: [] })
+    renderPage()
+
+    fireEvent.click(await screen.findByText('装一条会议流程'))
+    await waitFor(() => expect(api.installMeetingPreset).toHaveBeenCalled())
   })
 })
 

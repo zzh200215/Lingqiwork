@@ -18,6 +18,7 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, field_validator
@@ -231,6 +232,27 @@ def _read_handoff(upstream_name: str, downstream_name: str) -> str:
     return text
 
 
+def _resolve_run_dir(t: dict, watch_files: list[str]) -> str:
+    """这次运行的落点目录（vault 相对，空串 = 沿用 `vault/tasks/`）。Pure.
+
+    配了 `landing_dir` 才有落点；由录音触发时再套一层「日期-录音名」，让每一场会议
+    自成一个文件夹。链条的下游不走这里——`_fire_chain` 会把上游定下的目录传下去。
+    """
+    from app.core import ingest
+
+    try:
+        base = normalize_watch_path(t.get("landing_dir") or "")
+    except ValueError:
+        log.warning("bad landing_dir %r, falling back to vault/tasks/", t.get("landing_dir"))
+        return ""
+    if not base:
+        return ""
+    audio = next((p for p in watch_files if Path(p).suffix.lower() in ingest.AUDIO_EXT), "")
+    if not audio:
+        return base
+    return f"{base}/{datetime.now():%Y-%m-%d}-{_safe_name(Path(audio).stem)[:40]}"
+
+
 async def run_task(
     task_id: int,
     manual: bool = False,
@@ -238,6 +260,8 @@ async def run_task(
     upstream_task_id: int | None = None,
     chain_depth: int = 0,
     chain_path: frozenset[int] = frozenset(),
+    watch_files: list[str] | None = None,
+    run_dir: str = "",
 ) -> dict:
     """Execute one task now. Never raises: failures land in last_status/task_runs."""
     async with SessionLocal() as db:
@@ -261,12 +285,19 @@ async def run_task(
             "trigger_kind": task.trigger_kind or "cron",
             "chain_next_id": task.chain_next_id,
             "require_approval": bool(task.require_approval),
+            "action": task.action or "prompt",
+            "landing_dir": task.landing_dir or "",
         }
         if trigger == "chain" and upstream_task_id:
             up = await db.get(ScheduledTask, upstream_task_id)
             if up:
                 snapshot["upstream_name"] = up.name
                 snapshot["upstream_output"] = _read_handoff(up.name, task.name)
+
+    # 一次运行 = 一个落点目录（§4-13）。链条上游定下的那个必须**继承**下来——
+    # 四步因此写进同一个文件夹，那才是「同一场会议」。只有链条的第一跳才解析。
+    snapshot["watch_files"] = [str(p) for p in (watch_files or [])]
+    snapshot["run_dir"] = run_dir or _resolve_run_dir(snapshot, snapshot["watch_files"])
 
     if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
         WATCH_HOOK(task_id)  # suppress self-trigger from our own writes
@@ -307,7 +338,9 @@ async def run_task(
                 tokens_in=tokens_in, tokens_out=tokens_out,
             )
             if snapshot["save_to_vault"]:
-                vault_file = _write_vault(snapshot["name"], answer, started)
+                vault_file = _write_vault(
+                    snapshot["name"], answer, started, snapshot.get("run_dir") or ""
+                )
             # 人工卡点（§4-12）：这一步跑完了，但**不**往下走——等人点头。
             # 这一步的产出照样落盘/进会话，因为它正是要给人看的东西。
             gate = bool(snapshot["require_approval"])
@@ -315,10 +348,14 @@ async def run_task(
                 run_id, _GATE_STATUS if gate else "ok", answer=answer, model_id=model_id,
                 rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
                 tokens_in=tokens_in, tokens_out=tokens_out,
+                run_dir=snapshot.get("run_dir") or "",
             )
             finished = True
             if not gate:
-                await _fire_chain(task_id, snapshot, answer, chain_depth, manual, chain_path)
+                await _fire_chain(
+                    task_id, snapshot, answer, chain_depth, manual, chain_path,
+                    snapshot.get("run_dir") or "",
+                )
                 if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
                     WATCH_HOOK(task_id)
             await _distill(snapshot, answer)
@@ -331,6 +368,7 @@ async def run_task(
                 run_id, "error", error=error, model_id=model_id,
                 rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
                 tokens_in=tokens_in, tokens_out=tokens_out,
+                run_dir=snapshot.get("run_dir") or "",
             )
             finished = True
             if not manual and snapshot["notify_on_error"]:
@@ -366,6 +404,7 @@ async def run_task(
                     run_id, "error", error=error, model_id=model_id,
                     rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
                     tokens_in=tokens_in, tokens_out=tokens_out,
+                    run_dir=snapshot.get("run_dir") or "",
                 )
             except Exception:  # noqa: BLE001
                 log.exception("finish_run fallback failed")
@@ -432,7 +471,7 @@ async def _distill(t: dict, answer: str) -> None:
 
 async def _fire_chain(
     task_id: int, snapshot: dict, answer: str, chain_depth: int, manual: bool,
-    chain_path: frozenset[int] = frozenset(),
+    chain_path: frozenset[int] = frozenset(), run_dir: str = "",
 ) -> int | None:
     """Hand the answer to the downstream task (vault file) and run it.
 
@@ -458,6 +497,7 @@ async def _fire_chain(
             await run_task(
                 nxt_id, trigger="chain", upstream_task_id=task_id,
                 chain_depth=chain_depth + 1, chain_path=chain_path | {task_id},
+                run_dir=run_dir,
             )
         except Exception:  # noqa: BLE001 - the pipeline must not crash the caller
             log.exception("chain handoff to task %s failed", nxt_id)
@@ -492,6 +532,7 @@ async def _finish_run(
     log_entries: list[dict] | None = None,
     tokens_in: int | None = None,
     tokens_out: int | None = None,
+    run_dir: str = "",
 ) -> None:
     async with SessionLocal() as db:
         row = await db.get(TaskRun, run_id)
@@ -507,6 +548,7 @@ async def _finish_run(
         row.log_json = json.dumps(log_entries or [], ensure_ascii=False)
         row.tokens_in = tokens_in
         row.tokens_out = tokens_out
+        row.run_dir = run_dir
         sub = (
             select(TaskRun.id)
             .where(TaskRun.task_id == row.task_id)
@@ -657,6 +699,7 @@ async def review_gate(run_id: int, approve: bool) -> dict:
             "trigger_kind": (task.trigger_kind or "cron") if task else "cron",
         }
         answer = run.answer or ""
+        run_dir = run.run_dir or ""
         run.status = "ok" if approve else "rejected"
         await db.commit()
 
@@ -670,11 +713,61 @@ async def review_gate(run_id: int, approve: bool) -> dict:
             0,
             manual=True,
             chain_path=frozenset({snapshot["task_id"]}),
+            run_dir=run_dir,  # 停在卡点上的一轮不能把落点目录弄丢
         )
     return {"ok": True, "approved": approve, "run_id": run_id, "next_task_id": nxt}
 
 
+def _land_audio(src: Path, run_dir: str) -> str:
+    """把录音搬进这次运行的落点目录。**只在转写成功之后调**——失败就留在 inbox 等人处置。"""
+    if not run_dir:
+        return ""
+    import shutil
+
+    try:
+        dest_dir = VAULT_DIR / run_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"audio{src.suffix.lower()}"
+        shutil.move(str(src), str(dest))
+        return dest.relative_to(VAULT_DIR).as_posix()
+    except (OSError, ValueError):
+        log.warning("could not land recording into %s", run_dir, exc_info=True)
+        return ""
+
+
+async def _transcribe(t: dict) -> dict:
+    """转写步骤（§4-13）：把触发它的那段录音交给本地 ASR——**不走模型**，这不是一次生成。"""
+    from app.core import asr, ingest
+
+    files = [
+        p for p in (t.get("watch_files") or []) if Path(p).suffix.lower() in ingest.AUDIO_EXT
+    ]
+    if not files:
+        raise RuntimeError("没有可转写的音频——这一步要靠「录音落目录」触发")
+    rel = files[0]
+    src = VAULT_DIR / rel
+    if not src.is_file():
+        raise RuntimeError(f"音频不在了：{rel}")
+
+    model_size, language = asr.prefs()
+    result = await asyncio.to_thread(asr.transcribe, str(src), model_size, language)
+    text = str((result or {}).get("text") or "").strip()
+    if not text:
+        raise RuntimeError("转写结果是空的")
+
+    landed = _land_audio(src, t.get("run_dir") or "")
+    return {
+        "answer": f"转写（{rel} → {landed}）\n\n{text}" if landed else f"转写（{rel}）\n\n{text}",
+        "sources": [],
+        "model_id": "asr",
+        "rounds": 0,
+        "tool_calls": 0,
+    }
+
+
 async def _execute(t: dict, log_entries: list[dict]) -> dict:
+    if (t.get("action") or "prompt") == "transcribe":
+        return await _transcribe(t)
     candidates = await _candidates(t["model_id"])
     model_id = candidates[0][2]
     served: dict = {}  # 实际产出内容的 provider——降级发生时它可能不是第一家
@@ -872,11 +965,12 @@ async def _persist(
         return conv.id
 
 
-def _write_vault(name: str, answer: str, when: datetime) -> str | None:
-    """Save the answer under vault/tasks/ so the watcher indexes it for RAG."""
+def _write_vault(name: str, answer: str, when: datetime, subdir: str = "") -> str | None:
+    """Save the answer under vault/<subdir>/ (default vault/tasks/) so the watcher indexes it."""
     try:
-        TASK_DIR.mkdir(parents=True, exist_ok=True)
-        p = TASK_DIR / f"{_safe_name(name)}-{when:%Y-%m-%d-%H%M}.md"
+        dest = (VAULT_DIR / subdir) if subdir else TASK_DIR
+        dest.mkdir(parents=True, exist_ok=True)
+        p = dest / f"{_safe_name(name)}-{when:%Y-%m-%d-%H%M}.md"
         p.write_text(
             f"# {name}\n\n> 定时任务自动生成 · {when:%Y-%m-%d %H:%M}\n\n{answer}\n",
             encoding="utf-8",

@@ -12,6 +12,7 @@ import time
 log = logging.getLogger(__name__)
 
 AVAILABLE_MODELS = ("tiny", "base", "small", "medium")
+DEFAULT_MODEL = "small"
 LANGUAGES = ("auto", "zh", "en", "ja")
 # direct huggingface.co is unreachable from CN networks; the mirror serves
 # plain HTTP fine but not the Xet CAS backend. Only applied when the user
@@ -52,6 +53,18 @@ def _load(model_size: str):
 def resolve_language(pref: str | None) -> str | None:
     """'auto' (and anything unknown) means let whisper detect it."""
     return pref if pref in LANGUAGES and pref != "auto" else None
+
+
+def prefs() -> tuple[str, str | None]:
+    """(model_size, language) 来自用户配置——**引擎与路由共用这一条取值规则**。
+
+    会议闭环的转写步骤（`core/tasks._transcribe`）不进路由，它得和语音输入走同一套设置。
+    """
+    from app.core.prefs import load_config
+
+    cfg = load_config()
+    size = cfg.get("asr_model") if cfg.get("asr_model") in AVAILABLE_MODELS else DEFAULT_MODEL
+    return size, resolve_language(cfg.get("asr_language"))
 
 
 def transcribe(path: str, model_size: str = "small", language: str | None = None) -> dict:

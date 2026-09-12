@@ -40,10 +40,12 @@ const EMPTY_TASK = {
   max_rounds: 12,
   retry: 1,
   notify_on_error: false,
-  trigger_kind: 'cron' as 'cron' | 'watch',
+  trigger_kind: 'cron' as 'cron' | 'watch' | 'chain',
   watch_path: '',
   chain_next_id: null as number | null,
   require_approval: false,
+  action: 'prompt' as 'prompt' | 'transcribe',
+  landing_dir: '',
 }
 
 const SETTING_SECTIONS = [
@@ -508,6 +510,8 @@ export default function SettingsPage() {
       watch_path: t.watch_path || '',
       chain_next_id: t.chain_next_id,
       require_approval: !!t.require_approval,
+      action: (t.action as 'prompt' | 'transcribe') || 'prompt',
+      landing_dir: t.landing_dir || '',
     })
   }
 
@@ -1830,7 +1834,7 @@ export default function SettingsPage() {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{t.mode === 'agent' ? '🤖' : t.trigger_kind === 'watch' ? '📁' : '⏰'} {t.name}</span>
+                  <span className="font-medium">{t.mode === 'agent' ? '🤖' : t.trigger_kind === 'watch' ? '📁' : t.trigger_kind === 'chain' ? '🔗' : '⏰'} {t.name}</span>
                   {t.mode === 'agent' && (
                     <span className="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-600 dark:bg-violet-950 dark:text-violet-300">
                       自主智能体
@@ -1839,6 +1843,10 @@ export default function SettingsPage() {
                   {t.trigger_kind === 'watch' ? (
                     <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
                       📁 监听 {t.watch_path || '/'}
+                    </code>
+                  ) : t.trigger_kind === 'chain' ? (
+                    <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
+                      🔗 链条下游
                     </code>
                   ) : (
                     <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
@@ -1863,12 +1871,15 @@ export default function SettingsPage() {
                 <div className="mt-0.5 text-xs text-neutral-400">
                   {t.trigger_kind === 'watch'
                     ? `文件变化触发${t.watch_path ? ` · ${t.watch_path}` : ' · 整个 vault'}`
-                    : `下次 ${t.enabled ? fmtTime(t.next_run) : '—'}`}
+                    : t.trigger_kind === 'chain'
+                      ? '由上游任务交接触发，自己不跑'
+                      : `下次 ${t.enabled ? fmtTime(t.next_run) : '—'}`}
                   {' · '}上次 {fmtTime(t.last_run)}
                   {t.model_id && ` · ${t.model_id}`}
                   {t.use_rag && ' · RAG'}
                   {t.mode === 'agent' ? ` · 智能体 ≤${t.max_rounds} 轮` : !t.tools_enabled && ' · 无工具'}
                   {t.save_to_vault && ' · 写入 vault'}
+                  {t.action === 'transcribe' && ' · 转写'}
                   {t.require_approval && ' · 卡点'}
                   {(t.retry ?? 0) > 0 && ` · 失败重试 ${t.retry}`}
                 </div>
@@ -2156,11 +2167,12 @@ export default function SettingsPage() {
               触发方式
               <select
                 value={taskDraft.trigger_kind}
-                onChange={(e) => setTaskDraft({ ...taskDraft, trigger_kind: e.target.value as 'cron' | 'watch' })}
+                onChange={(e) => setTaskDraft({ ...taskDraft, trigger_kind: e.target.value as 'cron' | 'watch' | 'chain' })}
                 className={inputCls}
               >
                 <option value="cron">定时（cron）</option>
                 <option value="watch">文件变化</option>
+                <option value="chain">链条下游</option>
               </select>
             </label>
             {taskDraft.trigger_kind === 'watch' ? (
@@ -2176,11 +2188,42 @@ export default function SettingsPage() {
                   文件新增/修改后自动运行；同一任务 90 秒冷却，任务自己写入的文件不会再次触发自己
                 </span>
               </label>
+            ) : taskDraft.trigger_kind === 'chain' ? (
+              <div className="flex flex-col justify-end pb-1.5 text-xs text-neutral-400">
+                只由上游任务交接触发——自己不会跑。串一条流水线时，下游步骤都用这个。
+              </div>
             ) : (
               <div className="flex flex-col justify-end pb-1.5 text-xs text-neutral-400">
                 5 段 crontab：分 时 日 月 周（本地时区）；不想等固定时刻可改用「文件变化」触发
               </div>
             )}
+          </div>
+          <div className="mt-3 grid grid-cols-[160px_1fr] gap-4">
+            <label className="flex flex-col gap-1 text-sm">
+              这一步做什么
+              <select
+                value={taskDraft.action}
+                onChange={(e) =>
+                  setTaskDraft({ ...taskDraft, action: e.target.value as 'prompt' | 'transcribe' })
+                }
+                className={inputCls}
+              >
+                <option value="prompt">跑提示词（交给模型）</option>
+                <option value="transcribe">转写录音（本地 ASR，不花模型钱）</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              产物落哪（vault 内相对目录，留空 = tasks/）
+              <input
+                value={taskDraft.landing_dir}
+                onChange={(e) => setTaskDraft({ ...taskDraft, landing_dir: e.target.value })}
+                placeholder="如 meetings"
+                className={`${inputCls} font-mono`}
+              />
+              <span className="text-xs text-neutral-400">
+                同一条链条的下游会继承上游定下的目录；由录音触发时还会再套一层「日期-录音名」
+              </span>
+            </label>
           </div>
           <label className="mt-3 flex flex-col gap-1 text-sm">
             下游任务（任务链：本任务成功后，产出经 vault/tasks/handoff/ 自动交给下游继续处理）

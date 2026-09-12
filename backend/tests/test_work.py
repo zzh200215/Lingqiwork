@@ -10,6 +10,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+
 sys.path.insert(0, ".")
 
 _TMP = Path(tempfile.mkdtemp(prefix="wb-work-", dir=Path(__file__).parent))
@@ -100,6 +103,49 @@ async def test_deliverables_are_listed(monkeypatch):
     assert row["kind"] == "deliver" and row["label"] == "交付"
     assert row["title"] == "本周进展"
     assert row["date"] == "2026-09-12"
+
+
+async def test_meetings_are_one_row_per_folder(monkeypatch):
+    """一场会议是一行——录音/转写/纪要/待办/短稿是同一件事的五个面，
+    平铺成五行反而看不出它们是一起的（§4-13）。"""
+    vault = _scratch("vault-meet")
+    _write(vault, "meetings/2026-09-12-周会/会议·纪要-2026-09-12-1030.md", "# 周会纪要\n\n正文")
+    _write(vault, "meetings/2026-09-12-周会/会议·待办-2026-09-12-1030.md", "# 待办\n")
+    _write(vault, "meetings/2026-09-12-周会/会议·转写-2026-09-12-1030.md", "# 转写\n")
+    (vault / "meetings/2026-09-12-周会/audio.m4a").write_bytes(b"x")
+    _write(vault, "meetings/inbox/待处理.m4a", "")  # inbox 不是一场会议
+    _write(vault, "meetings/2026-09-11-空壳/note.txt", "没有 md 产物")  # 半成品，不算
+    monkeypatch.setattr(work, "VAULT_DIR", vault)
+
+    rows = (await work.list_meetings())["meetings"]
+    assert len(rows) == 1
+    (m,) = rows
+    assert m["name"] == "2026-09-12-周会" and m["date"] == "2026-09-12"
+    assert m["title"] == "周会纪要"  # 拿纪要做这一场的标题，它才是"脸"
+    assert m["audio"] == "meetings/2026-09-12-周会/audio.m4a"
+    assert len(m["files"]) == 3
+
+
+async def test_meetings_empty_without_the_dir(monkeypatch):
+    vault = _scratch("vault-nomeet")
+    monkeypatch.setattr(work, "VAULT_DIR", vault)
+    assert (await work.list_meetings())["meetings"] == []
+
+
+async def test_audio_endpoint_serves_only_vault_audio(monkeypatch):
+    """这个端点不该变成「读任意文件」的入口——只认 vault 内、后缀是音频的。"""
+    vault = _scratch("vault-audio")
+    src = vault / "meetings/2026-09-12-周会/audio.m4a"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"x")
+    monkeypatch.setattr(work, "VAULT_DIR", vault)
+
+    resp = await work.get_audio("meetings/2026-09-12-周会/audio.m4a")
+    assert Path(resp.path) == src
+
+    for bad in ("", "../secret.m4a", "notes/a.md", "meetings/2026-09-12-周会/nope.m4a"):
+        with pytest.raises(HTTPException):
+            await work.get_audio(bad)
 
 
 async def test_workflow_outputs_count_but_handoff_does_not(monkeypatch):

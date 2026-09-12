@@ -747,3 +747,138 @@ async def test_task_without_the_gate_never_pauses(monkeypatch):
     result = await core.run_task(a, trigger="cron")
     assert result["awaiting_approval"] is False
     assert [c["name"] for c in CALLS] == ["无卡点", "下游3"]
+
+
+# ---------- 会议闭环（§4-13） ----------
+
+
+def _write_audio(rel: str) -> Path:
+    p = _TMP / "vault" / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\x00fake-audio")
+    return p
+
+
+def test_is_triggerable_accepts_audio_but_is_supported_does_not():
+    """音频要能让 watcher 看见，但**不进索引**——这是两件事，所以是两个函数。"""
+    from app.core import ingest
+
+    assert ingest.is_triggerable(Path("meetings/inbox/周会.m4a"))
+    assert ingest.is_triggerable(Path("notes/a.md"))
+    assert not ingest.is_triggerable(Path("data.db"))
+    assert not ingest.is_supported(Path("meetings/inbox/周会.m4a"))
+
+
+async def test_transcribe_step_reads_the_triggering_recording(monkeypatch):
+    """转写步骤：把触发它的那段录音交给本地 ASR（不走模型），成功后录音搬进会议文件夹。"""
+    monkeypatch.setattr(core, "VAULT_DIR", _TMP / "vault")
+    _write_audio("meetings/inbox/周会.m4a")
+
+    from app.core import asr
+
+    seen: list[str] = []
+
+    def fake_transcribe(path, model_size="small", language=None):
+        seen.append(path)
+        return {"text": "大家好，今天聊三件事。", "language": "zh", "duration": 12.5}
+
+    monkeypatch.setattr(asr, "transcribe", fake_transcribe)
+
+    tid = await _add_task(
+        "会议·转写", action="transcribe", landing_dir="meetings",
+        trigger_kind="watch", watch_path="meetings/inbox", save_to_vault=True,
+    )
+    r = await core.run_task(tid, trigger="watch", watch_files=["meetings/inbox/周会.m4a"])
+
+    assert r["status"] == "ok"
+    assert seen and seen[0].endswith("周会.m4a")
+    assert "今天聊三件事" in r["answer"]
+
+    (meeting,) = (_TMP / "vault" / "meetings").glob("*-周会")
+    assert (meeting / "audio.m4a").is_file()  # 原声跟着这一场走
+    assert not (_TMP / "vault" / "meetings" / "inbox" / "周会.m4a").exists()  # 搬走，不是复制
+    assert len(list(meeting.glob("会议·转写-*.md"))) == 1
+
+
+async def test_recording_stays_put_when_transcription_fails(monkeypatch):
+    """转写失败 → 录音留在 inbox 等人处置。搬文件只在成功之后，不赌。"""
+    monkeypatch.setattr(core, "VAULT_DIR", _TMP / "vault")
+    _write_audio("meetings/inbox/坏录音.m4a")
+
+    from app.core import asr
+
+    def boom(*a, **k):
+        raise RuntimeError("解码失败")
+
+    monkeypatch.setattr(asr, "transcribe", boom)
+
+    tid = await _add_task(
+        "会议·转写", action="transcribe", landing_dir="meetings", retry=0,
+        trigger_kind="watch", watch_path="meetings/inbox", save_to_vault=True,
+    )
+    r = await core.run_task(tid, trigger="watch", watch_files=["meetings/inbox/坏录音.m4a"])
+
+    assert r["status"] == "error"
+    assert (_TMP / "vault" / "meetings" / "inbox" / "坏录音.m4a").is_file()
+    assert not list((_TMP / "vault" / "meetings").glob("*-坏录音"))
+
+
+async def test_run_dir_is_inherited_down_the_chain(monkeypatch):
+    """四步写进**同一个**文件夹——那才是「同一场会议」，也是这条链的意义所在。"""
+    monkeypatch.setattr(core, "VAULT_DIR", _TMP / "vault")
+    _write_audio("meetings/inbox/周会.m4a")
+
+    from app.core import asr
+
+    monkeypatch.setattr(
+        asr, "transcribe", lambda *a, **k: {"text": "转写正文", "language": "zh", "duration": 1.0}
+    )
+
+    real_execute = core._execute
+    dirs: list[str] = []
+
+    async def recording(t: dict, log_entries: list) -> dict:
+        dirs.append(t.get("run_dir") or "")
+        if (t.get("action") or "prompt") == "transcribe":
+            return await real_execute(t, log_entries)
+        return {"answer": f"{t['name']} 的产出", "sources": [], "model_id": "m", "rounds": 0, "tool_calls": 0}
+
+    monkeypatch.setattr(core, "_execute", recording)
+
+    a = await _add_task(
+        "会议·转写", action="transcribe", landing_dir="meetings", save_to_vault=True,
+        trigger_kind="watch", watch_path="meetings/inbox",
+    )
+    b = await _add_task("会议·纪要", landing_dir="meetings", save_to_vault=True, trigger_kind="chain")
+    c = await _add_task("会议·待办", landing_dir="meetings", save_to_vault=True, trigger_kind="chain")
+    await _chain(a, b)
+    await _chain(b, c)
+
+    assert (await core.run_task(a, trigger="watch", watch_files=["meetings/inbox/周会.m4a"]))["status"] == "ok"
+
+    assert len(dirs) == 3 and len(set(dirs)) == 1 and dirs[0] != ""
+    (meeting,) = (_TMP / "vault" / "meetings").glob("*-周会")
+    # 转写 + 纪要 + 待办 全落在这一个文件夹里
+    assert len(list(meeting.glob("*.md"))) == 3
+
+
+async def test_meeting_preset_installs_four_linked_steps_and_is_idempotent(monkeypatch):
+    monkeypatch.setattr(core, "VAULT_DIR", _TMP / "vault")
+    monkeypatch.setattr(core, "reschedule", lambda: None)
+
+    from app.routers import tasks as tasks_router
+
+    monkeypatch.setattr(tasks_router, "VAULT_DIR", _TMP / "vault")
+
+    async with SessionLocal() as db:
+        out = await tasks_router.install_meeting_preset(db)
+    assert out["created"] == 4
+    assert [t["name"] for t in out["tasks"]] == ["会议·转写", "会议·纪要", "会议·待办", "会议·跟进短稿"]
+    assert [t["trigger_kind"] for t in out["tasks"]] == ["watch", "chain", "chain", "chain"]
+    assert [t["action"] for t in out["tasks"]] == ["transcribe", "prompt", "prompt", "prompt"]
+    assert out["tasks"][0]["chain_next_id"] == out["tasks"][1]["id"]
+    assert (_TMP / "vault" / "meetings" / "inbox").is_dir()  # 用户得知道录音丢哪
+
+    async with SessionLocal() as db:
+        again = await tasks_router.install_meeting_preset(db)
+    assert again["created"] == 0 and len(again["tasks"]) == 4

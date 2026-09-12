@@ -10,6 +10,11 @@ from pathlib import Path
 
 SUPPORTED_EXT = {".md", ".markdown", ".txt", ".pdf", ".docx"}
 
+# 音频：**只为触发**存在，不进索引——见 `is_triggerable`。
+# 会议闭环（§4-13）靠「录音落目录 → watch → 转写」起步，而 `TaskTriggerWatcher` 之前
+# 用 `is_supported` 筛事件，录音根本不会被看见。
+AUDIO_EXT = {".m4a", ".mp3", ".wav", ".webm", ".ogg", ".oga", ".flac", ".aac", ".mp4", ".opus"}
+
 # plain-text source files, indexed for cloned repos (not for the vault watcher,
 # which stays limited to SUPPORTED_EXT)
 TEXT_EXT = {
@@ -100,6 +105,16 @@ def parse_file(path: Path) -> str:
 
 def is_supported(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXT
+
+
+def is_triggerable(path: Path) -> bool:
+    """能引起 watch 任务的文件：可索引的文档 **或** 音频。
+
+    与 `is_supported` 分开是有意的：音频**不解析、不进索引**（转写是任务自己的事），
+    但它得能让 watcher 看见——否则录音落进目录什么都不会发生。
+    """
+    ext = path.suffix.lower()
+    return ext in SUPPORTED_EXT or ext in AUDIO_EXT
 
 
 def is_repo_indexable(path: Path) -> bool:

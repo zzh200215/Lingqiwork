@@ -13,20 +13,16 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.core import asr
-from app.core.prefs import load_config
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/asr", tags=["asr"])
 
 MAX_AUDIO_BYTES = 25 * 1024 * 1024  # ≈ several minutes of opus at 32kbps
-DEFAULT_MODEL = "small"
 
 
 def _asr_prefs() -> tuple[str, str | None]:
-    cfg = load_config()
-    model = cfg.get("asr_model") if cfg.get("asr_model") in asr.AVAILABLE_MODELS else DEFAULT_MODEL
-    return model, asr.resolve_language(cfg.get("asr_language"))
+    return asr.prefs()
 
 
 @router.get("/status")

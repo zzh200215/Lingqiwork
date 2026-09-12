@@ -401,11 +401,15 @@ export interface ScheduledTask {
   max_rounds: number
   retry: number
   notify_on_error: boolean
-  trigger_kind: 'cron' | 'watch'
+  trigger_kind: 'cron' | 'watch' | 'chain'
   watch_path: string
   chain_next_id: number | null
   /** 人工卡点：这一步跑完停下等人点头，才触发下游 */
   require_approval: boolean
+  /** 这一步做什么：prompt = 跑提示词；transcribe = 本地 ASR 转写录音 */
+  action: 'prompt' | 'transcribe'
+  /** 产物落哪个 vault 子目录（空 = tasks/）。沿链条继承，所以一条流水线的各步同目录。 */
+  landing_dir: string
   /** 停在人工卡点上的那次运行；null/缺省 = 没有待审的。放行/驳回用它。 */
   awaiting_run_id?: number | null
   conversation_id: number | null
@@ -455,6 +459,8 @@ export interface TaskRunItem {
   grounded: number | null
   /** 判分给的一句话理由 */
   judge_reason: string
+  /** 这次运行的落点目录（vault 相对；空 = tasks/） */
+  run_dir: string
   log: TaskRunLogEntry[]
 }
 
@@ -834,6 +840,19 @@ export interface DeliverCatalogue {
   audiences: DeliverOption[]
   default_genre: string
   default_audience: string
+}
+
+/** 会议闭环（§4-13）的一场：`vault/meetings/<日期>-<名>/` 一个文件夹。
+ *  录音、转写、纪要、待办、短稿是同一件事的五个面，所以按"一场"给，不按文件平铺。 */
+export interface WorkMeeting {
+  name: string
+  path: string
+  date: string
+  title: string
+  mtime: number
+  /** vault 相对路径；空 = 这一场没留录音 */
+  audio: string
+  files: { path: string; title: string }[]
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1608,6 +1627,17 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   // ---------- 工作：已经生成出来的产出 ----------
   /** 产出清单：五个引擎落在 vault 里的成品。真值是文件系统，没有登记表。 */
   workOutputs: (limit = 200) => request<{ outputs: WorkOutput[] }>(`/api/work/outputs?limit=${limit}`),
+
+  /** 会议闭环（§4-13）的成品：一场一行 */
+  workMeetings: (limit = 100) =>
+    request<{ meetings: WorkMeeting[] }>(`/api/work/meetings?limit=${limit}`),
+  /** `<audio>` 的原声地址。它带不了请求头，靠的是 cookie 鉴权。 */
+  audioUrl: (path: string) => `/api/work/audio?path=${encodeURIComponent(path)}`,
+  /** 一键装好会议闭环（inbox + 四步链）。幂等——装过就原样返回。 */
+  installMeetingPreset: () =>
+    request<{ created: number; tasks: ScheduledTask[] }>('/api/tasks/preset/meeting', {
+      method: 'POST',
+    }),
 
   // ---------- 工作：交付（把材料改写成能交出去的体裁） ----------
   /** 体裁 × 读者的定义（唯一真值在后端） */

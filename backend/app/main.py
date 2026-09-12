@@ -87,6 +87,9 @@ async def _migrate() -> None:
         ("tasks", "chain_next_id", "ALTER TABLE tasks ADD COLUMN chain_next_id INTEGER"),
         # 人工卡点（§4-12）：这一步等人点头才触发下游
         ("tasks", "require_approval", "ALTER TABLE tasks ADD COLUMN require_approval BOOLEAN DEFAULT 0"),
+        # 会议闭环（§4-13）：转写步骤 + 共享落点目录
+        ("tasks", "action", "ALTER TABLE tasks ADD COLUMN action VARCHAR(12) DEFAULT 'prompt'"),
+        ("tasks", "landing_dir", "ALTER TABLE tasks ADD COLUMN landing_dir VARCHAR(300) DEFAULT ''"),
         # V1.4 memory upgrade
         ("memories", "source", "ALTER TABLE memories ADD COLUMN source VARCHAR(10) DEFAULT 'manual'"),
         ("memories", "kind", "ALTER TABLE memories ADD COLUMN kind VARCHAR(10) DEFAULT 'fact'"),
@@ -100,6 +103,7 @@ async def _migrate() -> None:
         # 工作流运行的尺子（§4-10）：接地分 0-5 + 一句话理由
         ("task_runs", "grounded", "ALTER TABLE task_runs ADD COLUMN grounded INTEGER"),
         ("task_runs", "judge_reason", "ALTER TABLE task_runs ADD COLUMN judge_reason TEXT DEFAULT ''"),
+        ("task_runs", "run_dir", "ALTER TABLE task_runs ADD COLUMN run_dir VARCHAR(300) DEFAULT ''"),
         # tutor history compression (maple-os 参考项：长会话中段压缩)
         ("tutor_sessions", "summary", "ALTER TABLE tutor_sessions ADD COLUMN summary TEXT DEFAULT ''"),
         ("tutor_sessions", "summary_upto", "ALTER TABLE tutor_sessions ADD COLUMN summary_upto INTEGER DEFAULT 0"),
