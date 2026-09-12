@@ -32,6 +32,13 @@ async def kb_stats():
     return {**indexer.stats(), "watcher": watcher.status}
 
 
+@router.get("/drift")
+async def kb_drift():
+    """磁盘内容变了、索引里还是旧哈希的来源。按需跑——要读全部文件算哈希。"""
+    sources = await asyncio.to_thread(indexer.drifted)
+    return {"drifted": sources, "count": len(sources)}
+
+
 @router.post("/reindex")
 async def kb_reindex():
     result = await asyncio.to_thread(indexer.reindex_all)

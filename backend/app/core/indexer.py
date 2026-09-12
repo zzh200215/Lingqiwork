@@ -5,6 +5,7 @@ vectors; SQLite is not involved in indexing (chunk metadata lives in Chroma's
 own metadata). Reindexing is idempotent — a file's chunks are replaced
 atomically by upsert with deterministic chunk ids derived from (path, index).
 """
+import hashlib
 import logging
 import re
 import threading
@@ -36,8 +37,7 @@ MIN_CHUNK = 200  # 低于这个长度的块尽量并进邻居——太碎的块�
 # 合并时允许超出 CHUNK_SIZE，但不超过 CHUNK_SIZE + CHUNK_OVERLAP：那是既有测试
 # （`test_chunks_stay_within_budget`）已经认可的上界。
 CHUNK_SOFT_MAX = CHUNK_SIZE + CHUNK_OVERLAP
-# 切法一变就 +1。块元数据里带着它，对不上就是「这份索引是旧切法切的，该重建了」——
-# 这是第 10.1 节第 2 条要的版本契约里最小的一块（内容哈希与模型版本戳仍未做）。
+# 切法一变就 +1。块元数据里带着它，对不上就是「这份索引是旧切法切的，该重建了」。
 CHUNKER_VERSION = 2
 COLLECTION = "workbench_kb"
 REPO_SOURCE_PREFIX = "repos/"  # sources cloned from git live outside the vault
@@ -80,6 +80,20 @@ def get_collection():
 
 def _chunk_id(rel_path: str, idx: int) -> str:
     return f"{rel_path}::{idx}"
+
+
+def _file_hash(path: Path) -> str:
+    """源文件的字节哈希，截断到 16 位十六进制（碰撞概率在这个量级可以忽略）。
+
+    哈希的是**文件字节**而不是解析后的文本：漂移检查要重算它，而重解析一个 PDF
+    是这份成本里最贵的部分，读字节不是。代价是「字节变了但文本没变」（改了个
+    换行）会被报成漂移——可接受的假阳性。
+    """
+    h = hashlib.sha1()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()[:16]
 
 
 def _is_orphan_heading(chunk: str) -> bool:
@@ -162,6 +176,12 @@ def index_file(path: Path, root: Path = VAULT_DIR, source_prefix: str = "") -> i
 
     vectors = embedder.embed(chunks)
     new_ids = [_chunk_id(rel, i) for i in range(len(chunks))]
+    # 版本契约的两个戳，每个块都带着：
+    #   hash  —— 源文件字节的哈希。`mtime` 是靠不住的信号（cp -p、解压备份、
+    #            从快照还原都会保留它），哈希能看见 watcher 看不见的漂移。
+    #   embed —— 建这个向量的模型。换了模型，旧向量和新向量在同一个余弦空间里
+    #            没有可比性，必须能被发现（stats().stale_embed）。
+    stamp = {"hash": _file_hash(path), "embed": embedder.MODEL_NAME}
     # 先 upsert 再清残留：delete 放到 upsert 之后，并发检索看到的中间态是
     # 「新旧并存」而非「整文件缺失」——最多读到旧内容，不会漏掉整个文件。
     col.upsert(
@@ -172,8 +192,8 @@ def index_file(path: Path, root: Path = VAULT_DIR, source_prefix: str = "") -> i
                 "source": rel,
                 "chunk": i,
                 "title": path.stem,
-                "mtime": path.stat().st_mtime,
                 "chunker": CHUNKER_VERSION,
+                **stamp,
             }
             for i in range(len(chunks))
         ],
@@ -285,19 +305,72 @@ def search(query: str, top_k: int = 5) -> list[dict]:
 
 
 def stats() -> dict:
-    """索引现状。`stale` = 用**旧切法**切出来的块数——不为 0 就说明该重建索引了
-    （切法一变，块的边界全变；旧块留在库里既检索不准，也让「这次改动有没有用」
-    没法判断）。见 PLAN §10.1 #2。"""
+    """索引现状——版本契约的四个计数器。
+
+    - `stale`：用**旧切法**切出来的块数。切法一变块的边界全变，旧块留在库里既检索
+      不准，也让「这次改动有没有用」没法判断。
+    - `stale_embed`：用**别的模型** embed 的块数。同一个余弦空间里混两个模型的向量
+      得到的相似度没有意义——不为 0 就必须重建。
+    - `unhashed`：还没有内容哈希的块数（内容哈希是后加的，改动前写入的块没有）。
+      不为 0 只说明「漂移检查覆盖不全」，点一次重建即可，不影响检索结果。
+    """
     col = get_collection()
+    base = {
+        "chunks": 0,
+        "files": 0,
+        "chunker": CHUNKER_VERSION,
+        "stale": 0,
+        "embed_model": embedder.MODEL_NAME,
+        "stale_embed": 0,
+        "unhashed": 0,
+    }
     if col.count() == 0:
-        return {"chunks": 0, "files": 0, "chunker": CHUNKER_VERSION, "stale": 0}
+        return base
     metas = col.get(include=["metadatas"])["metadatas"]
     return {
+        **base,
         "chunks": col.count(),
         "files": len({m.get("source") for m in metas}),
-        "chunker": CHUNKER_VERSION,
         "stale": sum(1 for m in metas if m.get("chunker") != CHUNKER_VERSION),
+        # 缺 `embed` 的块是本改动之前写入的。这个索引从头到尾只被 bge-small-zh-v1.5
+        # 建过，所以按当前模型认——不是放水，是事实；重建一次就会带上戳。
+        "stale_embed": sum(
+            1
+            for m in metas
+            if m.get("embed") is not None and m.get("embed") != embedder.MODEL_NAME
+        ),
+        "unhashed": sum(1 for m in metas if not m.get("hash")),
     }
+
+
+def drifted(root: Path = VAULT_DIR) -> list[str]:
+    """磁盘内容变了、索引里还是旧哈希的来源。
+
+    这是 `_prune_missing` 的补集：那个管「文件没了」，这个管「文件还在但不一样了」。
+    只查 vault 自己的来源——`repos/` `dirs/` 前缀的归各自的 sync 管。
+    没有哈希的来源（改动前写入的）跳过：它们要先重建一次才谈得上比对。
+    """
+    col = get_collection()
+    if not col.count():
+        return []
+    stored: dict[str, str] = {}
+    for m in col.get(include=["metadatas"])["metadatas"]:
+        src, digest = m.get("source"), m.get("hash")
+        if src and digest:
+            stored.setdefault(src, digest)
+    out: list[str] = []
+    for src, old in stored.items():
+        if src.startswith(EXTERNAL_PREFIXES):
+            continue
+        path = root / src
+        if not path.is_file():
+            continue  # 消失的文件归 _prune_missing，不在这里重复报
+        try:
+            if _file_hash(path) != old:
+                out.append(src)
+        except OSError:
+            out.append(src)
+    return sorted(out)
 
 
 def search_hybrid(query: str, top_k: int = 5) -> list[dict]:

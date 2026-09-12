@@ -12,6 +12,12 @@ interface KbStats {
   chunker: number
   /** 用旧切法切出来的块数。不为 0 就说明该重建索引了 */
   stale: number
+  /** 当前 embedding 模型名 */
+  embed_model: string
+  /** 用别的模型 embed 的块数。同一余弦空间里混两个模型，相似度没有意义——必须重建 */
+  stale_embed: number
+  /** 还没有内容哈希的块数（哈希是后加的）。不为 0 只说明漂移检查覆盖不全 */
+  unhashed: number
 }
 
 interface Hit {
@@ -59,6 +65,7 @@ const hitColor = (v: number) =>
 export default function KbPage() {
   const [tab, setTab] = useState<'index' | 'repos' | 'dirs' | 'eval' | 'kg'>('index')
   const [stats, setStats] = useState<KbStats | null>(null)
+  const [drift, setDrift] = useState<{ count: number; drifted: string[] } | null>(null)
   const [files, setFiles] = useState<{ vault_dir: string; files: { path: string; size: number; mtime: number }[] } | null>(null)
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<Hit[] | null>(null)
@@ -424,6 +431,18 @@ export default function KbPage() {
     await refresh()
   }
 
+  async function checkDrift() {
+    setBusy(true)
+    setDrift(null)
+    try {
+      setDrift(await (await fetch('/api/kb/drift')).json())
+    } catch (e) {
+      setMessage(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function reindex() {
     setBusy(true)
     setMessage('索引中…（首次会下载 embedding 模型，约 100MB）')
@@ -576,11 +595,27 @@ export default function KbPage() {
           </div>
         </div>
 
+        {stats && stats.stale_embed > 0 ? (
+          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-2 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+            有 {stats.stale_embed} 个块是用别的 embedding 模型建出来的。两个模型的向量在同一余弦空间里
+            没有可比性——检索到的相似度是噪声，不是「稍微不准」。
+            <br />
+            当前模型：{stats.embed_model}。点「全量重建索引」全部重算一遍。
+          </div>
+        ) : null}
+
         {stats && stats.stale > 0 ? (
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
             有 {stats.stale} 个块是用旧切法切出来的——块的边界已经变了，旧块会和新块混在一起被检索到。
             <br />
             vault 里的：「全量重建索引」；repos / dirs 里的不会被它带上，要在下面各自那一行点「同步」。
+          </div>
+        ) : null}
+
+        {stats && stats.unhashed > 0 && stats.stale === 0 && stats.stale_embed === 0 ? (
+          <div className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50/70 px-3 py-2 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800/60 dark:text-neutral-400">
+            {stats.unhashed} 个块还没有内容哈希（哈希是后加的），「检查内容漂移」暂时覆盖不到它们。
+            重建一次索引即可，不影响检索结果。
           </div>
         ) : null}
 
@@ -878,6 +913,22 @@ export default function KbPage() {
           >
             全量重建索引
           </button>
+        </div>
+        <div className="mt-2 flex items-center gap-3">
+          <button
+            onClick={checkDrift}
+            disabled={busy}
+            className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 disabled:opacity-40 dark:border-neutral-600 dark:text-neutral-300"
+          >
+            检查内容漂移
+          </button>
+          {drift ? (
+            <span className={`text-xs ${drift.count ? 'text-amber-700 dark:text-amber-300' : 'text-neutral-500'}`}>
+              {drift.count === 0
+                ? '磁盘内容和索引一致。'
+                : `${drift.count} 个来源在磁盘上变了、但索引里还是旧的：${drift.drifted.slice(0, 5).join('、')}${drift.count > 5 ? ' 等' : ''}`}
+            </span>
+          ) : null}
         </div>
         {message && <p className="mt-2 text-xs text-neutral-500">{message}</p>}
         <p className="mt-3 text-xs leading-relaxed text-neutral-400">
