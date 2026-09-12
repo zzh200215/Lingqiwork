@@ -47,6 +47,7 @@ const NAV = [
   { href: '/', label: '对话', icon: '💬', key: 'chat' },
   { href: '/tutor', label: '学', icon: '🎓', key: 'tutor' },
   { href: '/work', label: '工作', icon: '🗂', key: 'work' },
+  { href: '/threads', label: '事', icon: '🧵', key: 'threads' },
   { href: '/review', label: '今日', icon: '☀️', key: 'review' },
   { href: '/dashboard', label: '仪表盘', icon: '📊', key: 'dashboard' },
   { href: '/notes', label: '笔记', icon: '📝', key: 'notes' },

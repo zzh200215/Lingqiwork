@@ -855,6 +855,52 @@ export interface WorkMeeting {
   files: { path: string; title: string }[]
 }
 
+/** 「一件事」（§4-15）：材料 / 笔记 / 卡片 / 卡点 / 成品 / 判断都挂在它上面。
+ *  vault 不搬家——这里只有名字与引用。 */
+export type ThreadKind = 'material' | 'note' | 'card' | 'tutor' | 'output' | 'task' | 'decision'
+
+export interface ThreadStep {
+  key: string
+  label: string
+  kinds: ThreadKind[]
+}
+
+export interface ThreadCandidate {
+  kind: ThreadKind
+  ref: string
+  title: string
+  label: string
+  step?: string
+}
+
+export interface ThreadItemRow {
+  kind: ThreadKind
+  ref: string
+  title: string
+  /** false = 它指的东西已经没了——照常列出来，只是不给落点 */
+  exists: boolean
+  step: string
+  href: string
+}
+
+export interface ThreadRow {
+  id: number
+  name: string
+  note: string
+  archived: boolean
+  created_at: string | null
+  updated_at: string | null
+  counts: Partial<Record<ThreadKind, number>>
+  total: number
+}
+
+export interface ThreadDetail extends ThreadRow {
+  items: ThreadItemRow[]
+  by_step: Record<string, ThreadItemRow[]>
+  steps: ThreadStep[]
+  suggestions: ThreadCandidate[]
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -1638,6 +1684,39 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     request<{ created: number; tasks: ScheduledTask[] }>('/api/tasks/preset/meeting', {
       method: 'POST',
     }),
+
+  // ---------- 一件事（§4-15） ----------
+  listThreads: (includeArchived = false) =>
+    request<{ threads: ThreadRow[]; steps: ThreadStep[] }>(
+      `/api/threads?include_archived=${includeArchived}`
+    ),
+  threadDetail: (id: number) => request<ThreadDetail>(`/api/threads/${id}`),
+  createThread: (name: string, note = '') =>
+    request<ThreadRow>('/api/threads', { method: 'POST', body: JSON.stringify({ name, note }) }),
+  updateThread: (id: number, patch: { name?: string; note?: string; archived?: boolean }) =>
+    request<ThreadRow>(`/api/threads/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
+  deleteThread: (id: number) =>
+    request<{ ok: boolean }>(`/api/threads/${id}`, { method: 'DELETE' }),
+  attachThreadItem: (id: number, kind: ThreadKind, ref: string) =>
+    request<{ ok: boolean; attached: boolean }>(`/api/threads/${id}/items`, {
+      method: 'POST',
+      body: JSON.stringify({ kind, ref }),
+    }),
+  detachThreadItem: (id: number, kind: ThreadKind, ref: string) =>
+    request<{ ok: boolean }>(
+      `/api/threads/${id}/items?kind=${kind}&ref=${encodeURIComponent(ref)}`,
+      { method: 'DELETE' }
+    ),
+  /** 还没挂到任何事的条目——允许长期存在，不催 */
+  unclassified: (limit = 60) =>
+    request<{ items: ThreadCandidate[]; total: number }>(
+      `/api/threads/unclassified?limit=${limit}`
+    ),
+  /** 这个条目该挂到哪件事上（按它自己的标签派生，不用你打字） */
+  suggestThreads: (kind: ThreadKind, ref: string) =>
+    request<{ label: string; threads: ThreadRow[] }>(
+      `/api/threads/suggest?kind=${kind}&ref=${encodeURIComponent(ref)}`
+    ),
 
   // ---------- 工作：交付（把材料改写成能交出去的体裁） ----------
   /** 体裁 × 读者的定义（唯一真值在后端） */

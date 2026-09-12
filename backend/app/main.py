@@ -55,6 +55,7 @@ from app.routers import (
     settings as settings_router,
     skills,
     tasks,
+    threads,
     tts,
     today,
     tutor,
@@ -244,6 +245,7 @@ app.include_router(today.router)
 app.include_router(tutor.router)
 app.include_router(usage.router)
 app.include_router(work.router)
+app.include_router(threads.router)
 
 # MCP server（streamable HTTP，只读工具）挂在 /mcp；session manager 由 lifespan 启动。
 # 必须在静态文件的 / 挂载之前装（见 mcp_server 模块 docstring 的坑位说明）。

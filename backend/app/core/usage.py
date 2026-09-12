@@ -17,7 +17,7 @@ LIVE_DAYS = 30  # just enough for the weekly baseline the plan asks for
 
 # the pages the frontend actually opens; anything unknown still counts, but the
 # set keeps attestation honest when we're asked what these rows mean
-PAGES = ("chat", "tutor", "work", "review", "dashboard", "notes", "kb", "settings")
+PAGES = ("chat", "tutor", "work", "threads", "review", "dashboard", "notes", "kb", "settings")
 
 
 def valid_page(page: str) -> bool:

@@ -15,6 +15,7 @@ import KBPage from './KBPage'
 import NotesPage from './NotesPage'
 import ReviewPage from './ReviewPage'
 import SettingsPage from './SettingsPage'
+import ThreadsPage from './ThreadsPage'
 import TutorPage from './TutorPage'
 import WorkPage from './WorkPage'
 import { ROUTES, RouteShell, type Module } from './routes'
@@ -23,6 +24,7 @@ const PAGES: Record<Module, ReactNode> = {
   chat: <App />,
   tutor: <TutorPage />,
   work: <WorkPage />,
+  threads: <ThreadsPage />,
   dashboard: <DashboardPage />,
   notes: <NotesPage />,
   kb: <KBPage />,

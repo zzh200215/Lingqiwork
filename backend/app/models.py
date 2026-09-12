@@ -611,6 +611,40 @@ class ModelUsage(Base):
     calls: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class Thread(Base):
+    """「一件事」——地基（§4-15）。
+
+    材料 / 笔记 / 卡片 / 卡点 / 成品 / 决策都能挂上来，答的是「这件事我到哪了」和
+    「我这个月干了什么」。**vault 不搬家**：这里只有名字，挂接在 `ThreadItem` 里存引用。
+    """
+
+    __tablename__ = "threads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    note: Mapped[str] = mapped_column(Text, default="")
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ThreadItem(Base):
+    """挂在一件事上的一条东西。**只存引用**，不复制内容。
+
+    `kind` ∈ material | note | card | tutor | output | task | decision；`ref` 是卡片/会话/
+    决策/任务的 id（字符串），或 vault 相对路径。同一条挂两次是幂等的——由唯一索引兜底，
+    不是靠调用方自觉。
+    """
+
+    __tablename__ = "thread_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_id: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(12))
+    ref: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # The uniqueness is load-bearing, not decoration: it is what makes a double tick
 # idempotent (the router upserts on it). Expressed as a unique Index rather than a
 # UniqueConstraint because a bare UniqueConstraint() at module level attaches to no
@@ -622,3 +656,10 @@ Index("ix_tutor_turns_session", TutorTurn.session_id, TutorTurn.id)
 Index("ix_feedback_group", ArtifactFeedback.kind, ArtifactFeedback.prompt_sha, ArtifactFeedback.model_id)
 Index("ix_engine_eval_group", EngineEvalRun.engine, EngineEvalRun.prompt_sha, EngineEvalRun.model_id)
 Index("ix_model_usage_recent", ModelUsage.kind, ModelUsage.id)
+Index(
+    "ix_thread_items_unique",
+    ThreadItem.thread_id,
+    ThreadItem.kind,
+    ThreadItem.ref,
+    unique=True,
+)

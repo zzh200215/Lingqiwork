@@ -6,7 +6,16 @@
 import { useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-export type Module = 'chat' | 'tutor' | 'work' | 'dashboard' | 'notes' | 'kb' | 'settings' | 'review'
+export type Module =
+  | 'chat'
+  | 'tutor'
+  | 'work'
+  | 'threads'
+  | 'dashboard'
+  | 'notes'
+  | 'kb'
+  | 'settings'
+  | 'review'
 
 /** 路径 → 模块。`/review` 现在是**进了导航的「今日」**（复习队列 + 习惯打卡）——
     够不着是客观缺陷，已修；主动提醒本身仍然封存（复习是你想起来才做的事）。 */
@@ -14,6 +23,7 @@ export const ROUTES: Record<string, Module> = {
   '/': 'chat',
   '/tutor': 'tutor',
   '/work': 'work',
+  '/threads': 'threads',
   '/dashboard': 'dashboard',
   '/notes': 'notes',
   '/kb': 'kb',
@@ -25,6 +35,7 @@ const TITLES: Record<Module, string> = {
   chat: '对话',
   tutor: '学',
   work: '工作',
+  threads: '事',
   dashboard: '仪表盘',
   notes: '笔记',
   kb: '知识库',
