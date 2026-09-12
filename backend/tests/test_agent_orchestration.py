@@ -650,3 +650,100 @@ async def test_judge_failure_does_not_fail_the_run(monkeypatch):
     task_id = await _add_task("判分挂了的任务")
     assert (await core.run_task(task_id, manual=True))["status"] == "ok"
     assert (await _last_run()).grounded is None
+
+
+# ---------- 人工卡点（§4-12） ----------
+
+
+async def _gate_run() -> TaskRun:
+    async with SessionLocal() as db:
+        return (
+            await db.execute(select(TaskRun).where(TaskRun.status == core._GATE_STATUS))
+        ).scalar_one()
+
+
+async def _chain(a: int, b: int) -> None:
+    async with SessionLocal() as db:
+        (await db.get(ScheduledTask, a)).chain_next_id = b
+        await db.commit()
+
+
+async def test_gate_stops_before_downstream_until_approved(monkeypatch):
+    """配了卡点：这一步跑完就停住——下游不许自己跑起来，直到人点头。"""
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+    gates: list[str] = []
+
+    async def record_gate(t: dict) -> None:
+        gates.append(t["name"])
+
+    monkeypatch.setattr(core, "_notify_gate", record_gate)
+
+    a = await _add_task("人工审", require_approval=True)
+    b_id = await _add_task("下游")
+    await _chain(a, b_id)
+
+    result = await core.run_task(a, trigger="cron")
+    assert result["status"] == "ok" and result["awaiting_approval"] is True
+    assert [c["name"] for c in CALLS] == ["人工审"]  # 下游没跑
+    assert gates == ["人工审"]  # 卡点要响一声，不响它可能永远停在那儿
+
+    run = await _gate_run()
+    out = await core.review_gate(run.id, approve=True)
+    assert out["approved"] is True and out["next_task_id"] == b_id
+    await asyncio.gather(*list(core._BG_TASKS))  # 放行后下游在后台续跑
+    assert [c["name"] for c in CALLS] == ["人工审", "下游"]
+
+
+async def test_reject_ends_the_pipeline(monkeypatch):
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+    async def quiet(t: dict) -> None:
+        return None
+
+    monkeypatch.setattr(core, "_notify_gate", quiet)
+
+    a = await _add_task("人工审2", require_approval=True)
+    b_id = await _add_task("下游2")
+    await _chain(a, b_id)
+
+    await core.run_task(a, trigger="cron")
+    run = await _gate_run()
+    out = await core.review_gate(run.id, approve=False)
+    assert out["approved"] is False and out["next_task_id"] is None
+
+    await asyncio.gather(*list(core._BG_TASKS))
+    assert [c["name"] for c in CALLS] == ["人工审2"]  # 流程到此为止
+
+    async with SessionLocal() as db:
+        assert (await db.get(TaskRun, run.id)).status == "rejected"
+
+
+async def test_a_run_can_only_be_reviewed_once(monkeypatch):
+    """重复点、点错行都不该改变什么——只有停在待审的那一次能被审。"""
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+
+    async def quiet(t: dict) -> None:
+        return None
+
+    monkeypatch.setattr(core, "_notify_gate", quiet)
+
+    tid = await _add_task("人工审3", require_approval=True)
+    await core.run_task(tid, trigger="cron")
+    run = await _gate_run()
+
+    assert (await core.review_gate(run.id, approve=True))["ok"] is True
+    with pytest.raises(ValueError):
+        await core.review_gate(run.id, approve=True)
+    with pytest.raises(LookupError):
+        await core.review_gate(run.id + 9999, approve=True)
+
+
+async def test_task_without_the_gate_never_pauses(monkeypatch):
+    """没配卡点的任务照旧一路跑完——卡点是 opt-in，不是新的默认。"""
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+    a = await _add_task("无卡点")
+    b_id = await _add_task("下游3")
+    await _chain(a, b_id)
+
+    result = await core.run_task(a, trigger="cron")
+    assert result["awaiting_approval"] is False
+    assert [c["name"] for c in CALLS] == ["无卡点", "下游3"]

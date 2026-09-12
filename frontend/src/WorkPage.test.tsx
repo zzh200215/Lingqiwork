@@ -22,6 +22,8 @@ vi.mock('./api', () => ({
     listTasks: vi.fn(),
     listTaskRuns: vi.fn(),
     runTask: vi.fn(),
+    approveRun: vi.fn(),
+    rejectRun: vi.fn(),
   },
 }))
 vi.mock('./stream', () => ({ streamDeliver: vi.fn() }))
@@ -79,6 +81,7 @@ function task(id: number, name: string, patch: Partial<ScheduledTask> = {}): Sch
     trigger_kind: 'cron',
     watch_path: '',
     chain_next_id: null,
+    require_approval: false,
     conversation_id: null,
     last_run: null,
     last_status: '',
@@ -120,6 +123,15 @@ const RUN: TaskRunItem = {
   judge_reason: '每条都能在材料里找到依据',
   log: [],
 }
+
+/** 配了人工卡点、且正停在待审上的那一条。 */
+const GATED = task(3, '人工审', {
+  cron: '15 10 * * *',
+  require_approval: true,
+  awaiting_run_id: 9,
+  last_run: '2026-09-12T10:15:00',
+  last_status: 'ok',
+})
 
 function renderPage() {
   return render(
@@ -191,6 +203,25 @@ describe('WorkPage · 工作流', () => {
     vi.mocked(api.listTasks).mockResolvedValue([])
     renderPage()
     expect(await screen.findByText('还没有工作流。')).toBeTruthy()
+  })
+
+  it('人工卡点：停在待审的那一步，该做的是放行——不是重跑', async () => {
+    vi.mocked(api.listTasks).mockResolvedValue([...TASKS, GATED])
+    vi.mocked(api.approveRun).mockResolvedValue({ ok: true, approved: true, next_task_id: 2 })
+    renderPage()
+
+    expect(await screen.findByText('等你点头')).toBeTruthy()
+    fireEvent.click(screen.getByText('通过'))
+    await waitFor(() => expect(api.approveRun).toHaveBeenCalledWith(9))
+  })
+
+  it('人工卡点：驳回调 rejectRun', async () => {
+    vi.mocked(api.listTasks).mockResolvedValue([...TASKS, GATED])
+    vi.mocked(api.rejectRun).mockResolvedValue({ ok: true, approved: false, next_task_id: null })
+    renderPage()
+
+    fireEvent.click(await screen.findByText('驳回'))
+    await waitFor(() => expect(api.rejectRun).toHaveBeenCalledWith(9))
   })
 })
 

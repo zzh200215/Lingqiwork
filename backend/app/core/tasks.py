@@ -260,6 +260,7 @@ async def run_task(
             "notify_on_error": bool(task.notify_on_error),
             "trigger_kind": task.trigger_kind or "cron",
             "chain_next_id": task.chain_next_id,
+            "require_approval": bool(task.require_approval),
         }
         if trigger == "chain" and upstream_task_id:
             up = await db.get(ScheduledTask, upstream_task_id)
@@ -281,6 +282,7 @@ async def run_task(
     vault_file = None
     conv_id = snapshot["conversation_id"]
     finished = False  # 是否已把 run 落成终态；兜底靠它避免重复 finish
+    gate = False  # 这一步是否停在人工卡点上（§4-12）
 
     try:
         for attempt in range(1, attempts + 1):
@@ -306,18 +308,24 @@ async def run_task(
             )
             if snapshot["save_to_vault"]:
                 vault_file = _write_vault(snapshot["name"], answer, started)
+            # 人工卡点（§4-12）：这一步跑完了，但**不**往下走——等人点头。
+            # 这一步的产出照样落盘/进会话，因为它正是要给人看的东西。
+            gate = bool(snapshot["require_approval"])
             await _finish_run(
-                run_id, "ok", answer=answer, model_id=model_id,
+                run_id, _GATE_STATUS if gate else "ok", answer=answer, model_id=model_id,
                 rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
                 tokens_in=tokens_in, tokens_out=tokens_out,
             )
             finished = True
-            await _fire_chain(task_id, snapshot, answer, chain_depth, manual, chain_path)
-            if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
-                WATCH_HOOK(task_id)
+            if not gate:
+                await _fire_chain(task_id, snapshot, answer, chain_depth, manual, chain_path)
+                if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
+                    WATCH_HOOK(task_id)
             await _distill(snapshot, answer)
             # 打分管在最后：它是一次额外的模型调用，别让它拖住下游任务（`_fire_chain`）
             await _score_run(run_id, snapshot, sources, answer)
+            if gate and not manual:
+                await _notify_gate(snapshot)
         else:
             await _finish_run(
                 run_id, "error", error=error, model_id=model_id,
@@ -391,6 +399,7 @@ async def run_task(
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "log": log_entries,
+        "awaiting_approval": gate,
     }
 
 
@@ -603,6 +612,66 @@ async def _score_run(run_id: int, t: dict, sources: list[dict], answer: str) -> 
                 await db.commit()
     except Exception:  # noqa: BLE001
         log.warning("task grounding score write failed", exc_info=True)
+
+
+_GATE_STATUS = "awaiting_approval"  # 人工卡点：跑完了，等人点头
+
+
+async def _notify_gate(t: dict) -> None:
+    """卡点等人要响一声。不响它可能永远停在那儿——这正是 §6-1 说的静默。"""
+    body = f"「{t['name']}」跑完了，等你点头才交给下游——在 /work 上放行或驳回。"
+    if load_config().get("desktop_notify", True):
+        try:
+            from app.core import notify
+
+            await asyncio.to_thread(notify.desktop, f"等你点头：{t['name']}", body)
+        except Exception:  # noqa: BLE001 - 通知挂了不该影响流程
+            log.debug("gate desktop notification failed", exc_info=True)
+    if t.get("notify_on_error"):  # 同一个「要我留意」的开关，复用它
+        from app.core import mailer
+
+        try:
+            await asyncio.to_thread(mailer.send, f"任务等待确认：{t['name']}", body)
+        except Exception:  # noqa: BLE001
+            log.warning("gate notification mail could not be sent", exc_info=True)
+
+
+async def review_gate(run_id: int, approve: bool) -> dict:
+    """人工卡点（§4-12）：通过 → 把这一步的产出交给下游；驳回 → 流程到此为止。
+
+    只有停在 `awaiting_approval` 的那一步可以被审——重复点、点错行都不该改变什么
+    （抛 `ValueError`，路由转 409）。驳回**不删**这一步的产出：它是给人看的东西，
+    要不要留由人决定。
+    """
+    async with SessionLocal() as db:
+        run = await db.get(TaskRun, run_id)
+        if run is None:
+            raise LookupError("run not found")
+        if run.status != _GATE_STATUS:
+            raise ValueError(f"这次运行不在等确认（当前 {run.status}）")
+        task = await db.get(ScheduledTask, run.task_id)
+        snapshot = {
+            "task_id": run.task_id,
+            "name": (task.name if task else "") or "",
+            "chain_next_id": task.chain_next_id if task else None,
+            "trigger_kind": (task.trigger_kind or "cron") if task else "cron",
+        }
+        answer = run.answer or ""
+        run.status = "ok" if approve else "rejected"
+        await db.commit()
+
+    nxt = None
+    if approve:
+        # 后台续跑：一个完整的下游流水线可能跑几分钟，HTTP 响应不该等它
+        nxt = await _fire_chain(
+            snapshot["task_id"],
+            snapshot,
+            answer,
+            0,
+            manual=True,
+            chain_path=frozenset({snapshot["task_id"]}),
+        )
+    return {"ok": True, "approved": approve, "run_id": run_id, "next_task_id": nxt}
 
 
 async def _execute(t: dict, log_entries: list[dict]) -> dict:

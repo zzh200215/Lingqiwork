@@ -58,10 +58,13 @@ function fmtWhen(iso: string | null): string {
   return iso ? iso.slice(5, 16).replace('T', ' ') : ''
 }
 
-/** 这次运行怎么样。`running` 优先——它还没结束，谈不上成败。 */
+/** 这次运行怎么样。`running` / 待审优先——它们还没结束，谈不上成败。 */
 function runTone(r: TaskRunItem): { cls: string; text: string } {
   if (r.status === 'running') return { cls: 'text-amber-600 dark:text-amber-400', text: '运行中' }
+  if (r.status === 'awaiting_approval')
+    return { cls: 'text-amber-600 dark:text-amber-400', text: '等你点头' }
   if (r.status === 'ok') return { cls: 'text-emerald-600 dark:text-emerald-400', text: '✓' }
+  if (r.status === 'rejected') return { cls: 'text-neutral-400', text: '已驳回' }
   return { cls: 'text-rose-600 dark:text-rose-400', text: '✗' }
 }
 
@@ -99,24 +102,31 @@ function WorkflowRow({
   open,
   runs,
   busy,
+  reviewBusy,
   onToggle,
   onRerun,
+  onReview,
 }: {
   task: ScheduledTask
   nextName: string
   open: boolean
   runs: TaskRunItem[]
   busy: boolean
+  reviewBusy: boolean
   onToggle: () => void
   onRerun: () => void
+  onReview: (approve: boolean) => void
 }) {
+  const waiting = task.awaiting_run_id ?? null
   const tone = task.running
     ? { cls: 'text-amber-600 dark:text-amber-400', text: '运行中' }
-    : task.last_status === 'ok'
-      ? { cls: 'text-emerald-600 dark:text-emerald-400', text: '✓' }
-      : task.last_status === 'error'
-        ? { cls: 'text-rose-600 dark:text-rose-400', text: '✗' }
-        : { cls: 'text-neutral-400', text: '—' }
+    : waiting
+      ? { cls: 'text-amber-600 dark:text-amber-400', text: '等你点头' }
+      : task.last_status === 'ok'
+        ? { cls: 'text-emerald-600 dark:text-emerald-400', text: '✓' }
+        : task.last_status === 'error'
+          ? { cls: 'text-rose-600 dark:text-rose-400', text: '✗' }
+          : { cls: 'text-neutral-400', text: '—' }
 
   return (
     <li className="py-2.5">
@@ -133,6 +143,9 @@ function WorkflowRow({
         <button onClick={onToggle} className="min-w-0 flex-1 text-left" title={task.prompt}>
           <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">
             {task.name}
+            {task.require_approval ? (
+              <span className="pl-1.5 text-[11px] text-neutral-400">卡点</span>
+            ) : null}
             {!task.enabled ? <span className="pl-1.5 text-[11px] text-neutral-400">已停用</span> : null}
           </span>
           <span className="block truncate text-[11px] text-neutral-400">
@@ -142,19 +155,44 @@ function WorkflowRow({
           </span>
         </button>
         <span className={`shrink-0 text-[11px] ${tone.cls}`}>{tone.text}</span>
-        <button
-          onClick={onRerun}
-          disabled={busy || task.running}
-          className="shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400"
-        >
-          {busy ? '跑着…' : '重跑'}
-        </button>
+        {/* 停在卡点上时，这里就该是放行/驳回——它才是此刻唯一该做的动作 */}
+        {waiting ? (
+          <>
+            <button
+              onClick={() => onReview(true)}
+              disabled={reviewBusy}
+              className="shrink-0 rounded-full border border-emerald-300 px-2 py-0.5 text-[11px] text-emerald-700 transition-colors hover:bg-emerald-50 disabled:opacity-40 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+            >
+              通过
+            </button>
+            <button
+              onClick={() => onReview(false)}
+              disabled={reviewBusy}
+              className="shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 transition-colors hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              驳回
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={onRerun}
+            disabled={busy || task.running}
+            className="shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400"
+          >
+            {busy ? '跑着…' : '重跑'}
+          </button>
+        )}
       </div>
 
       {/* 失败原因直接摊在行下——「为什么失败」不该要再点一次才看得到 */}
       {task.last_status === 'error' && task.last_result ? (
         <p className="mt-1 truncate text-[11px] text-rose-600 dark:text-rose-400" title={task.last_result}>
           {task.last_result}
+        </p>
+      ) : null}
+      {waiting ? (
+        <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+          这一步跑完了，等你点头才交给下游{nextName ? `（${nextName}）` : ''}——展开可以看它的产出。
         </p>
       ) : null}
 
@@ -185,6 +223,7 @@ export default function WorkPage() {
   const [openRuns, setOpenRuns] = useState<number | null>(null)
   const [runs, setRuns] = useState<TaskRunItem[]>([])
   const [wfBusy, setWfBusy] = useState<number | null>(null)
+  const [wfrBusy, setWfrBusy] = useState<number | null>(null) // 正在放行/驳回的那次运行
 
   // 交付：体裁 × 读者的定义来自后端（唯一真值），话题由你给。
   const [catalogue, setCatalogue] = useState<DeliverCatalogue | null>(null)
@@ -256,6 +295,31 @@ export default function WorkPage() {
         /* 失败原因会落在 run 记录里，下一次展开就看得见 */
       } finally {
         setWfBusy(null)
+      }
+    },
+    [openRuns, refreshTasks, refreshOutputs]
+  )
+
+  /** 人工卡点（§4-12）：通过 / 驳回。冲突（已经审过了）不吵人——刷新出来的就是事实。 */
+  const review = useCallback(
+    async (taskId: number, runId: number, approve: boolean) => {
+      setWfrBusy(runId)
+      try {
+        if (approve) await api.approveRun(runId)
+        else await api.rejectRun(runId)
+        refreshOutputs() // 放行后下游可能落 vault
+      } catch {
+        /* 见上：状态早就变了，刷新即可 */
+      } finally {
+        setWfrBusy(null)
+        refreshTasks()
+        if (openRuns === taskId) {
+          try {
+            setRuns(await api.listTaskRuns(taskId))
+          } catch {
+            /* 列表拉不到就保持原样 */
+          }
+        }
       }
     },
     [openRuns, refreshTasks, refreshOutputs]
@@ -463,8 +527,12 @@ export default function WorkPage() {
                 open={openRuns === t.id}
                 runs={runs}
                 busy={wfBusy === t.id}
+                reviewBusy={wfrBusy === t.awaiting_run_id}
                 onToggle={() => void toggleRuns(t.id)}
                 onRerun={() => void rerun(t.id)}
+                onReview={(approve) => {
+                  if (t.awaiting_run_id != null) void review(t.id, t.awaiting_run_id, approve)
+                }}
               />
             ))}
           </ul>

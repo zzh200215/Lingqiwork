@@ -181,6 +181,9 @@ class ScheduledTask(Base):
     trigger_kind: Mapped[str] = mapped_column(String(10), default="cron")  # cron | watch
     watch_path: Mapped[str] = mapped_column(String(500), default="")  # vault-relative dir/file
     chain_next_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # downstream task
+    # 人工卡点（§4-12）：这一步跑完停在 `awaiting_approval`，等人点头才触发下游。
+    # 从 `decide` 借来的模式——「先摆出来给人看，再往下走」。
+    require_approval: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class TaskRun(Base):
@@ -194,7 +197,7 @@ class TaskRun(Base):
     upstream_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(String(10), default="running")  # running | ok | error
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running | ok | error | awaiting_approval | rejected
     mode: Mapped[str] = mapped_column(String(10), default="simple")
     model_id: Mapped[str] = mapped_column(String(100), default="")
     rounds: Mapped[int] = mapped_column(Integer, default=0)  # model rounds in agent mode

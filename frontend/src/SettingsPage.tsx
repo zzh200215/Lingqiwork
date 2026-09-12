@@ -43,6 +43,7 @@ const EMPTY_TASK = {
   trigger_kind: 'cron' as 'cron' | 'watch',
   watch_path: '',
   chain_next_id: null as number | null,
+  require_approval: false,
 }
 
 const SETTING_SECTIONS = [
@@ -506,6 +507,7 @@ export default function SettingsPage() {
       trigger_kind: t.trigger_kind || 'cron',
       watch_path: t.watch_path || '',
       chain_next_id: t.chain_next_id,
+      require_approval: !!t.require_approval,
     })
   }
 
@@ -1867,6 +1869,7 @@ export default function SettingsPage() {
                   {t.use_rag && ' · RAG'}
                   {t.mode === 'agent' ? ` · 智能体 ≤${t.max_rounds} 轮` : !t.tools_enabled && ' · 无工具'}
                   {t.save_to_vault && ' · 写入 vault'}
+                  {t.require_approval && ' · 卡点'}
                   {(t.retry ?? 0) > 0 && ` · 失败重试 ${t.retry}`}
                 </div>
               </div>
@@ -2105,6 +2108,16 @@ export default function SettingsPage() {
                   onChange={(e) => setTaskDraft({ ...taskDraft, notify_on_error: e.target.checked })}
                 />
                 失败时邮件通知（需配置 SMTP）
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={taskDraft.require_approval}
+                  onChange={(e) =>
+                    setTaskDraft({ ...taskDraft, require_approval: e.target.checked })
+                  }
+                />
+                跑完等我点头再交给下游（人工卡点，在「工作」页放行）
               </label>
               <label className="flex items-center gap-2">
                 <input

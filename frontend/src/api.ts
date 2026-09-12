@@ -404,6 +404,10 @@ export interface ScheduledTask {
   trigger_kind: 'cron' | 'watch'
   watch_path: string
   chain_next_id: number | null
+  /** 人工卡点：这一步跑完停下等人点头，才触发下游 */
+  require_approval: boolean
+  /** 停在人工卡点上的那次运行；null/缺省 = 没有待审的。放行/驳回用它。 */
+  awaiting_run_id?: number | null
   conversation_id: number | null
   last_run: string | null
   last_status: string
@@ -1389,6 +1393,18 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     request<ScheduledTask>(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(t) }),
   deleteTask: (id: number) => request<{ ok: boolean }>(`/api/tasks/${id}`, { method: 'DELETE' }),
   runTask: (id: number) => request<TaskRunResult>(`/api/tasks/${id}/run`, { method: 'POST' }),
+  /** 人工卡点（§4-12）：放行——这一步的产出交给下游任务 */
+  approveRun: (runId: number) =>
+    request<{ ok: boolean; approved: boolean; next_task_id: number | null }>(
+      `/api/tasks/runs/${runId}/approve`,
+      { method: 'POST' }
+    ),
+  /** 人工卡点（§4-12）：驳回——流程到此为止（产出留着，由你处置） */
+  rejectRun: (runId: number) =>
+    request<{ ok: boolean; approved: boolean; next_task_id: number | null }>(
+      `/api/tasks/runs/${runId}/reject`,
+      { method: 'POST' }
+    ),
   listTaskTools: () => request<TaskTool[]>('/api/tasks/tools'),
   listTaskRuns: (id: number) => request<TaskRunItem[]>(`/api/tasks/${id}/runs`),
   parseTask: (text: string) =>

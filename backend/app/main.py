@@ -85,6 +85,8 @@ async def _migrate() -> None:
         ("tasks", "trigger_kind", "ALTER TABLE tasks ADD COLUMN trigger_kind VARCHAR(10) DEFAULT 'cron'"),
         ("tasks", "watch_path", "ALTER TABLE tasks ADD COLUMN watch_path VARCHAR(500) DEFAULT ''"),
         ("tasks", "chain_next_id", "ALTER TABLE tasks ADD COLUMN chain_next_id INTEGER"),
+        # 人工卡点（§4-12）：这一步等人点头才触发下游
+        ("tasks", "require_approval", "ALTER TABLE tasks ADD COLUMN require_approval BOOLEAN DEFAULT 0"),
         # V1.4 memory upgrade
         ("memories", "source", "ALTER TABLE memories ADD COLUMN source VARCHAR(10) DEFAULT 'manual'"),
         ("memories", "kind", "ALTER TABLE memories ADD COLUMN kind VARCHAR(10) DEFAULT 'fact'"),

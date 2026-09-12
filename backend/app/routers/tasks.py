@@ -38,6 +38,7 @@ class TaskIn(BaseModel):
     trigger_kind: str = "cron"  # cron | watch
     watch_path: str = ""
     chain_next_id: int | None = None
+    require_approval: bool = False  # 人工卡点：跑完等人点头再触发下游
 
     @field_validator("name")
     @classmethod
@@ -114,6 +115,7 @@ class TaskPatch(BaseModel):
     trigger_kind: str | None = None
     watch_path: str | None = None
     chain_next_id: int | None = None
+    require_approval: bool | None = None
 
     @field_validator("cron")
     @classmethod
@@ -174,6 +176,7 @@ def _out(t: ScheduledTask) -> dict:
         "trigger_kind": t.trigger_kind or "cron",
         "watch_path": t.watch_path or "",
         "chain_next_id": t.chain_next_id,
+        "require_approval": bool(t.require_approval),
         "conversation_id": t.conversation_id,
         "last_run": t.last_run.isoformat(timespec="seconds") if t.last_run else None,
         "last_status": t.last_status,
@@ -216,7 +219,19 @@ async def list_tasks(db: AsyncSession = Depends(get_db)):
             await db.execute(select(TaskRun.task_id).where(TaskRun.status == "running").distinct())
         ).scalars().all()
     )
-    return [{**_out(r), "running": r.id in running} for r in rows]
+    # 停在人工卡点上的那一步：下游还没被触发，界面上要能直接放行/驳回。
+    # 升序取，后写覆盖先写——留下的就是**最新**那次待审的运行。
+    awaiting: dict[int, int] = {}
+    for r in (
+        await db.execute(
+            select(TaskRun).where(TaskRun.status == core._GATE_STATUS).order_by(TaskRun.id)
+        )
+    ).scalars().all():
+        awaiting[r.task_id] = r.id
+    return [
+        {**_out(r), "running": r.id in running, "awaiting_run_id": awaiting.get(r.id)}
+        for r in rows
+    ]
 
 
 @router.get("/tools")
@@ -302,6 +317,27 @@ async def run_now(task_id: int, db: AsyncSession = Depends(get_db)):
     if not await db.get(ScheduledTask, task_id):
         raise HTTPException(404, "task not found")
     return await core.run_task(task_id, manual=True, trigger="manual")
+
+
+async def _review(run_id: int, approve: bool) -> dict:
+    try:
+        return await core.review_gate(run_id, approve)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/runs/{run_id}/approve")
+async def approve_run(run_id: int):
+    """人工卡点：放行——把这一步的产出交给下游任务。"""
+    return await _review(run_id, approve=True)
+
+
+@router.post("/runs/{run_id}/reject")
+async def reject_run(run_id: int):
+    """人工卡点：驳回——流程到此为止（这一步的产出留着，由你处置）。"""
+    return await _review(run_id, approve=False)
 
 
 class ParseIn(BaseModel):
