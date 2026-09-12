@@ -4,7 +4,7 @@ import { defineConfig } from 'vite'
 /// <reference types="vitest/config" />
 import react from '@vitejs/plugin-react'
 
-/** The backend's startup token (PLAN §10.1 #6), read per request so this heals
+/** The backend's startup token, read per request so this heals
  * if vite is up before the backend has written it. */
 function apiToken(): string | null {
   try {

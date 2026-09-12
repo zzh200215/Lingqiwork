@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, Outlet, useNavigate } from 'react-router-dom'
 
 import PetWidget from './PetWidget'
+import SplitPane from './SplitPane'
 import { api } from './api'
 import { useModule } from './routes'
 
@@ -144,7 +145,9 @@ export default function Layout() {
       </aside>
       {/* 滚动/高度容器已上提到 RouteShell（routes.tsx）——它与「页面能不能裸渲染」
           是同一件事，两个地方都需要。 */}
-      <Outlet />
+      <SplitPane>
+        <Outlet />
+      </SplitPane>
       <PetWidget />
     </div>
   )

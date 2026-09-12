@@ -55,3 +55,16 @@ export function buildBookmarklet(origin: string): string {
     '})()'
   )
 }
+
+/**
+ * 剪藏深链跑完之后，这个窗口该不该自己关掉。
+ *
+ * 判据是 `window.opener`：只有脚本开的窗口 close() 才有效。书签小工具正是那个形态；
+ * 而把深链粘进普通标签页时 opener 为空——那就把结果留在页面上给人看，别让它关掉一片
+ * 用户自己开的标签。
+ *
+ * 抽成纯函数纯粹是为了能测：jsdom 不实现 `window.opener`，也不允许 close。
+ */
+export function shouldAutoClose(hasOpener: boolean, ok: boolean): boolean {
+  return ok && hasOpener
+}

@@ -53,6 +53,12 @@ export function parseRoute(pathname: string): Module | null {
   return p === null ? null : ROUTES[p]
 }
 
+/** 侧栏顶栏那行字用的：给一个 href（可能带 query）→ 该叫什么。 */
+export function titleFor(href: string): string {
+  const module = parseRoute((href || '').split(/[?#]/)[0])
+  return module ? TITLES[module] : '侧栏'
+}
+
 /** 旧路径 → 该跳去的新地址；已经是新路径、或不是已知路由 → null。
  *
  *  **`search` 和 `hash` 必须原样带上。** 存量书签打过来的是

@@ -233,7 +233,13 @@ export default function PetWidget() {
         .pet-bubble { animation: pet-bubble-in 0.22s ease-out; }
       `}</style>
 
-      <div ref={panelRef} className="fixed bottom-5 right-5 z-50 flex flex-col items-end">
+      {/* `--aside-w` 是分栏那一侧设的（SplitPane）：侧栏就在右下角，
+          不躲开的话宠物正好压在它上面。没有侧栏时它是 0。 */}
+      <div
+        ref={panelRef}
+        style={{ right: 'calc(1.25rem + var(--aside-w, 0px))' }}
+        className="fixed bottom-5 z-50 flex flex-col items-end"
+      >
         {/* speech bubble above the sprite */}
         {bubble && !open && (
           <button

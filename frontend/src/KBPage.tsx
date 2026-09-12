@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, type DirItem, type EvalItem, type EvalRun, type KgRetrieval, type KgStatus, type RepoItem } from './api'
 import BookmarkletLink from './BookmarkletLink'
-import { buildBookmarklet, parseClipParams } from './capture'
+import { buildBookmarklet, parseClipParams, shouldAutoClose } from './capture'
 
 interface KbStats {
   chunks: number
@@ -501,7 +501,7 @@ export default function KbPage() {
     deeplinkDone.current = key
     setSearchParams({}, { replace: true })
     void runClip(req.url, req.title || undefined).then((ok) => {
-      if (ok && window.opener) window.setTimeout(() => window.close(), 3000)
+      if (shouldAutoClose(Boolean(window.opener), ok)) window.setTimeout(() => window.close(), 3000)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clipParam, clipTitle, setSearchParams])
@@ -544,7 +544,9 @@ export default function KbPage() {
           <h1 className="text-xl font-semibold">知识库</h1>
           <p className="mt-0.5 text-xs text-neutral-400">管理 RAG 的知识来源：文档、仓库、目录与图谱</p>
         </div>
-        <div className="flex gap-1 rounded-md bg-neutral-100 p-1 text-sm dark:bg-neutral-900">
+        {/* 几个分页签排成一行，加起来比窄窗格宽。给个横向滚动，
+            不然窄的那几页签直接被裁掉、点都点不到。 */}
+        <div className="flex gap-1 overflow-x-auto rounded-md bg-neutral-100 p-1 text-sm dark:bg-neutral-900">
           {([
             ['index', '📚 索引与检索', undefined as number | undefined],
             ['repos', '📦 代码仓库', repos.length],
@@ -801,8 +803,10 @@ export default function KbPage() {
           </h2>
           <span className="max-w-[55%] truncate text-xs text-neutral-400">vault 目录：{files?.vault_dir}</span>
         </div>
+        {/* 表格不会缩到内容以下（路径那一列就有三百来像素）。给个横向滚动，
+            别用 overflow-hidden——那样窄窗格里直接切掉，看不到也点不着。 */}
         {files && files.files.length > 0 ? (
-          <div className="overflow-hidden rounded-lg border border-neutral-100 dark:border-neutral-800">
+          <div className="overflow-x-auto rounded-lg border border-neutral-100 dark:border-neutral-800">
             <table className="w-full text-left text-sm">
               <thead className="bg-neutral-50 text-xs text-neutral-400 dark:bg-neutral-900/60">
                 <tr>

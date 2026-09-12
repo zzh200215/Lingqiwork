@@ -29,6 +29,7 @@ import {
   type TutorMaterialSource,
   type TutorRecallHit,
 } from './stream'
+import { useAside } from './split'
 
 // 对话式教学 (第一步). You name something to understand, it asks
 // before it explains, and a session ends as 概念 / 自评 / 卡点.
@@ -140,6 +141,7 @@ function Bubble({ turn }: { turn: Turn }) {
 
 export default function TutorPage() {
   const [searchParams] = useSearchParams()
+  const aside = useAside()
   const [sid, setSid] = useState<number | null>(null)
   const [topic, setTopic] = useState('')
   const [mode, setMode] = useState<'socratic' | 'feynman' | 'future'>('socratic')
@@ -806,6 +808,13 @@ export default function TutorPage() {
                   className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-teal-600 transition-colors hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 dark:text-teal-300 dark:hover:bg-teal-500/10"
                 >
                   {cfBusy ? '对质中…' : '⚔️ 对质'}
+                </button>
+                <button
+                  onClick={() => aside.toggle('/kb')}
+                  title="在右侧并排打开知识库——边学边翻材料，不用离开这场会话"
+                  className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-300 dark:hover:bg-amber-500/10"
+                >
+                  📚 资料
                 </button>
                 <button
                   onClick={reset}

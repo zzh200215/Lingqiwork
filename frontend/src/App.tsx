@@ -1081,7 +1081,10 @@ function ChatView() {
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       {/* Header */}
-      <header className="flex items-center gap-3 border-b border-neutral-200/80 bg-white/80 px-4 py-2.5 backdrop-blur dark:border-neutral-800/80 dark:bg-neutral-950/80">
+      {/* flex-wrap：这一行放的是模型下拉 + RAG 开关 + 各种 icon 按钮，宽度由内容
+          说了算（select 不会缩到自己文字以下）。不换行的话窄窗格/窄窗口里这一行会
+          顶出横向滚动条——分屏侧栏只有三百来像素，一定会撞上。 */}
+      <header className="flex flex-wrap items-center gap-3 border-b border-neutral-200/80 bg-white/80 px-4 py-2.5 backdrop-blur dark:border-neutral-800/80 dark:bg-neutral-950/80">
         <select
           value={currentModel}
           onChange={async (e) => {
@@ -1095,7 +1098,7 @@ function ChatView() {
             }
           }}
           disabled={!modelOptions.length}
-          className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-sm shadow-sm transition-colors hover:border-violet-300 focus:border-violet-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+          className="min-w-0 max-w-full rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-sm shadow-sm transition-colors hover:border-violet-300 focus:border-violet-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50"
         >
           {!modelOptions.length && <option value="">未配置模型</option>}
           {modelOptions.map((o) => (
@@ -1108,7 +1111,7 @@ function ChatView() {
           <select
             value={agentId ?? ''}
             onChange={(e) => setAgentId(e.target.value ? Number(e.target.value) : null)}
-            className={`rounded-lg border px-2.5 py-1.5 text-sm shadow-sm transition-colors focus:outline-none ${
+            className={`min-w-0 max-w-full rounded-lg border px-2.5 py-1.5 text-sm shadow-sm transition-colors focus:outline-none ${
               agentId != null
                 ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300'
                 : 'border-neutral-200 bg-white text-neutral-400 hover:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900'
@@ -1127,7 +1130,7 @@ function ChatView() {
             value={compareModel}
             onChange={(e) => setCompareModel(e.target.value)}
             title="选择第二个模型做一问多答对比"
-            className={`rounded-lg border px-2.5 py-1.5 text-sm shadow-sm transition-colors focus:outline-none ${
+            className={`min-w-0 max-w-full rounded-lg border px-2.5 py-1.5 text-sm shadow-sm transition-colors focus:outline-none ${
               compareModel
                 ? 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300'
                 : 'border-neutral-200 bg-white text-neutral-400 hover:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900'

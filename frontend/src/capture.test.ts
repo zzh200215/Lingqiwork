@@ -4,7 +4,7 @@
 // 在浏览器里极难查——所以在这里钉死。
 import { describe, expect, it } from 'vitest'
 
-import { asSingleUrl, buildBookmarklet, parseClipParams } from './capture'
+import { asSingleUrl, buildBookmarklet, parseClipParams, shouldAutoClose } from './capture'
 
 describe('parseClipParams', () => {
   it('解析 clip 与 title', () => {
@@ -73,5 +73,20 @@ describe('buildBookmarklet', () => {
 
   it('带上固定的小窗尺寸（剪藏结果就地显示，3 秒后自关）', () => {
     expect(bm).toContain("'width=520,height=240'")
+  })
+})
+
+describe('shouldAutoClose', () => {
+  it('小工具开的窗口（有 opener）剪成功才自关', () => {
+    expect(shouldAutoClose(true, true)).toBe(true)
+  })
+
+  it('抓取失败就不关 —— 结果要留在眼前，自关等于把错误也关没了', () => {
+    expect(shouldAutoClose(true, false)).toBe(false)
+  })
+
+  it('粘进普通标签页的深链不自关 —— opener 为空，那是用户自己的标签', () => {
+    expect(shouldAutoClose(false, true)).toBe(false)
+    expect(shouldAutoClose(false, false)).toBe(false)
   })
 })
