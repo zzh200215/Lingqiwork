@@ -1161,6 +1161,59 @@ export interface EngineEvalRunResult {
   coverage: Record<string, number>
 }
 
+// ---------- 零柒：成长 + 能力插件（Track B） ----------
+
+/** 成长的一个来源（「把东西搞懂」等）。全部是累计量，所以只增不减。 */
+export interface PetGrowthPart {
+  key: 'learning' | 'work' | 'habits' | 'review'
+  label: string
+  exp: number
+}
+
+/** 零柒的成长：等级 / 称号 / 累计 EXP。**只有累计与达成，没有「还欠 N」。** */
+export interface PetGrowth {
+  level: number
+  title: string
+  exp: number
+  /** 「正在靠近」的下一级称号；空 = 已到顶 */
+  next_title: string
+  /** 0-1 的进度条（只用来画条，界面不显示「还差 N」） */
+  progress: number
+  parts: PetGrowthPart[]
+  counts: Record<string, number>
+}
+
+/** 插件面板：哪种面板 + 它要显示的数。sdk 里叫「面板」。 */
+export interface PetPluginPanel {
+  kind: 'counter' | 'timer'
+  unit?: string
+  target?: number
+  value?: number
+  running?: boolean
+  remaining?: number
+  minutes?: number
+  default_minutes?: number
+}
+
+/** 一个装好的能力插件（openpets 范式：权限 / 配额 / 存储 / 计划 / 事件 / 命令 / 面板）。 */
+export interface PetPlugin {
+  name: string
+  label: string
+  enabled: boolean
+  permissions: string[]
+  commands: string[]
+  panel: PetPluginPanel
+  quota: { used: number; cap: number }
+}
+
+export interface PetPluginCommandResult {
+  ok: boolean
+  name: string
+  command: string
+  panel: PetPluginPanel
+  said: string | null
+}
+
 export const api = {  listProviders: () => request<ProviderConfig[]>('/api/settings/providers'),
   createProvider: (p: Partial<ProviderConfig>) =>
     request<ProviderConfig>('/api/settings/providers', { method: 'POST', body: JSON.stringify(p) }),
@@ -1701,6 +1754,21 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       body: JSON.stringify({ page }),
     }),
   todayNext: () => request<TodayNext>('/api/today/next'),
+
+  // ---------- 零柒：成长 + 能力插件（Track B） ----------
+  /** 成长：等级 / 称号 / 累计 EXP / 各来源。只正面呈现。 */
+  petGrowth: () => request<PetGrowth>('/api/pet/growth'),
+  petPlugins: () => request<{ plugins: PetPlugin[] }>('/api/pet/plugins'),
+  petPluginCommand: (name: string, command: string, args?: Record<string, unknown>) =>
+    request<PetPluginCommandResult>(`/api/pet/plugins/${encodeURIComponent(name)}/command`, {
+      method: 'POST',
+      body: JSON.stringify({ command, args }),
+    }),
+  petPluginToggle: (name: string, enabled: boolean) =>
+    request<{ ok: boolean; name: string; enabled: boolean }>(
+      `/api/pet/plugins/${encodeURIComponent(name)}`,
+      { method: 'PUT', body: JSON.stringify({ enabled }) }
+    ),
 
   // ---------- 工作：已经生成出来的产出 ----------
   /** 产出清单：五个引擎落在 vault 里的成品。真值是文件系统，没有登记表。 */

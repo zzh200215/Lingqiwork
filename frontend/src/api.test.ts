@@ -72,3 +72,38 @@ describe('tutorStart', () => {
     })
   })
 })
+
+describe('零柒：成长 + 能力插件（Track B）', () => {
+  function stub() {
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('{}', { status: 200 })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('petGrowth 打 /api/pet/growth', async () => {
+    const fetchMock = stub()
+    await api.petGrowth()
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/pet/growth')
+  })
+
+  it('插件命令把 command 与 args 一起放进请求体 —— 专注计时的分钟数靠它', async () => {
+    const fetchMock = stub()
+    await api.petPluginCommand('focus', 'start', { minutes: 25 })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/pet/plugins/focus/command')
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      command: 'start',
+      args: { minutes: 25 },
+    })
+  })
+
+  it('插件名进 URL 前先编码，空格 / 中文不至于拼坏路径', async () => {
+    const fetchMock = stub()
+    await api.petPluginCommand('喝 水', 'drink')
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/pet/plugins/' + encodeURIComponent('喝 水') + '/command'
+    )
+  })
+})

@@ -478,6 +478,14 @@ async def concepts() -> list[dict]:
 LEARNING_MAP_CAP = 200  # 每档一屏放得下的量
 UNTOUCHED_CAP = 50  # 「未触及」只列最近的这些；更早的靠重拆材料再出来
 
+MASTERY_MIN_SESSIONS = 2  # 一场是运气，两场才算学会——学习地图与零柒成长共用这一条
+
+
+def _mastered(c: dict) -> bool:
+    """一个概念「学会了」的唯一判定。学习地图的「已掌握」与零柒的成长事件共用它，
+    免得同一条规则在两地各写一半、日后各改一半。"""
+    return c["verdict"] == "got" and c["sessions"] >= MASTERY_MIN_SESSIONS
+
 
 async def learning_map() -> dict:
     """学习地图：把概念分四档。**纯派生**（`untouched` 读的是 digest_points 建议日志）。
@@ -502,7 +510,7 @@ async def learning_map() -> dict:
     for c in cs:
         if c["concept"] in unresolved:
             stuck.append(c)
-        elif c["verdict"] == "got" and c["sessions"] >= 2:
+        elif _mastered(c):
             mastered.append(c)
         else:
             learning.append(c)
@@ -544,6 +552,64 @@ async def _untouched_points(limit: int = UNTOUCHED_CAP) -> list[dict]:
         }
         for r in rows
     ]
+
+
+async def mastery_events() -> dict:
+    """成长事件：一个概念「学会了」的那些时刻 —— 零柒成长模型的原料（A3）。
+
+    规则与学习地图「已掌握」**同一条**（`_mastered`）：最近一次自评说通了，且不止
+    一场——一场是运气，两场才算学会。事件时间取**最近那次说通**的时刻。
+
+    `from_half` 是这条路上值钱的那一格：这个概念以前半懂过、后来才说通。「从半懂到
+    懂」比「一上来就懂」更值得记一笔，也是零柒能说出口的那句人话。
+
+    纯派生，不落库——真值仍然只有 `tutor_sessions`。坏掉也不挡教学，返回空表。
+    """
+    cs = await concepts()
+    mastered = [c for c in cs if _mastered(c)]
+    if not mastered:
+        return {"events": [], "mastered": 0, "learning": len(cs), "sessions": 0}
+
+    half_seen: set[str] = set()
+    try:
+        from sqlalchemy import select
+
+        from app.db import SessionLocal
+        from app.models import TutorSession
+
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TutorSession.concept).where(
+                        TutorSession.concept.in_([c["concept"] for c in mastered]),
+                        TutorSession.verdict == "half",
+                    )
+                )
+            ).scalars().all()
+        half_seen = set(rows)
+    except Exception:  # noqa: BLE001 - 派生视图，坏了不挡教学也不挡成长
+        log.warning("tutor mastery half-history query failed", exc_info=True)
+
+    events = sorted(
+        (
+            {
+                "concept": c["concept"],
+                "at": c["last_at"],
+                "sessions": c["sessions"],
+                "recalled": c["recalled"],
+                "from_half": c["concept"] in half_seen,
+            }
+            for c in mastered
+        ),
+        key=lambda e: e["at"],
+        reverse=True,
+    )
+    return {
+        "events": events,
+        "mastered": len(events),
+        "learning": len(cs) - len(events),
+        "sessions": sum(c["sessions"] for c in cs),
+    }
 
 
 PROFILE_LIST_CAP = 12  # 注入块里每个清单最多列这么多概念，全量在设置页看
@@ -1289,6 +1355,35 @@ async def _nearby_material(concept: str, exclude: set[str] | None = None) -> lis
     return out
 
 
+async def _note_first_mastery(concept: str) -> None:
+    """第一次说通一个概念时，让零柒记一句（成长陪伴的原料）。
+
+    规则刻意比「已掌握」（连着两次说通）浅一档：从「半懂 / 没碰过」到**第一次说通**
+    才是那个有情绪的时刻；第二次说通是巩固，不必重复庆祝。同一概念只会触发一次，
+    因为判据是「这个概念的 got 场次 ≤ 1」。零柒那边是 best-effort，坏了也不挡教学。
+    """
+    try:
+        from sqlalchemy import func, select
+
+        from app.db import SessionLocal
+        from app.models import TutorSession
+
+        async with SessionLocal() as db:
+            n = (
+                await db.execute(
+                    select(func.count(TutorSession.id)).where(
+                        TutorSession.concept == concept, TutorSession.verdict == "got"
+                    )
+                )
+            ).scalar() or 0
+        if int(n) <= 1:
+            from app.core import pet
+
+            pet.emit("mastered", name=concept)
+    except Exception:  # noqa: BLE001 - 一句台词而已，绝不能挡住自评落库
+        log.debug("tutor first-mastery note failed", exc_info=True)
+
+
 async def end(session_id: int, verdict: str) -> dict:
     """Close a session: save your verdict, then extract 概念 / 别名 / 卡点 / 迁移问题
     from the transcript, and look up what else in your KB touches the same
@@ -1333,6 +1428,7 @@ async def end(session_id: int, verdict: str) -> dict:
             if verdict == "got":
                 # 「结束回写」：说通了这个概念，它到此为止的卡点一并关掉
                 await _resolve_concept_stucks(concept, session_id)
+                await _note_first_mastery(concept)
             nearby = await _nearby_material(concept, _SESSION_SOURCES.pop(session_id, None))
     _SESSION_SOURCES.pop(session_id, None)  # useless / 没提取出概念也要清掉残留
     return {

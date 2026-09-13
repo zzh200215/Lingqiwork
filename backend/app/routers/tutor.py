@@ -139,6 +139,13 @@ async def get_map():
     return await core.learning_map()
 
 
+@router.get("/mastery")
+async def get_mastery():
+    """成长事件：概念「学会了」的时刻（A3）。规则与学习地图「已掌握」同一条——
+    纯派生，是零柒成长模型的原料。"""
+    return await core.mastery_events()
+
+
 @router.get("/starters")
 async def get_starters():
     """开场建议：半懂概念 + 日记疑问句，纯派生（[] = 没有什么可建议的）。"""

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { api, type PetGrowth, type PetPlugin } from './api'
+
 // Animation states come from the Codex pet atlas (awesome-codex-pet v1):
 // 9 states, each shipped as an animated webp under /pet/<state>.webp.
 // The browser plays them natively, so switching state is just swapping src.
@@ -33,15 +35,6 @@ interface PetEvent {
   created_at: string
 }
 
-interface PetStatus {
-  tasks_done: number
-  tasks_failed: number
-  notes_today: number
-  tokens_today: number
-  time_of_day: string
-  pet_enabled: boolean
-}
-
 interface ChatMsg {
   role: 'user' | 'pet'
   text: string
@@ -61,7 +54,8 @@ export default function PetWidget() {
   const [action, setAction] = useState<PetAction>('idle')
   const actionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [events, setEvents] = useState<PetEvent[]>([])
-  const [status, setStatus] = useState<PetStatus | null>(null)
+  const [growth, setGrowth] = useState<PetGrowth | null>(null)
+  const [plugins, setPlugins] = useState<PetPlugin[]>([])
   const [chat, setChat] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -87,18 +81,46 @@ export default function PetWidget() {
   useEffect(() => {
     void (async () => {
       try {
-        const [f, s] = await Promise.all([
+        const [f, g, p] = await Promise.all([
           fetch('/api/pet/feed?limit=30').then((r) => r.json()),
-          fetch('/api/pet/status').then((r) => r.json()),
+          api.petGrowth().catch(() => null),
+          api.petPlugins().then((r) => r.plugins).catch(() => []),
         ])
         const evs: PetEvent[] = f.events ?? []
         setEvents([...evs].reverse())
         if (evs.length) lastIdRef.current = Math.max(...evs.map((e) => e.id))
-        setStatus(s)
+        setGrowth(g)
+        setPlugins(p)
       } catch {
         /* offline — the pet just sits quietly */
       }
     })()
+  }, [])
+
+  // poll for new events → bubble (the pet "speaks first")
+  useEffect(() => {
+    // 成长是累计量，慢慢变——每次轮询顺带刷新，等级/EXP 跟上就好
+    const growthTimer = setInterval(() => {
+      void api.petGrowth().then(setGrowth).catch(() => {})
+    }, 60000)
+    return () => clearInterval(growthTimer)
+  }, [])
+
+  // a plugin command (drink / start / stop) → 更新那一格的面板
+  const runPlugin = useCallback(async (name: string, command: string) => {
+    try {
+      const r = await api.petPluginCommand(name, command)
+      setPlugins((prev) =>
+        prev.map((p) => (p.name === name ? { ...p, panel: r.panel } : p))
+      )
+      if (r.said) {
+        setBubble(r.said)
+        if (bubbleTimer.current) clearTimeout(bubbleTimer.current)
+        bubbleTimer.current = setTimeout(() => setBubble(null), 6000)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }, [])
 
   // poll for new events → bubble (the pet "speaks first")
@@ -253,10 +275,10 @@ export default function PetWidget() {
           <div className="pet-bubble mb-2 flex h-[380px] w-[320px] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/20 dark:border-neutral-700 dark:bg-neutral-900">
             <div className="flex items-center gap-2 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
               <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">零柒</span>
-              {status && (
+              {growth && (
                 <span className="text-[10px] text-neutral-400 dark:text-neutral-500">
-                  今日任务 {status.tasks_done}✓ {status.tasks_failed}✗ · 笔记 +{status.notes_today} · token{' '}
-                  {status.tokens_today}
+                  Lv.{growth.level} {growth.title} · EXP {growth.exp}
+                  {growth.next_title && ` · 正在靠近「${growth.next_title}」`}
                 </span>
               )}
               <div className="flex-1" />
@@ -268,7 +290,26 @@ export default function PetWidget() {
               </button>
             </div>
 
+            {/* 成长进度条：只画「正在靠近」，不写「还差 N」 */}
+            {growth && (
+              <div className="h-0.5 w-full bg-neutral-100 dark:bg-neutral-800">
+                <div
+                  className="h-0.5 bg-violet-500 transition-all"
+                  style={{ width: `${Math.round(growth.progress * 100)}%` }}
+                />
+              </div>
+            )}
+
             <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2 text-sm leading-relaxed">
+              {growth && growth.parts.length > 0 && (
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+                  {growth.parts.map((p) => (
+                    <span key={p.key}>
+                      {p.label} +{p.exp}
+                    </span>
+                  ))}
+                </div>
+              )}
               {!events.length && !chat.length && !error && (
                 <div className="text-neutral-400 dark:text-neutral-500">
                   零柒还没说过话。它会在任务、摘要、备份、订阅有动静时主动开口——你也可以现在跟它聊。
@@ -294,6 +335,44 @@ export default function PetWidget() {
               )}
               {error && <div className="rounded-lg bg-red-100 px-3 py-2 text-xs text-red-600 dark:bg-red-950/60 dark:text-red-300">{error}</div>}
             </div>
+
+            {plugins.length > 0 && (
+              <div className="flex flex-col gap-1 border-t border-neutral-200 px-3 py-2 dark:border-neutral-800">
+                {plugins.map((p) =>
+                  p.panel.kind === 'counter' ? (
+                    <div key={p.name} className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+                      <span>💧 {p.label}</span>
+                      <span className="text-neutral-400 dark:text-neutral-500">
+                        {p.panel.value ?? 0}/{p.panel.target ?? 0} {p.panel.unit ?? ''}
+                      </span>
+                      <div className="flex-1" />
+                      <button
+                        onClick={() => void runPlugin(p.name, 'drink')}
+                        className="rounded-md border border-neutral-300 px-2 py-0.5 text-[11px] transition-colors hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                      >
+                        +1 杯
+                      </button>
+                    </div>
+                  ) : (
+                    <div key={p.name} className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+                      <span>⏱ {p.label}</span>
+                      <span className="text-neutral-400 dark:text-neutral-500">
+                        {p.panel.running
+                          ? `剩余 ${Math.ceil((p.panel.remaining ?? 0) / 60)} 分`
+                          : `${p.panel.minutes ?? p.panel.default_minutes ?? 25} 分`}
+                      </span>
+                      <div className="flex-1" />
+                      <button
+                        onClick={() => void runPlugin(p.name, p.panel.running ? 'stop' : 'start')}
+                        className="rounded-md border border-neutral-300 px-2 py-0.5 text-[11px] transition-colors hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                      >
+                        {p.panel.running ? '停' : '开始'}
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
+            )}
 
             <div className="border-t border-neutral-200 p-2 dark:border-neutral-800">
               <div className="flex gap-2">

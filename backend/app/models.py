@@ -280,6 +280,31 @@ class PetEvent(Base):
     detail: Mapped[str] = mapped_column(Text, default="")  # optional longer context
 
 
+class PetPlugin(Base):
+    """零柒的一个能力插件（B2，openpets 范式）。
+
+    openpets 的办法是把「能力」外置成插件——**权限 / 配额 / 存储 / 计划 / 事件 /
+    命令 / 面板**由运行时提供，宠物本体不动就能长出能力。零柒照搬这个范式：内置两个
+    先跑通（喝水提醒 · 专注计时），接口留着，往后加插件不必碰宠物本体。
+
+    **一行 = 一个装好的插件**，`name` 唯一。三块 JSON 各管一摊：
+    `spec_json`  插件声明的能力（权限 / 配额 / 计划 / 面板 / 命令）；
+    `storage_json` 插件自己的小仓库（今天的杯数、计时器的起点）；
+    `quota_json` 事件按天计数（`{"2026-09-13": 2}`），用于配额封顶。
+    """
+
+    __tablename__ = "pet_plugins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(20), unique=True)
+    label: Mapped[str] = mapped_column(String(60), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    spec_json: Mapped[str] = mapped_column(Text, default="{}")
+    storage_json: Mapped[str] = mapped_column(Text, default="{}")
+    quota_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Card(Base):
     """One spaced-repetition card, with its SM-2 scheduling state in place.
 

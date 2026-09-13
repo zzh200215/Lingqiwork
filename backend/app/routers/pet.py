@@ -28,6 +28,59 @@ async def pet_status():
     return pet.status()
 
 
+@router.get("/growth")
+async def pet_growth():
+    """零柒的成长（B1）：等级 / 称号 / 累计 EXP / 各来源明细。纯派生、只增不减、
+    只正面呈现（没有「还欠 N」）。"""
+    from app.core import pet
+
+    return pet.growth()
+
+
+# ---------- 能力插件（B2）----------
+
+
+@router.get("/plugins")
+async def list_plugins():
+    """装好的能力插件 + 各自面板数据。首次调用会把内置两个（喝水 / 专注）装上。"""
+    from app.core import pet_plugins
+
+    return {"plugins": await pet_plugins.list_plugins()}
+
+
+class PluginCommandIn(BaseModel):
+    command: str
+    args: dict | None = None
+
+
+@router.post("/plugins/{name}/command")
+async def plugin_command(name: str, body: PluginCommandIn):
+    """跑一个插件命令（drink / start / stop）。"""
+    from app.core import pet_plugins
+
+    try:
+        return await pet_plugins.command(name, body.command, body.args)
+    except LookupError as e:
+        raise HTTPException(404, f"没有插件 {name}") from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+class PluginPatchIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/plugins/{name}")
+async def update_plugin(name: str, body: PluginPatchIn):
+    """开 / 关一个插件。"""
+    from app.core import pet_plugins
+
+    try:
+        return await pet_plugins.set_enabled(name, body.enabled)
+    except LookupError as e:
+        raise HTTPException(404, f"没有插件 {name}") from e
+
+
 class SayIn(BaseModel):
     mode: str = "morning"  # morning | evening | free
     prompt: str | None = None
@@ -49,8 +102,11 @@ async def pet_say(body: SayIn):
             raise HTTPException(400, "mode 只能是 morning/evening/free")
         text = await pet.greeting(body.mode)
         kind = "greeting"
-    event_id = pet.emit(kind, text=text)
-    return {"id": event_id, "text": text}
+    # 回给调用方的就是零柒真正说出口的那句（过了隐私闸门），不是原文——
+    # 不然「台词」和「响应」两处不一致，日后必有人照着响应去查路径。
+    spoken = pet.sanitize(text)
+    event_id = pet.emit(kind, text=spoken)
+    return {"id": event_id, "text": spoken}
 
 
 class PetChatIn(BaseModel):

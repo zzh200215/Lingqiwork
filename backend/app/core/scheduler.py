@@ -126,7 +126,7 @@ def shutdown() -> None:
 
 def reschedule_all() -> None:
     """Re-register every config-driven job. Safe to call anytime."""
-    from app.core import backup, cards, digest, feeds, memory_tidy, pet, tasks
+    from app.core import backup, cards, digest, feeds, memory_tidy, pet, pet_plugins, tasks
 
     for fn in (
         digest.reschedule,
@@ -135,6 +135,7 @@ def reschedule_all() -> None:
         feeds.reschedule,
         memory_tidy.reschedule,
         pet.reschedule,
+        pet_plugins.reschedule,
         cards.reschedule,
     ):
         try:
@@ -171,6 +172,22 @@ def set_cron(job_id: str, func: Callable, cron_expr: str, args: list | None = No
         scheduler.remove_job(job_id)
     scheduler.add_job(_recorded(job_id, func), trigger, id=job_id, args=args or [])
     log.info("job %s scheduled with cron '%s'", job_id, cron_expr)
+
+
+def set_once(job_id: str, func: Callable, run_date) -> None:
+    """(Re)register a one-shot job at an absolute time.
+
+    For plugins whose "schedule" is「到点了说一声」rather than a recurring cron
+    (pet_plugins 的专注计时). `misfire_grace_time=None` means a late run still
+    runs: the app being closed when the timer ended must not eat the one line —
+    on the next start it fires immediately, which reads as「补说一句时间到了」.
+    """
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+    scheduler.add_job(
+        _recorded(job_id, func), "date", run_date=run_date, id=job_id, misfire_grace_time=None
+    )
+    log.info("job %s scheduled once at %s", job_id, run_date)
 
 
 def prune_jobs(prefix: str, keep: set[str]) -> None:

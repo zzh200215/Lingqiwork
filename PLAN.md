@@ -242,4 +242,49 @@ A1 分档一旦成立，A3 就有了落点：**「一个概念从 `half` 走到�
 - 学习：https://github.com/HKUDS/DeepTutor · https://github.com/24kchengYe/human-skill-tree · https://github.com/open-spaced-repetition/fsrs4anki · https://github.com/st3v3nmw/obsidian-spaced-repetition · https://github.com/olmps/memo · https://github.com/andymatuschak/orbit
 - 工作台：https://github.com/tinyhumansai/openhuman · https://github.com/siyuan-note/siyuan · https://github.com/logseq/logseq · https://github.com/TriliumNext/Trilium · https://github.com/codexu/note-gen · https://github.com/reorproject/reor
 - 习惯：https://github.com/super-productivity/super-productivity · https://github.com/iSoron/uhabits · https://github.com/daya0576/beaverhabits · https://github.com/FriesI23/mhabit
-- 本地核实：`app/core/pet.py`（KINDS / status / compose / greeting）· `app/core/habits.py`（MAX_HABITS / SEEDS / streak）· `app/core/today.py`（封存注释）· `models.py` Habit/HabitLog · `data/workbench.db`（memories 1 条、habits 3 条、habit_logs 1 条）
+- 本地核实：`app/core/pet.py`（KINDS / status / compose / greeting）· `app/core/habits.py`（MAX_HABITS / SEEDS / streak）· `app/core/today.py`（封存注释）· `models.py` Habit/HabitLog · `data/workbench.db`（memories 1 条、habits 3 条、habit_logs 1 条）、
+
+---
+
+## 10. Track B 状态：零柒游戏化 + 插件面（2026-09-13 · 已完成）
+
+> ### ✅ A3 · 掌握度信号 —— 已做（B1 的原料）
+> - `tutor.mastery_events()`：概念「学会了」的时刻，**规则与学习地图「已掌握」同一条**
+>   （`_mastered`：最近一次说通、且不止一场）。带 `from_half`（从半懂到懂）。
+> - `GET /api/tutor/mastery`。纯派生、不落库。
+> - `end()` 里第一次说通一个概念时，零柒记一句「你把「X」搞懂了」（`_note_first_mastery`，
+>   同一概念只触发一次）。
+
+> ### ✅ B1 · 成长模型（EXP + 等级）—— 已做
+> - `pet.growth()`：**从「你走到哪了」算**，不是「系统今天干了什么」。来源四条线——
+>   学习（已掌握概念 ×30 + 教学场次 ×5）· 工作（跑成的任务 ×12 + 交付成品 ×20）·
+>   习惯（打卡日 ×4）· 复习（答题 ×1）。
+> - `LEVEL_STEPS` + `LEVEL_TITLES`（初识 / 同行 / 顺手 / …）；**只增不减**（全是累计量），
+>   **只正面呈现**（等级 / 称号 / 累计 EXP / 各来源明细，**没有「还欠 N」这种字段**）。
+> - `GET /api/pet/growth`；`greeting()` 的提示词主语从「系统今天」改成「你走到哪了」。
+> - 前端 `PetWidget` 头部由「今日任务 N✓…」换成「Lv.N 称号 · EXP N · 正在靠近「下一称号」」+ 细进度条 + 来源明细。
+
+> ### ✅ B2 · 插件 / 能力面（openpets 范式）—— 已做
+> - `models.PetPlugin`（`name / label / enabled / spec_json / storage_json / quota_json`）。
+> - `core/pet_plugins.py` 运行时：**权限 / 配额 / 存储 / 计划 / 事件 / 命令 / 面板**七件套；
+>   内置两个 —— **喝水提醒**（cron 到点提醒、面板计数、命令 `drink`）· **专注计时**
+>   （命令 `start`/`stop`，到点一次性作业主动说一声）。
+> - 计划走现成调度器：`scheduler.set_once()` 新增（一次性作业，迟到也跑）；每个插件一个
+>   `pet_plugin_<name>` 作业，无分钟级空转。`reschedule_all` 已挂上。
+> - `GET /api/pet/plugins` · `POST /api/pet/plugins/{name}/command` · `PUT /api/pet/plugins/{name}`。
+>   前端面板底部多了插件条（💧 计数 +1 / ⏱ 开始·停）。
+
+> ### ✅ B3 · 隐私边界 —— 已做
+> - `pet.sanitize()`（纯函数）：剥掉 Windows 盘符 / UNC / 绝对路径 / `~` 路径，以及
+>   `sk-` / `Bearer` / 长 hex / base64 / `api_key=` 一类密钥。**URL 与「和/或」不误伤**。
+> - `emit()` 的每一句台词都过闸门（模板拼的与模型现写的都算），`detail` 同样过；
+>   `/api/pet/say` 回给调用方的就是真正说出口的那句。
+
+**测试**：后端 `test_pet.py` **32**（+15）· `test_tutor.py` **96**（+3）；**全套 56 个文件通过**。
+前端 **99** 例通过；`tsc -b` 与 `vite build` 干净。
+
+**实机验证（隔离配方，真实库未动）**：`/api/pet/growth`（Lv.1 初识 · EXP 118，四条来源数与
+灌入数据一致）· `/api/tutor/mastery`（2 事件，`from_half` 正确）· `/api/pet/plugins`（两个内置已装）。
+浏览器：头部成长行 + 进度条 + 来源明细正确渲染；💧 2→8 杯（第 8 杯弹出「今天第 8 杯，够了。」）；
+⏱ 开始 / 停往返正常；**隐私闸门实测**——发一句带 `D:\…\secret.md` 与 `sk-…` 的话，
+入库台词为「已处理 [路径]，key=[已隐藏] 记录好了」。**零控制台错误**。

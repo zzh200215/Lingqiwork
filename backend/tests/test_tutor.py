@@ -1681,3 +1681,53 @@ async def test_starting_from_a_point_marks_it_taught(monkeypatch):
     assert sorted(p["point"] for p in (await core.learning_map())["untouched"]) == ["点A", "点B"]
     await core.start("点A", origin_point_id=pid_a)
     assert [p["point"] for p in (await core.learning_map())["untouched"]] == ["点B"]
+
+
+# ---------- A3：成长事件（零柒成长模型的原料） ----------
+
+
+async def test_mastery_events_require_two_sittings_and_record_from_half():
+    """一个概念「学会了」= 最近一次说通、且不止一场（与学习地图同一条规则）。
+    「从半懂到懂」被单独标出来——那是这条路上值钱的一格。"""
+    await _reset()
+    await _seed("早", "asyncio 事件循环", "half")
+    await _seed("晚", "asyncio 事件循环", "got")
+    await _seed("只一次", "SQLite WAL", "got")  # 一场 → 不算
+    await _seed("没用", "CORS 预检", "useless")  # 不算数
+
+    m = await core.mastery_events()
+    assert m["mastered"] == 1
+    assert [e["concept"] for e in m["events"]] == ["asyncio 事件循环"]
+    assert m["events"][0]["from_half"] is True
+    assert m["events"][0]["sessions"] == 2
+    assert m["learning"] == 1  # SQLite WAL 还在学
+
+
+async def test_mastery_events_empty_when_nothing_mastered():
+    await _reset()
+    await _seed("只一次", "SQLite WAL", "got")
+    m = await core.mastery_events()
+    assert m["events"] == [] and m["mastered"] == 0
+
+
+async def test_first_mastery_lets_zero_seven_say_it_once():
+    """第一次说通一个概念 → 零柒记一句（成长陪伴）。第二次说通不再重复。"""
+    await _reset()
+    from app.core import pet
+
+    import sqlite3
+    from app.config import settings
+
+    conn = sqlite3.connect(settings.db_path)
+    conn.execute("DELETE FROM pet_events")
+    conn.commit()
+    conn.close()
+
+    await _seed("第一次", "React useEffect 依赖数组", "got")
+    await core._note_first_mastery("React useEffect 依赖数组")
+    lines = [e for e in pet.feed(limit=20) if e["kind"] == "mastered"]
+    assert len(lines) == 1 and "搞懂了" in lines[0]["text"]
+
+    await _seed("第二次", "React useEffect 依赖数组", "got")
+    await core._note_first_mastery("React useEffect 依赖数组")
+    assert len([e for e in pet.feed(limit=20) if e["kind"] == "mastered"]) == 1
