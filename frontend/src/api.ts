@@ -1066,6 +1066,24 @@ export interface TutorLearningMap {
   untouched: TutorUntouchedPoint[]
 }
 
+/** 成长事件（A3）：一个概念「学会了」的时刻。规则与学习地图「已掌握」同一条——
+ * 最近一次说通、且不止一场。零柒的成长面板用它说「最近搞懂」。纯派生。 */
+export interface TutorMasteryEvent {
+  concept: string
+  at: string
+  sessions: number
+  recalled: number
+  /** 这个概念以前半懂过、后来才说通——「从半懂到懂」 */
+  from_half: boolean
+}
+
+export interface TutorMastery {
+  events: TutorMasteryEvent[]
+  mastered: number
+  learning: number
+  sessions: number
+}
+
 /** A row in the history rail. `turn_count` is a number here; `TutorDetail.turns`
  * is the message list — two names because one key with two types gets misread. */
 export interface TutorSessionRow {
@@ -1873,6 +1891,8 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   tutorConcepts: () => request<{ concepts: TutorConceptRow[] }>('/api/tutor/concepts'),
   /** 学习地图：已掌握 / 在学 / 卡住 / 未触及 四档（前三档纯派生，第四档读建议日志）。 */
   tutorMap: () => request<TutorLearningMap>('/api/tutor/map'),
+  /** 成长事件：概念「学会了」的时刻（零柒成长面板的原料）。纯派生。 */
+  tutorMastery: () => request<TutorMastery>('/api/tutor/mastery'),
   /** 一份材料 → 「要搞懂的点」。逐点去搞懂走 tutorStart（话题就是那个点）。 */
   tutorDigest: (body: { source_path?: string; text?: string }) =>
     request<TutorDigestResult>('/api/tutor/digest', {

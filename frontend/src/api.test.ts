@@ -107,3 +107,15 @@ describe('零柒：成长 + 能力插件（Track B）', () => {
     )
   })
 })
+
+describe('tutorMastery', () => {
+  it('打 /api/tutor/mastery —— 零柒成长面板的「最近搞懂」靠它', async () => {
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('{"events":[]}', { status: 200 })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await api.tutorMastery()
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/tutor/mastery')
+  })
+})

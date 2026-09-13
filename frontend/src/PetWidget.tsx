@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 
-import { api, type PetGrowth, type PetPlugin } from './api'
+import { api, type PetGrowth, type PetPlugin, type TutorMastery } from './api'
 
 // Animation states come from the Codex pet atlas (awesome-codex-pet v1):
 // 9 states, each shipped as an animated webp under /pet/<state>.webp.
@@ -55,6 +56,7 @@ export default function PetWidget() {
   const actionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [events, setEvents] = useState<PetEvent[]>([])
   const [growth, setGrowth] = useState<PetGrowth | null>(null)
+  const [mastery, setMastery] = useState<TutorMastery | null>(null)
   const [plugins, setPlugins] = useState<PetPlugin[]>([])
   const [chat, setChat] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
@@ -81,16 +83,18 @@ export default function PetWidget() {
   useEffect(() => {
     void (async () => {
       try {
-        const [f, g, p] = await Promise.all([
+        const [f, g, p, m] = await Promise.all([
           fetch('/api/pet/feed?limit=30').then((r) => r.json()),
           api.petGrowth().catch(() => null),
           api.petPlugins().then((r) => r.plugins).catch(() => []),
+          api.tutorMastery().catch(() => null),
         ])
         const evs: PetEvent[] = f.events ?? []
         setEvents([...evs].reverse())
         if (evs.length) lastIdRef.current = Math.max(...evs.map((e) => e.id))
         setGrowth(g)
         setPlugins(p)
+        setMastery(m)
       } catch {
         /* offline — the pet just sits quietly */
       }
@@ -99,9 +103,10 @@ export default function PetWidget() {
 
   // poll for new events → bubble (the pet "speaks first")
   useEffect(() => {
-    // 成长是累计量，慢慢变——每次轮询顺带刷新，等级/EXP 跟上就好
+    // 成长是累计量，慢慢变——每次轮询顺带刷新，等级/EXP/最近搞懂跟上就好
     const growthTimer = setInterval(() => {
       void api.petGrowth().then(setGrowth).catch(() => {})
+      void api.tutorMastery().then(setMastery).catch(() => {})
     }, 60000)
     return () => clearInterval(growthTimer)
   }, [])
@@ -308,6 +313,20 @@ export default function PetWidget() {
                       {p.label} +{p.exp}
                     </span>
                   ))}
+                </div>
+              )}
+              {mastery && mastery.events.length > 0 && (
+                <div className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                  最近搞懂：
+                  {mastery.events.slice(0, 3).map((e) => e.concept).join('、')}
+                  {mastery.mastered > 3 ? ` 等 ${mastery.mastered} 个` : ''}
+                  <Link
+                    to="/tutor"
+                    onClick={() => setOpen(false)}
+                    className="ml-1 text-violet-500 hover:underline"
+                  >
+                    看学习地图
+                  </Link>
                 </div>
               )}
               {!events.length && !chat.length && !error && (
