@@ -406,8 +406,9 @@ export interface ScheduledTask {
   chain_next_id: number | null
   /** 人工卡点：这一步跑完停下等人点头，才触发下游 */
   require_approval: boolean
-  /** 这一步做什么：prompt = 跑提示词；transcribe = 本地 ASR 转写录音 */
-  action: 'prompt' | 'transcribe'
+  /** 这一步做什么：prompt = 跑提示词；transcribe = 本地 ASR 转写录音；
+   *  其余 = 把一个成文引擎按表跑一遍（见 ENGINES），产出落进引擎自己的 vault 目录 */
+  action: 'prompt' | 'transcribe' | 'research' | 'compose' | 'recap' | 'decide' | 'conflict'
   /** 产物落哪个 vault 子目录（空 = tasks/）。沿链条继承，所以一条流水线的各步同目录。 */
   landing_dir: string
   /** 停在人工卡点上的那次运行；null/缺省 = 没有待审的。放行/驳回用它。 */

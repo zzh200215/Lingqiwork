@@ -26,6 +26,29 @@ const EMPTY_AGENT = {
   enabled: true,
 }
 
+// 这一步做什么（§15）：跑提示词 / 转写录音 / 把一个成文引擎按表跑一遍。
+// 引擎名与后端 core.tasks.ENGINE_ACTIONS 一一对应；产出落进引擎自己的 vault 目录。
+type TaskAction =
+  | 'prompt'
+  | 'transcribe'
+  | 'research'
+  | 'compose'
+  | 'recap'
+  | 'decide'
+  | 'conflict'
+
+const ENGINE_ACTIONS: { value: TaskAction; label: string; short: string }[] = [
+  { value: 'research', label: '研究（拿话题去查，成文落 research/）', short: '研究' },
+  { value: 'compose', label: '产出（从你自己的材料成文，落 notes/）', short: '产出' },
+  { value: 'decide', label: '方案（就一个待定的事出方案，落 decisions/）', short: '方案' },
+  { value: 'conflict', label: '对质（查材料里对不上的地方，落 conflicts/）', short: '对质' },
+  { value: 'recap', label: '复盘（把最近几天的记录合成一份，落 recap/）', short: '复盘' },
+]
+
+const ACTION_SHORT: Record<string, string> = Object.fromEntries(
+  ENGINE_ACTIONS.map((e) => [e.value, e.short])
+)
+
 const EMPTY_TASK = {
   name: '',
   prompt: '',
@@ -44,7 +67,7 @@ const EMPTY_TASK = {
   watch_path: '',
   chain_next_id: null as number | null,
   require_approval: false,
-  action: 'prompt' as 'prompt' | 'transcribe',
+  action: 'prompt' as TaskAction,
   landing_dir: '',
 }
 
@@ -510,7 +533,7 @@ export default function SettingsPage() {
       watch_path: t.watch_path || '',
       chain_next_id: t.chain_next_id,
       require_approval: !!t.require_approval,
-      action: (t.action as 'prompt' | 'transcribe') || 'prompt',
+      action: (t.action as TaskAction) || 'prompt',
       landing_dir: t.landing_dir || '',
     })
   }
@@ -1888,6 +1911,7 @@ export default function SettingsPage() {
                   {t.mode === 'agent' ? ` · 智能体 ≤${t.max_rounds} 轮` : !t.tools_enabled && ' · 无工具'}
                   {t.save_to_vault && ' · 写入 vault'}
                   {t.action === 'transcribe' && ' · 转写'}
+                  {ACTION_SHORT[t.action] && ` · ${ACTION_SHORT[t.action]}引擎`}
                   {t.require_approval && ' · 卡点'}
                   {(t.retry ?? 0) > 0 && ` · 失败重试 ${t.retry}`}
                 </div>
@@ -2040,12 +2064,12 @@ export default function SettingsPage() {
             </label>
           </div>
           <label className="mt-3 flex flex-col gap-1 text-sm">
-            指令（{taskDraft.mode === 'agent' ? '给智能体的目标，它会自己决定调用哪些工具' : '到点发给模型的内容'}）
+            指令（{ACTION_SHORT[taskDraft.action] ? '给引擎的话题——它拿这个去取材成文' : taskDraft.mode === 'agent' ? '给智能体的目标，它会自己决定调用哪些工具' : '到点发给模型的内容'}）
             <textarea
               value={taskDraft.prompt}
               onChange={(e) => setTaskDraft({ ...taskDraft, prompt: e.target.value })}
               rows={3}
-              placeholder={taskDraft.mode === 'agent' ? '整理 vault/tasks/ 下最近生成的日报，把要点合并成一篇周报写到 vault/reports/。' : '总结我知识库里最近新增或修改的内容，按主题归纳要点。'}
+              placeholder={ACTION_SHORT[taskDraft.action] ? '如：RAG 评测怎么做（复盘不用填，把最近几天合成一份）' : taskDraft.mode === 'agent' ? '整理 vault/tasks/ 下最近生成的日报，把要点合并成一篇周报写到 vault/reports/。' : '总结我知识库里最近新增或修改的内容，按主题归纳要点。'}
               className={`${inputCls} resize-y`}
             />
           </label>
@@ -2212,12 +2236,17 @@ export default function SettingsPage() {
               <select
                 value={taskDraft.action}
                 onChange={(e) =>
-                  setTaskDraft({ ...taskDraft, action: e.target.value as 'prompt' | 'transcribe' })
+                  setTaskDraft({ ...taskDraft, action: e.target.value as TaskAction })
                 }
                 className={inputCls}
               >
                 <option value="prompt">跑提示词（交给模型）</option>
                 <option value="transcribe">转写录音（本地 ASR，不花模型钱）</option>
+                {ENGINE_ACTIONS.map((e) => (
+                  <option key={e.value} value={e.value}>
+                    {e.label}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">

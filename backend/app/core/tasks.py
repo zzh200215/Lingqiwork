@@ -49,6 +49,19 @@ _RETRY_DELAY_SECONDS = 30
 DEFAULT_AGENT_ROUNDS = 12
 MAX_AGENT_ROUNDS = 30
 
+# 「产出引擎」上调度（§15）：这一步不是跑提示词，而是把一个成文引擎按表跑一遍——把整条
+# 产出线从「点它才跑」变成「到点自己跑」。值是引擎名，`_run_engine` 按名分发；落点交给
+# 引擎自己的 `save()`，产出因此进 research/ notes/ decisions/ conflicts/ recap/，
+# 出现在它该出现的页面上，而不是混进 tasks/。
+ENGINE_ACTIONS = ("research", "compose", "recap", "decide", "conflict")
+ENGINE_LABELS = {
+    "research": "研究",
+    "compose": "产出",
+    "recap": "复盘",
+    "decide": "方案",
+    "conflict": "对质",
+}
+
 # set by core.triggers: called around every run of a watch-triggered task so
 # its own vault writes don't immediately re-fire it
 WATCH_HOOK: "callable[[int], None] | None" = None
@@ -337,7 +350,10 @@ async def run_task(
                 task_id, snapshot, answer, sources, model_id, trigger, upstream_task_id,
                 tokens_in=tokens_in, tokens_out=tokens_out,
             )
-            if snapshot["save_to_vault"]:
+            saved = result.get("saved") or {}
+            if saved.get("filename"):  # 引擎自己落了盘（§15）——别再往 tasks/ 抄一份
+                vault_file = saved["filename"]
+            elif snapshot["save_to_vault"]:
                 vault_file = _write_vault(
                     snapshot["name"], answer, started, snapshot.get("run_dir") or ""
                 )
@@ -765,9 +781,75 @@ async def _transcribe(t: dict) -> dict:
     }
 
 
+async def _run_engine(t: dict, engine: str) -> dict:
+    """把一个成文引擎无人值守地跑一遍（§15）。
+
+    引擎本来就是 async 生成器（`compose.run` 等），路由只是 SSE 包装 + 让人先看再存。
+    这里就是那条链去掉人：跑到 `report`（其它四个引擎）或 `saved`（recap 自成文即落盘）
+    就落盘。**落点交给引擎自己的 `save()`**，产出因此出现在它该出现的页面上。
+
+    话题取自任务指令（`prompt`）——引擎要的是一个话题，不是一段给模型的指令；
+    recap 例外，它不看话题，把「最近几天」合成一份。
+    """
+    import importlib
+
+    from app.core import providers
+    from app.core import report as _report
+
+    mod = importlib.import_module(f"app.core.{engine}")
+    topic = (t.get("prompt") or "").strip()
+    if engine != "recap" and not topic:
+        raise RuntimeError(f"{ENGINE_LABELS[engine]}需要一个话题——把话题填进任务指令")
+
+    gen = mod.run() if engine == "recap" else mod.run(topic)
+    title = markdown = error = ""
+    sources: list[dict] = []
+    saved: dict | None = None
+    async for ev, data in gen:
+        if ev == "error":
+            error = (data or {}).get("message") or "引擎没跑成"
+            break
+        if ev == "report":
+            sources = data.get("sources") or []
+            rep = _report.Report(
+                title=(data.get("title") or "").strip(),
+                sections=[
+                    _report.Section(heading=s.get("heading", ""), body=s.get("body", ""))
+                    for s in data.get("sections") or []
+                ],
+                used=list(data.get("used") or []),
+            )
+            title = rep.title
+            markdown = _report.to_markdown(rep, sources, ENGINE_LABELS[engine])
+            saved = await mod.save(rep, sources)  # 路由里那一步「预览后再存」，这里直接存
+        elif ev == "saved":  # recap 自己落盘，没有 review 环节
+            saved = data
+            title = data.get("title") or title
+    if error:
+        raise RuntimeError(error)
+    if not saved:
+        raise RuntimeError("引擎没有产出可落盘的结果")
+
+    where = saved.get("filename", "")
+    answer = f"# {title or ENGINE_LABELS[engine]}\n\n{markdown}\n\n---\n\n已落到 vault/{where}"
+    return {
+        "answer": answer.strip(),
+        "sources": sources,
+        "model_id": providers.default_model_id() or f"engine:{engine}",
+        "rounds": 0,
+        "tool_calls": 0,
+        "tokens_in": None,
+        "tokens_out": None,
+        "saved": saved,  # run_task 拿它当 vault_file，别再往 tasks/ 抄一份
+    }
+
+
 async def _execute(t: dict, log_entries: list[dict]) -> dict:
-    if (t.get("action") or "prompt") == "transcribe":
+    action = t.get("action") or "prompt"
+    if action == "transcribe":
         return await _transcribe(t)
+    if action in ENGINE_ACTIONS:
+        return await _run_engine(t, action)
     candidates = await _candidates(t["model_id"])
     model_id = candidates[0][2]
     served: dict = {}  # 实际产出内容的 provider——降级发生时它可能不是第一家

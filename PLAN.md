@@ -328,3 +328,90 @@ Track B 之后的一个增量：把「成长」从宠物小面板里独立出来
 前端 **107**（+2：心情那一排 / 没记录时不出现）。**全套 56 文件通过**，`tsc -b` 与 `vite build` 干净。
 **实机验证**（隔离配方，真实库未动）：面板三行插件齐全、今天的高亮正确；点第 5 个表情 → 落库为
 `today 5`、`recent` 末项更新；成长页「心情 · 最近 6 天」一排六格；**零控制台错误**。
+
+---
+
+## 13. 学习地图做深：概念的「邻居」（2026-09-13 · 已完成）
+
+A1 验收里写的是「点一个概念能看到它的**邻居**和历次记录」——历次记录当时就做了，邻居那半截留到现在。
+
+- **后端** `tutor.concept_neighbors(concept, limit)`：三路证据，纯派生、不落库。
+  **同一件事**（同一 Thread 上挂着的其它 tutor 条目）· **同一份材料**（`digest_points.source` 相同的点
+  教出来的概念）· **语义相近**（概念名嵌入过 `RECALL_MIN_SIM`——直接复用召回那条实测底线，不另造阈值）。
+  **结构性证据排在语义前**：那是用户自己归到一起的，比向量猜的可信。返回 `[{concept, why, score}]`。
+- **接口** `GET /api/tutor/neighbors?concept=…&limit=…`。
+- **前端** 学页右栏展开一个概念时，多一行「旁边还有」+ 邻居 chips（悬停显示 why），点一下就展开那个邻居。
+  邻居按需拉、按概念缓存（没展开就不该有那一次向量计算）；第一次算之前先占一行「看旁边还有谁…」。
+
+**测试**：后端 `test_tutor.py` **99**（+3：同一件事 / 语义相近 / 单独一个概念时为空）· 前端 **108**
+（+1：URL 编码）。**全套 56 文件通过**，`tsc -b` 与 `vite build` 干净。
+**实机验证**（隔离配方，真实库未动）：`GET /api/tutor/neighbors` 返回
+`JS 闭包（同一件事）· SQLite WAL（同一份材料）`；学页展开 `asyncio 事件循环` → 「旁边还有」两个 chips；
+点 chip 展开邻居，邻居那边同样能看到 `asyncio 事件循环`（对称）；**零控制台错误**。
+
+---
+
+## 14. 落点与入口一致性（2026-09-13 · 已完成）
+
+工作线体检（子代理跑的事实地图）结论：厚、测试齐——线程 19 / 交付 12 / 工作流+编排 45 条。
+唯一被点名的缺陷是「**一件事**」里每条引用**落不到它自己身上**：card → 复习队列、decision →
+仪表盘、task → 工作页，都只到「那一类的页面」，还得自己找。
+
+- **落点**：`threads._href` 给三种没有独立页的引用带上 id（`?card=` / `?decision=` / `?task=`），
+  tutor / note / output 本来就有深链。
+- **前端** `deeplink.ts`：一个 `useDeepLink(param, ready)` —— 读参数、`scrollIntoView`、
+  给那一行加 `.wb-hot`（index.css 里的 ring），2.5 秒后摘掉。**一次性提示，不是选中态**。
+  目标页只要给条目一个 `id`（`card-7` / `decision-7` / `task-7`）。
+- **卡片那段默认收起**，所以 CardList 还要在深链进来时先展开再亮。
+- **入口**：/work 产出区标题旁补了可点的「研究/方案/对质 在**学** · 复盘在**仪表盘**」——
+  这段说明原先只在空态出现，有产出时就消失了。
+
+**测试**：后端 `test_threads.py` **20**（+1：`_href` 五种 kind 逐一钉住）· 前端 **111**（+3：
+`deeplink.test.tsx` —— 滚+亮 / 数据没到不动 / 没参数不动）。**全套 56 文件通过**，
+`tsc -b` 与 `vite build` 干净。
+
+**实机验证**（隔离配方，真实库未动）：`GET /api/threads/1` 返回
+`/dashboard?decision=1`、`/review?card=1`；浏览器里逐条确认 `#card-1` / `#decision-1` / `#task-1`
+都先拿到 `.wb-hot`、2.5 秒后摘掉；卡片清单**自动展开**；完整路径
+`/threads?thread=1` → 点「WAL 是什么」→ `/review?card=1` 通；**零控制台错误**。
+
+---
+
+## 15. Track C 起手：产出引擎上调度（2026-09-13 · 已完成）
+
+工作线的缺口（子代理摸底，file:line 已锚定）：五个成文引擎（研究 / 产出 / 复盘 / 方案 / 对质）
+**全是「点它才跑」的拉取式**——整条产出半边没接调度。这一节把它接到已有的定时任务上：到点自己跑，
+落点交给引擎自己，产出出现在它该出现的页面上。
+
+方向先经外部核过（2026-09-13，GitHub，本环境 WebSearch/firecrawl 失效，用 `curl --ssl-no-revoke`
+直连 API + `raw.githubusercontent.com`）：**Taskuary**「inbox 交给 AI agents，每个决定附理由、发出前
+必须人批」· **CompozyOS**「cron/trigger 让 agent 无终端也持续跑」· **Forsion**「automation 把
+follow-up 往前推、结果投回 Inbox」——共同点是**让工作自己往前走，每一步把结果交回给人**。
+
+- **不加列。** `ScheduledTask.action` 本就是「这一步做什么」（`String(12)`），把引擎名塞进去即可：
+  `action ∈ {prompt, transcribe, research, compose, recap, decide, conflict}`。**不用迁移**。
+- **后端** `core/tasks.py`：`ENGINE_ACTIONS`/`ENGINE_LABELS` + `_run_engine(t, engine)`。引擎本就是
+  async 生成器（`compose.run` 等），路由只是 SSE 包装 + 让人先看再存；这里**去掉人**：跑到
+  `report`（四个引擎）或 `saved`（recap 自成文即落盘）就落盘。
+- **落点交给引擎自己的 `save()`** —— 产出因此进 `research/ notes/ decisions/ conflicts/ recap/`，
+  出现在它该出现的页面上，而不是混进 `tasks/`。`run_task` 拿引擎给的 filename 当 `vault_file`，
+  **不再**往 `tasks/` 抄一份（即便 `save_to_vault=True`）。
+- **话题取自任务指令**（`prompt`）——引擎要的是话题，不是给模型的指令；recap 不看话题。
+- **路由** `routers/tasks.py`：`action` 校验放开到七个值（`_VALID_ACTIONS`）。
+- **前端**：`api.ts` 的 `action` 类型放开；设置页「这一步做什么」下拉补五个引擎项；选中引擎时
+  「指令」标签改成「**给引擎的话题**」；任务行徽标显示「· 研究引擎」等。
+
+**测试**：后端 `test_agent_orchestration.py` **40**（+7：分发并落引擎目录且不重复写 / recap 走
+saved 且不给话题 / 空话题报可读错误 / error 事件变成失败 run / 引擎名与路由一致）。**全套 56
+文件通过**，前端 **111** 通过，`tsc -b` 与 `vite build` 干净。
+
+**实机验证**（隔离配方，真实库只读、真实 vault 未动）：后端建 `action=recap` 任务 → 手动跑 →
+`status ok`、`vault_file = recap/2026-09-13.md`、文件真落在临时 vault 的 `recap/`；把
+`save_to_vault` 打开重跑仍**只**落 `recap/`，没有 `tasks/`；非法 action 返回 422。浏览器里
+「这一步做什么」下拉七项齐全，填表保存后任务行显示「· 研究引擎」，`GET /api/tasks` 回读
+`action=research`；**零控制台错误**。
+
+下一步候选（对冲正的方向，未开工）：**一件事的自动接续**（读 `threads.recent()` 挑缺「交付/判断」
+的事，用钉着的材料自动跑引擎，结果回落那件事）· **收件自动分诊**（inbox 材料自动消化/归类，
+高置信才自动挂）· **质量看管**（`TaskRun.grounded` 趋势掉了自动处置）· **一句话→整条流水线**
+（`parse_schedule` 从「只出 cron」扩成「出整条链」）。

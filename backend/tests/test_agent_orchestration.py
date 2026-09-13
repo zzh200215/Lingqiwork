@@ -882,3 +882,123 @@ async def test_meeting_preset_installs_four_linked_steps_and_is_idempotent(monke
     async with SessionLocal() as db:
         again = await tasks_router.install_meeting_preset(db)
     assert again["created"] == 0 and len(again["tasks"]) == 4
+
+
+# ---------- 产出引擎上调度（§15） ----------
+
+
+async def _add_engine_task(name: str, engine: str, *, prompt: str | None = None, **kw) -> int:
+    """建一个「这一步跑引擎」的任务。prompt 就是引擎的话题（recap 不看它）。"""
+    async with SessionLocal() as db:
+        row = ScheduledTask(
+            name=name,
+            prompt=prompt if prompt is not None else f"do {name}",
+            cron="0 9 * * *",
+            action=engine,
+            **kw,
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        return row.id
+
+
+async def _last_run_row() -> TaskRun:
+    async with SessionLocal() as db:
+        return (
+            await db.execute(select(TaskRun).order_by(TaskRun.id.desc()).limit(1))
+        ).scalar_one()
+
+
+async def test_engine_action_runs_the_engine_and_lands_at_its_own_dir(monkeypatch):
+    """「产出半边接上调度」：到点不再只跑提示词，而是把一个引擎跑一遍。落点由引擎
+    自己的 `save()` 决定——产出进 notes/，**不**被再抄一份进 tasks/。"""
+    from app.core import compose as engine_mod
+
+    async def fake_run(topic):
+        assert topic == "do 每周产出"  # 任务指令就是引擎的话题
+        yield "gathering", {}
+        yield "report", {
+            "title": "手机换不换",
+            "sections": [{"heading": "结论", "body": "再等一代"}],
+            "used": [],
+            "sources": [],
+        }
+
+    saved_seen: dict = {}
+
+    async def fake_save(rep, sources):
+        saved_seen["title"] = rep.title
+        return {"filename": "notes/2026-09-13-手机换不换.md", "title": rep.title, "chunks": 2}
+
+    monkeypatch.setattr(engine_mod, "run", fake_run)
+    monkeypatch.setattr(engine_mod, "save", fake_save)
+
+    async def boom(*a, **k):  # 引擎已经落了盘，就不该再往 tasks/ 抄一份
+        raise AssertionError("_write_vault 不该在引擎任务里跑")
+
+    monkeypatch.setattr(core, "_write_vault", boom)
+
+    tid = await _add_engine_task("每周产出", "compose", save_to_vault=True)
+    r = await core.run_task(tid, manual=True)
+
+    assert r["status"] == "ok"
+    assert r["vault_file"] == "notes/2026-09-13-手机换不换.md"
+    assert saved_seen["title"] == "手机换不换"
+    run = await _last_run_row()
+    assert "手机换不换" in run.answer and "notes/2026-09-13-手机换不换.md" in run.answer
+
+
+async def test_recap_engine_is_driven_without_a_topic(monkeypatch):
+    """复盘不看话题——它把「最近几天」合成一份，自成文即落盘（发 saved，不走 report）。"""
+    from app.core import recap as engine_mod
+
+    async def fake_run(*a, **k):
+        assert a == ()  # 不给它话题
+        yield "gathering", {}
+        yield "saved", {"filename": "recap/2026-09-13.md", "title": "9 月 13 日", "chunks": 3}
+
+    monkeypatch.setattr(engine_mod, "run", fake_run)
+
+    tid = await _add_engine_task("每天复盘", "recap")
+    r = await core.run_task(tid, manual=True)
+    assert r["status"] == "ok"
+    assert r["vault_file"] == "recap/2026-09-13.md"
+
+
+async def test_engine_without_a_topic_fails_with_a_readable_reason(monkeypatch):
+    tid = await _add_engine_task("没话题", "research", prompt="")
+    r = await core.run_task(tid, manual=True)
+    assert r["status"] == "error"
+    assert "话题" in r["error"]
+
+
+async def test_engine_error_event_becomes_a_failed_run(monkeypatch):
+    """引擎把「没取到材料」变成一条 error 事件——任务照实记成失败，不假装成功。"""
+    from app.core import compose as engine_mod
+
+    async def fake_run(topic):
+        yield "error", {"message": "你自己的材料里没找到相关内容"}
+
+    monkeypatch.setattr(engine_mod, "run", fake_run)
+
+    tid = await _add_engine_task("没材料", "compose")
+    r = await core.run_task(tid, manual=True)
+    assert r["status"] == "error"
+    assert "没找到相关内容" in r["error"]
+
+
+def test_engine_actions_and_router_agree():
+    """后端认的引擎名，和 core 里列的那几个，是同一个集合——不然表单能选却存不进去。"""
+    from app.routers.tasks import _VALID_ACTIONS
+
+    assert set(core.ENGINE_ACTIONS) <= set(_VALID_ACTIONS)
+    assert core.ENGINE_LABELS.keys() == set(core.ENGINE_ACTIONS)
+    import pydantic
+
+    from app.routers.tasks import TaskIn
+
+    for eng in core.ENGINE_ACTIONS:
+        assert TaskIn(name="n", prompt="p", action=eng).action == eng
+    with pytest.raises(pydantic.ValidationError):
+        TaskIn(name="n", prompt="p", action="nope")

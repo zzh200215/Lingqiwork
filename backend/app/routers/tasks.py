@@ -15,6 +15,9 @@ from app.models import ScheduledTask, TaskRun
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
+# 这一步做什么：跑提示词 / 转写录音 / 把一个成文引擎按表跑一遍（引擎名见 core.tasks）。
+_VALID_ACTIONS = ("prompt", "transcribe") + core.ENGINE_ACTIONS
+
 
 def _clean_whitelist(v: str) -> str:
     """Canonical form: comma-joined tokens, no stray spaces (empty = all)."""
@@ -40,7 +43,7 @@ class TaskIn(BaseModel):
     watch_path: str = ""
     chain_next_id: int | None = None
     require_approval: bool = False  # 人工卡点：跑完等人点头再触发下游
-    action: str = "prompt"  # prompt | transcribe
+    action: str = "prompt"  # prompt | transcribe | 引擎名（research/compose/recap/decide/conflict）
     landing_dir: str = ""  # 产物落哪个 vault 子目录（空 = tasks/）
 
     @field_validator("name")
@@ -81,8 +84,8 @@ class TaskIn(BaseModel):
     @field_validator("action")
     @classmethod
     def action_valid(cls, v: str) -> str:
-        if v not in ("prompt", "transcribe"):
-            raise ValueError("action 必须是 prompt 或 transcribe")
+        if v not in _VALID_ACTIONS:
+            raise ValueError(f"action 必须是 {'/'.join(_VALID_ACTIONS)} 之一")
         return v
 
     @field_validator("landing_dir")
@@ -156,8 +159,8 @@ class TaskPatch(BaseModel):
     @field_validator("action")
     @classmethod
     def action_valid(cls, v: str | None) -> str | None:
-        if v is not None and v not in ("prompt", "transcribe"):
-            raise ValueError("action 必须是 prompt 或 transcribe")
+        if v is not None and v not in _VALID_ACTIONS:
+            raise ValueError(f"action 必须是 {'/'.join(_VALID_ACTIONS)} 之一")
         return v
 
     @field_validator("landing_dir")
