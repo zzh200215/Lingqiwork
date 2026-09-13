@@ -251,15 +251,20 @@ async def _resolve(rows: list[ThreadItem]) -> list[dict]:
 
 
 def _href(kind: str, ref: str) -> str:
-    """点开去哪。卡片没有单卡深链（今日是队列），所以给队列页。"""
+    """点开去哪：落到**它自己**身上，不只停在那个页面。
+
+    card / decision / task 没有自己的页，各自落在队列页 / 仪表盘 / 工作页，但把 id 带上
+    （`?card=` / `?decision=` / `?task=`），由 `deeplink.ts` 滚过去亮一下——否则一条引用
+    点开只到「那一类东西」的页面，还得自己找。
+    """
     if kind == "card":
-        return "/review"
+        return f"/review?card={ref}"
     if kind == "tutor":
         return f"/tutor?session={ref}"
     if kind == "decision":
-        return "/dashboard"
+        return f"/dashboard?decision={ref}"
     if kind == "task":
-        return "/work"
+        return f"/work?task={ref}"
     return f"/notes?path={ref}"
 
 

@@ -121,7 +121,18 @@ async def test_detail_resolves_attached_things_and_their_landing_pages():
     d = await th.detail(t["id"], suggest=False)
     (item,) = d["items"]
     assert item["title"] == "RAG 评测怎么做" and item["exists"] is True
-    assert item["href"] == "/review"  # 卡片没有单卡深链，给队列页
+    assert item["href"] == f"/review?card={cid}"  # 卡片落在队列页，但带上它自己的 id
+
+
+def test_href_lands_on_the_thing_itself():
+    """每条引用都得落到**它自己**身上，不只停在那一类的页面（免得点开还要自己找）。"""
+    assert th._href("card", "7") == "/review?card=7"
+    assert th._href("decision", "9") == "/dashboard?decision=9"
+    assert th._href("task", "3") == "/work?task=3"
+    assert th._href("tutor", "5") == "/tutor?session=5"
+    # 笔记 / 产出本来就有 path 深链，直接落文件
+    assert th._href("note", "notes/a.md") == "/notes?path=notes/a.md"
+    assert th._href("output", "deliver/b.md") == "/notes?path=deliver/b.md"
 
 
 async def test_suggestions_are_derived_and_skip_what_is_already_attached():

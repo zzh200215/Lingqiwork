@@ -4,11 +4,12 @@
  *  这里补的就是那个落点：能找、能筛、能挂到某件事上。不做批量管理——那是另一件事，
  *  而这一页是复习页，不该长成卡片的控制台。
  */
-import { useCallback, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import { api, type CardItem } from './api'
 import AttachToThread from './AttachToThread'
+import { useDeepLink } from './deeplink'
 
 const CAP = 200
 
@@ -45,6 +46,18 @@ export default function CardList() {
     (c) => !needle || `${c.front}${c.back}${c.topic}`.toLowerCase().includes(needle)
   )
 
+  // 从「一件事」点一张卡过来（`?card=7`）：这一段默认是收起的，得先展开再亮。
+  // 只在 param 变化时跑一次——cards 是不是 null 用当时闭包里的值就够（首次必为 null）。
+  const [params] = useSearchParams()
+  const wanted = params.get('card') || ''
+  useEffect(() => {
+    if (!wanted) return
+    setOpen(true)
+    if (cards === null) void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted])
+  useDeepLink('card', open && cards !== null)
+
   return (
     <section className="rounded-xl border border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
       <button
@@ -74,7 +87,7 @@ export default function CardList() {
             {shown.map((c) => {
               const src = vaultSource(c.source)
               return (
-                <li key={c.id} className="flex items-center gap-2 py-1.5">
+                <li key={c.id} id={`card-${c.id}`} className="flex items-center gap-2 py-1.5">
                   <span
                     className="min-w-0 flex-1 truncate text-[11px] text-neutral-700 dark:text-neutral-200"
                     title={c.back}

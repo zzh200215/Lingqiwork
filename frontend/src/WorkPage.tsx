@@ -10,7 +10,7 @@
  *  **生成**：交付是唯一在 /work 上就地生成的——其余引擎仍从各自的入口跑，成品自动落到这里。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import {
   api,
@@ -23,6 +23,7 @@ import {
 } from './api'
 import AttachToThread from './AttachToThread'
 import FeedbackButtons from './FeedbackButtons'
+import { useDeepLink } from './deeplink'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
 import { streamDeliver, type DeliverReport, type ReportDraft } from './stream'
 
@@ -131,7 +132,7 @@ function WorkflowRow({
           : { cls: 'text-neutral-400', text: '—' }
 
   return (
-    <li className="py-2.5">
+    <li id={`task-${task.id}`} className="py-2.5">
       <div className="flex items-center gap-2">
         <span
           className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
@@ -226,6 +227,9 @@ export default function WorkPage() {
   const [wfBusy, setWfBusy] = useState<number | null>(null)
   const [wfrBusy, setWfrBusy] = useState<number | null>(null) // 正在放行/驳回的那次运行
   const [presetBusy, setPresetBusy] = useState(false)
+
+  // 从「一件事」点一条工作流过来（`?task=7`）：滚到那条流程并亮一下
+  useDeepLink('task', tasks.length > 0)
 
   // 会议（§4-13）：一场一个文件夹，录音能回听
   const [meetings, setMeetings] = useState<WorkMeeting[]>([])
@@ -715,8 +719,20 @@ export default function WorkPage() {
       ) : null}
 
       <section>
-        <div className="flex items-baseline justify-between pb-2">
+        <div className="flex items-baseline justify-between gap-3 pb-2">
           <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">产出</h2>
+          {/* 去哪做——这里的产出是**归宿**，不是起点。交付在上面就地写，
+              其余三个引擎在学页、复盘在仪表盘。做成可点的，别只是句说明。 */}
+          <span className="text-[11px] text-neutral-400">
+            研究 / 方案 / 对质 在
+            <Link to="/tutor" className="text-violet-500 hover:underline">
+              学
+            </Link>
+            · 复盘在
+            <Link to="/dashboard" className="text-violet-500 hover:underline">
+              仪表盘
+            </Link>
+          </span>
         </div>
 
         {present.length > 0 ? (
@@ -751,7 +767,7 @@ export default function WorkPage() {
           <div className="rounded-xl border border-dashed border-neutral-300 px-5 py-10 text-center dark:border-neutral-700">
             <p className="text-sm text-neutral-500 dark:text-neutral-400">还没有产出。</p>
             <p className="pt-2 text-xs leading-relaxed text-neutral-400">
-              研究 / 方案 / 对质 在「学」页里跑，复盘在「仪表盘」；交付在上面「写一份交付」。跑完成品会自动落到这里。
+              在上面「写一份交付」，或去「学」「仪表盘」跑一轮；成品会自动落到这里。
             </p>
           </div>
         ) : (

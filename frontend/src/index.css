@@ -101,3 +101,9 @@ body {
 ::selection {
   @apply bg-violet-200 dark:bg-violet-800;
 }
+
+/* 深链落点：从「一件事」点一条引用过来时，把那一行亮一下。
+   一次性提示（2.5 秒后由 deeplink.ts 摘掉），不是常驻选中态。 */
+.wb-hot {
+  @apply rounded-xl ring-2 ring-violet-400;
+}

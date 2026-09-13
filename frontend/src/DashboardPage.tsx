@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 
 import AttachToThread from './AttachToThread'
 import FeedbackButtons from './FeedbackButtons'
+import { useDeepLink } from './deeplink'
 import {
   api,
   type BeliefThread,
@@ -78,6 +79,9 @@ export default function DashboardPage() {
   const reloadDecisions = useCallback(() => {
     api.listDecisions().then(setDecisions).catch(() => {})
   }, [])
+
+  // 从「一件事」点一条判断过来（`?decision=7`）：滚到它那一条并亮一下
+  useDeepLink('decision', decisions !== null)
 
   const addDecision = useCallback(async () => {
     const t = dText.trim()
@@ -602,7 +606,7 @@ export default function DashboardPage() {
                 {decisions.entries
                   .filter((e) => !e.outcome)
                   .map((e) => (
-                    <li key={e.id} className="rounded-xl border border-neutral-100 p-3 dark:border-neutral-800">
+                    <li key={e.id} id={`decision-${e.id}`} className="rounded-xl border border-neutral-100 p-3 dark:border-neutral-800">
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="text-sm text-neutral-800 dark:text-neutral-100">{e.text}</span>
                         <span className="shrink-0 text-[11px] text-neutral-400">
@@ -658,7 +662,7 @@ export default function DashboardPage() {
                   {decisions.entries
                     .filter((e) => e.outcome)
                     .map((e) => (
-                      <li key={e.id} className="flex items-baseline gap-2 text-xs">
+                      <li key={e.id} id={`decision-${e.id}`} className="flex items-baseline gap-2 text-xs">
                         <span
                           className={`shrink-0 ${
                             e.outcome === 'hit'
