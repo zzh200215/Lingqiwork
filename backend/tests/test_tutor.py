@@ -228,13 +228,14 @@ async def _reset() -> None:
     from sqlalchemy import delete
 
     from app.db import SessionLocal
-    from app.models import TutorSession, TutorTurn
+    from app.models import DigestPoint, TutorSession, TutorTurn
 
     core._SESSION_SOURCES.clear()  # 进程内的已引用来源是测试间的隐藏状态
     await _init_db()
     async with SessionLocal() as db:
         await db.execute(delete(TutorTurn))
         await db.execute(delete(TutorSession))
+        await db.execute(delete(DigestPoint))
         await db.commit()
 
 
@@ -612,6 +613,56 @@ async def test_concepts_empty_when_nothing_qualifies():
     assert await core.concepts() == []
 
 
+# ---------- 学习地图：已掌握 / 在学 / 卡住 / 未触及 ----------
+
+
+async def test_learning_map_sorts_concepts_into_mastered_learning_and_stuck():
+    """分档规则：说通**两次**才算「已掌握」（一次是运气）；只说通一次或半懂是「在学」；
+    还挂着**未解**卡点的是「卡住」。"""
+    await _reset()
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    await _seed_at("早", "asyncio 事件循环", "got", now - timedelta(days=5))
+    await _seed_at("晚", "asyncio 事件循环", "got", now - timedelta(days=1))  # 两次 → 已掌握
+    await _seed_at("一次", "SQLite WAL", "got", now - timedelta(days=2))  # 只一次 → 在学
+    await _seed_at("半懂", "React useEffect 依赖数组", "half", now - timedelta(days=3))  # → 在学
+    await _seed_at(
+        "卡住", "CORS 预检", "half", now - timedelta(days=4), stuck="以为 OPTIONS 是应用层发的"
+    )
+
+    m = await core.learning_map()
+    assert [c["concept"] for c in m["mastered"]] == ["asyncio 事件循环"]
+    assert sorted(c["concept"] for c in m["learning"]) == [
+        "React useEffect 依赖数组",
+        "SQLite WAL",
+    ]
+    assert [c["concept"] for c in m["stuck"]] == ["CORS 预检"]
+    assert m["untouched"] == []
+
+
+async def test_learning_map_puts_an_unresolved_stuck_ahead_of_mastery():
+    """挂着未解卡点的概念落在「卡住」，哪怕它最近一次是「说通了」——卡住是最该被看见的
+    状态。手动解掉那条卡点之后，它回到按自评分的档。"""
+    await _reset()
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    got_id = await _seed_at(
+        "说通了但还卡着", "asyncio 事件循环", "got", now - timedelta(days=1), stuck="还是没懂 await"
+    )
+    await _seed_at("更早", "asyncio 事件循环", "got", now - timedelta(days=6))
+
+    m = await core.learning_map()
+    assert [c["concept"] for c in m["stuck"]] == ["asyncio 事件循环"]
+    assert m["mastered"] == []
+
+    await core.resolve_stuck(got_id)  # 手动关掉那条卡点
+    m2 = await core.learning_map()
+    assert m2["stuck"] == []
+    assert [c["concept"] for c in m2["mastered"]] == ["asyncio 事件循环"]
+
+
 # ---------- 材料消化：一份材料 → 要搞懂的点 ----------
 
 
@@ -629,7 +680,10 @@ async def test_digest_splits_a_pasted_material_into_points(monkeypatch):
     monkeypatch.setattr(core, "_digest_points", fake_points)
     got = await core.digest(text="x" * 200)
 
-    assert got["points"] == [{"title": "await 到底把控制权交给了谁", "why": "最容易含糊的一步"}]
+    assert [(p["title"], p["why"]) for p in got["points"]] == [
+        ("await 到底把控制权交给了谁", "最容易含糊的一步")
+    ]
+    assert got["points"][0]["id"] > 0  # 落库后带回 id，供「未触及」与「点开即标记」
     assert got["error"] == "" and got["source"] == ""
     assert seen["label"] == "粘贴文本" and seen["model_id"] == "p/m"
 
@@ -653,7 +707,7 @@ async def test_digest_reads_a_vault_file(monkeypatch):
     got = await core.digest(source_path="notes/材料.md")
 
     assert got["source"] == "notes/材料.md"
-    assert got["points"] == [{"title": "T", "why": ""}]
+    assert [(p["title"], p["why"]) for p in got["points"]] == [("T", "")]
     assert "内容" in seen["material"]  # 真读到了文件，不是空转
 
 
@@ -1583,3 +1637,47 @@ async def test_end_future_skips_extraction(monkeypatch):
 
 async def _fake_dossier() -> str:
     return "【时间锚点】测试档案"
+
+
+# ---------- 建议日志：拆出的点落库 → 未触及 → 开场即标记 ----------
+
+
+async def test_digest_points_are_remembered_and_deduplicated(monkeypatch):
+    """拆出的点写进 digest_points（建议日志）；同一份材料重拆一遍**不堆第二行**，
+    复用同一批 id。"""
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+
+    async def fake_points(material, label, model_id):
+        return [{"title": "点A", "why": "w"}, {"title": "点B", "why": ""}]
+
+    monkeypatch.setattr(core, "_digest_points", fake_points)
+    first = await core.digest(text="x" * 200)
+    second = await core.digest(text="x" * 200)
+
+    assert [p["id"] for p in first["points"]] == [p["id"] for p in second["points"]]
+    assert all(p["id"] > 0 for p in first["points"])
+    untouched = (await core.learning_map())["untouched"]
+    assert sorted(p["point"] for p in untouched) == ["点A", "点B"]
+
+
+async def test_starting_from_a_point_marks_it_taught(monkeypatch):
+    """从一个点开场后回填 taught_session_id，它就不再是「未触及」；其余的点不受影响。"""
+    await _reset()
+    from app.core import providers
+
+    monkeypatch.setattr(providers, "default_model_id", lambda: "p/m")
+    monkeypatch.setattr(providers, "is_unhealthy", lambda mid, cache=None: False)
+
+    async def fake_points(material, label, model_id):
+        return [{"title": "点A", "why": ""}, {"title": "点B", "why": ""}]
+
+    monkeypatch.setattr(core, "_digest_points", fake_points)
+    got = await core.digest(text="x" * 200)
+    pid_a = next(p["id"] for p in got["points"] if p["title"] == "点A")
+
+    assert sorted(p["point"] for p in (await core.learning_map())["untouched"]) == ["点A", "点B"]
+    await core.start("点A", origin_point_id=pid_a)
+    assert [p["point"] for p in (await core.learning_map())["untouched"]] == ["点B"]

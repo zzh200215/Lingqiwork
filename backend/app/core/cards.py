@@ -376,9 +376,12 @@ def make_cloze(text: str, start: int, end: int) -> dict | None:
 
 
 def compose_gen_prompt(
-    material: str, label: str, count: int, kinds: list[str] | None = None
+    material: str, label: str, count: int, kinds: list[str] | None = None, focus: str = ""
 ) -> tuple[str, str]:
     """-> (system, user). Pure — no I/O, no model — so prompt shape is unit-testable.
+
+    `focus` 非空 = **只围绕这一点出卡**（材料消化后「按点出卡」用它）：材料照给，好让模型
+    有上下文，但明说只要跟这一点有关的卡。空 = 照旧，整份材料随便出。
 
     Raises ValueError on an unknown kind or a non-positive count.
     """
@@ -391,6 +394,12 @@ def compose_gen_prompt(
         if bad:
             raise ValueError(f"未知卡型：{', '.join(bad)}")
         system = f"{system}\n这次只出以下类型：{'、'.join(kinds)}。"
+    focus = (focus or "").strip()[:200]
+    if focus:
+        system = (
+            f"{system}\n这次**只围绕这一点**出卡：{focus}。"
+            "材料里跟它无关的内容一律不要出——每一张卡都必须落在这一个点上。"
+        )
     user = (
         f"材料来源：{label}\n请出 {count} 张卡片。\n\n---\n{material[:MAX_INPUT_CHARS]}"
     )
@@ -563,8 +572,11 @@ async def generate_iter(
     count: int = DEFAULT_CARDS,
     kinds: list[str] | None = None,
     model_id: str = "",
+    focus: str = "",
 ):
     """Yield (stage, data) progress, ending on a terminal ("done", {...}).
+
+    `focus` 非空 = 只围绕这一点出卡（材料消化后「按点出卡」）；见 `compose_gen_prompt`。
 
     Same shape as `core/podcast.generate_from_blocks` so the SSE endpoint stays a
     thin wrapper. Input validation happens BEFORE the caller opens the stream —
@@ -577,7 +589,7 @@ async def generate_iter(
 
     yield "reading", {}
     source, label, material = collect_material(source_path=source_path, text=text)
-    system, user = compose_gen_prompt(material, label, count, kinds)
+    system, user = compose_gen_prompt(material, label, count, kinds, focus)
 
     mid = (model_id or "").strip() or (_default_model_id() or "")
     if not mid:

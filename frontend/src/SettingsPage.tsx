@@ -1115,13 +1115,19 @@ export default function SettingsPage() {
               />
               自动记忆（每轮对话结束后让模型自主判断是否值得记住，开销：每轮一次轻量调用）
             </label>
-            <label className="flex items-center gap-2 text-sm">
+            {/* checkbox 和说明走两列：说明文字长，如果和时间框挤在同一行文字流里，
+                时间框会被 flex 拉宽到整行（实测），看起来像凭空浮在右边。
+                grid 而不是 flex+min-w-0：文字列缩到 0 时会竖成一列字（实测）。 */}
+            <label className="grid grid-cols-[1.5rem_1fr_auto] items-start gap-2 text-sm">
               <input
                 type="checkbox"
+                className="mx-auto mt-1"
                 checked={prefs.memory_tidy_enabled}
                 onChange={(e) => setPrefs({ ...prefs, memory_tidy_enabled: e.target.checked })}
               />
-              睡眠期整理（每天凌晨自动合并语义重复的记忆，只在发现重复时才调用模型）
+              <span>
+                睡眠期整理（每天凌晨自动合并语义重复的记忆，只在发现重复时才调用模型）
+              </span>
               <input
                 type="time"
                 value={prefs.memory_tidy_time}
@@ -1236,13 +1242,13 @@ export default function SettingsPage() {
               />
               任务桌面通知（定时/自动任务失败时弹 Windows 通知；智能体任务完成也通知）
             </label>
-            <div className="flex items-center gap-2 text-sm">
+            {/* 同「睡眠期整理」：grid 三列，开关列 / 说明列 / 时间+备注列 */}
+            <div className="grid grid-cols-[1.5rem_1fr_auto] items-start gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={prefs.digest_enabled}
                 id="digest-toggle"
                 hidden
-                className="peer/digest"
                 onChange={(e) => setPrefs({ ...prefs, digest_enabled: e.target.checked })}
               />
               <button
@@ -1250,7 +1256,7 @@ export default function SettingsPage() {
                 onClick={() => setPrefs({ ...prefs, digest_enabled: !prefs.digest_enabled })}
                 role="switch"
                 aria-checked={prefs.digest_enabled}
-                className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+                className={`relative mx-auto mt-0.5 h-5 w-9 rounded-full transition-colors ${
                   prefs.digest_enabled ? 'bg-violet-600' : 'bg-neutral-300 dark:bg-neutral-700'
                 }`}
               >
@@ -1260,15 +1266,17 @@ export default function SettingsPage() {
                   }`}
                 />
               </button>
-              每日定时笔记摘要
-              <input
-                type="time"
-                value={prefs.digest_time}
-                disabled={!prefs.digest_enabled}
-                onChange={(e) => setPrefs({ ...prefs, digest_time: e.target.value })}
-                className={`${inputCls} w-28 disabled:opacity-40`}
-              />
-              <span className="text-xs text-neutral-400">写入 vault/digests/，自动进入知识库索引</span>
+              <span>每日定时笔记摘要</span>
+              <span className="flex items-center gap-2">
+                <input
+                  type="time"
+                  value={prefs.digest_time}
+                  disabled={!prefs.digest_enabled}
+                  onChange={(e) => setPrefs({ ...prefs, digest_time: e.target.value })}
+                  className={`${inputCls} w-28 disabled:opacity-40`}
+                />
+                <span className="whitespace-nowrap text-xs text-neutral-400">写入 vault/digests/，自动进入知识库索引</span>
+              </span>
             </div>
             <div className="flex items-center gap-3 pl-12">
               <input

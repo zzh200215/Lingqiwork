@@ -3,7 +3,7 @@
 // 分叉一旦坏了，全部流式功能（聊天/教学/播客/卡片）一起哑，却很难从页面看出来。
 import { describe, expect, it, vi } from 'vitest'
 
-import { sseFrames, streamCompose, streamDecide } from './stream'
+import { sseFrames, streamCardsGenerate, streamCompose, streamDecide } from './stream'
 
 function resOf(chunks: string[]): Response {
   const body = new ReadableStream<Uint8Array>({
@@ -154,6 +154,44 @@ describe('streamDecide', () => {
       const done = await streamDecide('t', () => {})
       expect(done.ok).toBe(false)
       expect(done.error).toBe('没取到材料')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('streamCardsGenerate', () => {
+  function stub(payload: string) {
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) => resOf([payload])
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('把 focus 原样发到后端 —— 「按点出卡」的「只围绕这一点」靠它落地', async () => {
+    const fetchMock = stub('event: done\ndata: {"ok":true,"cards":[],"source":"notes/x.md"}\n\n')
+    try {
+      const done = await streamCardsGenerate(
+        { source_path: 'notes/x.md', focus: 'await 把控制权交给了谁', count: 3 },
+        () => {}
+      )
+      expect(done.ok).toBe(true)
+      expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toMatchObject({
+        source_path: 'notes/x.md',
+        focus: 'await 把控制权交给了谁',
+        count: 3,
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('不带 focus 时 body 里就没有这个键 —— 普通出卡维持原样', async () => {
+    const fetchMock = stub('event: done\ndata: {"ok":true,"cards":[]}\n\n')
+    try {
+      await streamCardsGenerate({ text: '一段材料', count: 5 }, () => {})
+      expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).not.toHaveProperty('focus')
     } finally {
       vi.unstubAllGlobals()
     }

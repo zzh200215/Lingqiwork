@@ -514,6 +514,28 @@ class TutorTurn(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class DigestPoint(Base):
+    """`digest()` 拆出的一个「要搞懂的点」——**只是建议日志，不是学习状态**。
+
+    学习状态的真值仍然只有 `tutor_sessions`（见 TutorSession 的注释）；这张表存在的
+    唯一理由，是让学习地图「未触及」那一档拿得到「拆出来但还没开教的点」。开了教就
+    回填 `taught_session_id`，于是「未触及」= 这张表里 `taught_session_id IS NULL` 的行。
+
+    去重按 `(source, point)`：同一份材料重拆一遍不该堆出第二行，否则这张日志会自己
+    长出噪声。
+    """
+
+    __tablename__ = "digest_points"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(300), default="")  # 材料路径 / 标签
+    point: Mapped[str] = mapped_column(String(400))  # 一句话的点，就是开场话题
+    why: Mapped[str] = mapped_column(Text, default="")  # 为什么容易卡
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # 非空 = 这个点已经开成过一场教学，不再是「未触及」
+    taught_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class ArtifactFeedback(Base):
     """One 👍/👎 on a generated document — the quality flywheel's raw material.
 

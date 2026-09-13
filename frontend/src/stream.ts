@@ -260,9 +260,16 @@ export interface CardGenDone {
   model_id?: string
 }
 
-/** AI card generation with live progress. Resolves with the terminal done event. */
+/** AI card generation with live progress. Resolves with the terminal done event.
+ * `focus` 非空 = 只围绕这一点出卡（材料消化后「按点出卡」）。 */
 export async function streamCardsGenerate(
-  body: { source_path?: string; text?: string; count?: number; kinds?: string[] },
+  body: {
+    source_path?: string
+    text?: string
+    count?: number
+    kinds?: string[]
+    focus?: string
+  },
   onStage: (s: CardGenStage) => void,
   signal?: AbortSignal
 ): Promise<CardGenDone> {

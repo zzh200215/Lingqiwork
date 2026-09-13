@@ -6,17 +6,21 @@ import FeedbackButtons from './FeedbackButtons'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
 import {
   api,
+  type CardDraft,
   type CardSources,
   type RoundtableResult,
   type TutorConceptRow,
+  type TutorDigestPoint,
   type TutorDigestResult,
   type TutorEndResult,
+  type TutorLearningMap,
   type TutorSessionRow,
   type TutorStarter,
   type TutorStats,
   type TutorTurn,
 } from './api'
 import {
+  streamCardsGenerate,
   streamConflict,
   streamDecide,
   streamResearch,
@@ -29,7 +33,6 @@ import {
   type TutorMaterialSource,
   type TutorRecallHit,
 } from './stream'
-import { useAside } from './split'
 
 // 对话式教学 (第一步). You name something to understand, it asks
 // before it explains, and a session ends as 概念 / 自评 / 卡点.
@@ -53,6 +56,26 @@ const VERDICT_LABEL: Record<string, string> = {
 
 /** 右栏「学到哪了」一屏列多少个概念；更多的靠会话历史翻（纯展示上限，不落库）。 */
 const CONCEPT_RAIL_CAP = 12
+
+/** 「按点出卡」一次出几张。一个点的卡面要窄——3 张足够覆盖它，再多就是重复。 */
+const POINT_CARDS = 3
+
+/** 按点出卡的请求体。**材料必须和当初拆点用的那份一模一样**：有来源文件就用文件，
+ *  粘贴模式就用当初粘进去的那段（调用方一直存着它）。
+ *
+ *  **绝不能拿点标题当材料**：一个点是十几个字的一句话，而后端 `MIN_INPUT_CHARS = 80`
+ *  会直接 400（"文本太短"）。这个坑是浏览器实测抓到的——单测覆盖不到前端这段。
+ *  既然拆点本身走的就是同一个 80 字下限，能拆出点就说明这份材料一定够长。 */
+export function pointCardBody(
+  point: string,
+  dg: { source: string } | null,
+  pastedText: string
+): { source_path: string; focus: string; count: number } | { text: string; focus: string; count: number } {
+  const src = dg?.source || ''
+  return src
+    ? { source_path: src, focus: point, count: POINT_CARDS }
+    : { text: pastedText, focus: point, count: POINT_CARDS }
+}
 
 /** The one thing that makes this more than a chat wrapper, so it is shown, not
  * hidden: 验收 asks whether recall fired AND whether it was right, and only the
@@ -122,7 +145,6 @@ function Bubble({ turn }: { turn: Turn }) {
 
 export default function TutorPage() {
   const [searchParams] = useSearchParams()
-  const aside = useAside()
   const [sid, setSid] = useState<number | null>(null)
   const [topic, setTopic] = useState('')
   const [mode, setMode] = useState<'socratic' | 'feynman' | 'future'>('socratic')
@@ -136,7 +158,7 @@ export default function TutorPage() {
   const [verdict, setVerdict] = useState<'' | 'got' | 'half' | 'useless'>('')
   const [ended, setEnded] = useState<{ concept: string; stuck: string; transfer: string; nearby: TutorEndResult['material_nearby'] } | null>(null)
   const [rows, setRows] = useState<TutorSessionRow[]>([])
-  const [concepts, setConcepts] = useState<TutorConceptRow[]>([])
+  const [learnMap, setLearnMap] = useState<TutorLearningMap | null>(null)
   // 展开中的概念（看它历次自评与卡点的演进）；一次只展开一个，右栏窄
   const [openConcept, setOpenConcept] = useState<string | null>(null)
   const [stuckBusy, setStuckBusy] = useState(false)
@@ -171,7 +193,9 @@ export default function TutorPage() {
   const [cfMsg, setCfMsg] = useState('')
   const [cfSaved, setCfSaved] = useState('')
   const [stats, setStats] = useState<TutorStats | null>(null)
-  // 材料消化：一份材料 → 要搞懂的点。面板是拉取式的——你点它才跑，拆出来的点不落库。
+  // 材料消化：一份材料 → 要搞懂的点。面板是拉取式的——你点它才跑。
+  // 拆出的点写进 `digest_points`（建议日志，学习地图「未触及」的来源）；学习状态的真值
+  // 仍然只有 tutor_sessions。
   const [dgOpen, setDgOpen] = useState(false)
   const [dgMode, setDgMode] = useState<'file' | 'text'>('file')
   const [dgQuery, setDgQuery] = useState('')
@@ -181,6 +205,17 @@ export default function TutorPage() {
   const [dgBusy, setDgBusy] = useState(false)
   const [dg, setDg] = useState<TutorDigestResult | null>(null)
   const [dgMsg, setDgMsg] = useState('')
+  // 「按点出卡」：只围绕某一个点出几张卡，不离开学页。**一次只服务一个点**——同时铺开
+  // 几张草稿面板，就没法一眼看清哪张卡属于哪个点了。
+  const [pc, setPc] = useState<{
+    pointId: number
+    busy: boolean
+    drafts: CardDraft[]
+    picked: Set<number>
+    msg: string
+    meta: { source: string; source_label: string; model_id: string }
+  } | null>(null)
+  const [pcNotice, setPcNotice] = useState('') // 入库回执：正面的话，不和报错混在一起
   // 开场建议（DeepTutor 参考项）：从记录里派生的就近入口，挂了就静默没有
   const [starters, setStarters] = useState<TutorStarter[]>([])
   const bottom = useRef<HTMLDivElement>(null)
@@ -198,7 +233,7 @@ export default function TutorPage() {
     // best-effort: the rail is context, never a precondition for teaching
     api.tutorSessions().then((r) => setRows(r.sessions)).catch(() => {})
     api.tutorStats().then(setStats).catch(() => {})
-    api.tutorConcepts().then((r) => setConcepts(r.concepts)).catch(() => {})
+    api.tutorMap().then(setLearnMap).catch(() => {})
   }, [])
 
   // 卡点的手动出口：标已解 / 标回待解。右栏是上下文，失败静默。
@@ -232,16 +267,85 @@ export default function TutorPage() {
     setDgBusy(true)
     setDgMsg('')
     setDg(null)
+    setPc(null) // 点换了一批，上一轮的出卡草稿就没有归属了
+    setPcNotice('')
     try {
       const r = await api.tutorDigest(body)
       setDg(r)
       if (r.error) setDgMsg(r.error)
+      refreshRail() // 拆出的点进了建议日志 → 「未触及」那一档得跟着更新
     } catch (e) {
       setDgMsg(e instanceof Error ? e.message : String(e))
     } finally {
       setDgBusy(false)
     }
-  }, [dgMode, dgText, dgSource, dgBusy])
+  }, [dgMode, dgText, dgSource, dgBusy, refreshRail])
+
+  // 按点出卡：只围绕这一点出，卡面只覆盖那一点。有来源文件就从材料取（准），粘贴文本
+  // 拆的点没有来源文件，退化成**拿这个点本身当材料**——它本来就是一句话，够出卡了。
+  const makePointCards = useCallback(
+    async (p: TutorDigestPoint) => {
+      if (pc?.busy) return
+      // 来源是**整份材料**的（在 dg 结果层），不是点自己的——点只有标题与「为什么容易卡」
+      const src = dg?.source || ''
+      const srcLabel = dg?.source_label || src
+      setPcNotice('')
+      setPc({
+        pointId: p.id,
+        busy: true,
+        drafts: [],
+        picked: new Set(),
+        msg: '',
+        meta: { source: src, source_label: srcLabel, model_id: '' },
+      })
+      const body = pointCardBody(p.title, dg, dgText)
+      try {
+        const done = await streamCardsGenerate(body, () => {})
+        if (!done.ok) {
+          setPc((c) => (c ? { ...c, busy: false, msg: done.error || '出卡失败' } : c))
+          return
+        }
+        const cards = (done.cards ?? []) as CardDraft[]
+        setPc({
+          pointId: p.id,
+          busy: false,
+          drafts: cards,
+          // 重复的默认不勾但留着给你看——和 CardMaker 同一条规矩：你决定，不是模型
+          picked: new Set(cards.map((_, i) => i).filter((i) => !cards[i].duplicate_of)),
+          msg: cards.length ? '' : '这个点没出到卡，换个点试试',
+          meta: {
+            source: done.source || src,
+            source_label: done.source_label || srcLabel,
+            model_id: done.model_id ?? '',
+          },
+        })
+      } catch (e) {
+        setPc((c) =>
+          c ? { ...c, busy: false, msg: e instanceof Error ? e.message : String(e) } : c
+        )
+      }
+    },
+    [pc?.busy, dg, dgText]
+  )
+
+  const savePointCards = useCallback(async () => {
+    const cur = pc
+    if (!cur || !cur.drafts.length) return
+    const chosen = cur.drafts.filter((_, i) => cur.picked.has(i))
+    if (!chosen.length) {
+      setPc({ ...cur, msg: '至少勾一张' })
+      return
+    }
+    setPc({ ...cur, busy: true, msg: '' })
+    try {
+      const r = await api.saveCards({ cards: chosen, ...cur.meta })
+      setPc(null)
+      setPcNotice(r.skipped ? `入库 ${r.added} 张，跳过 ${r.skipped} 张重复` : `入库 ${r.added} 张`)
+      refreshRail()
+    } catch (e) {
+      setPc({ ...cur, busy: false, msg: e instanceof Error ? e.message : String(e) })
+    }
+  }, [pc, refreshRail])
 
   const closeDigest = useCallback(() => {
     setDgOpen(false)
@@ -602,7 +706,13 @@ export default function TutorPage() {
   }, [])
 
   const beginWith = useCallback(
-    async (topicText: string, repo = '', m: 'socratic' | 'feynman' | 'future' = 'socratic') => {
+    async (
+      topicText: string,
+      repo = '',
+      m: 'socratic' | 'feynman' | 'future' = 'socratic',
+      // 从「材料拆出的点」开场时带上：后端据此把它标成已教，不再算「未触及」
+      originPointId?: number,
+    ) => {
     const t = topicText.trim()
     if (!t || busy) return
     setTopic(t)
@@ -611,7 +721,7 @@ export default function TutorPage() {
     clearResearch()
     clearDecide()
     try {
-      const s = await api.tutorStart(t, repo, m)
+      const s = await api.tutorStart(t, repo, m, originPointId)
       setSid(s.id)
       setModelOk(s.model_ok)
       setTurns([])
@@ -1025,19 +1135,92 @@ export default function TutorPage() {
 
           {dgMsg ? <p className="pt-2 text-[11px] text-rose-600 dark:text-rose-400">{dgMsg}</p> : null}
 
+          {pcNotice ? (
+            <p className="pt-2 text-[11px] text-teal-700 dark:text-teal-400">{pcNotice}</p>
+          ) : null}
+
           {dg && dg.points.length > 0 ? (
             <ol className="mt-3 space-y-1.5 border-t border-teal-200/70 pt-2 dark:border-teal-500/20">
               {dg.points.map((p, i) => (
                 <li key={`${i}-${p.title}`}>
-                  <button
-                    onClick={() => void beginWith(p.title)}
-                    disabled={busy}
-                    title="开一场教学，专门搞懂这个点"
-                    className="block w-full rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/70 disabled:opacity-40 dark:hover:bg-neutral-900/40"
-                  >
-                    <span className="block text-sm text-neutral-700 dark:text-neutral-200">{p.title}</span>
-                    {p.why ? <span className="block text-[11px] text-neutral-400">{p.why}</span> : null}
-                  </button>
+                  <div className="flex items-stretch gap-1">
+                    <button
+                      onClick={() => void beginWith(p.title, '', 'socratic', p.id)}
+                      disabled={busy}
+                      title="开一场教学，专门搞懂这个点"
+                      className="block min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/70 disabled:opacity-40 dark:hover:bg-neutral-900/40"
+                    >
+                      <span className="block text-sm text-neutral-700 dark:text-neutral-200">{p.title}</span>
+                      {p.why ? <span className="block text-[11px] text-neutral-400">{p.why}</span> : null}
+                    </button>
+                    {/* 「按点出卡」：卡面只覆盖这一点，不离开学页 */}
+                    <button
+                      onClick={() => void makePointCards(p)}
+                      disabled={busy || pc?.busy}
+                      title="只围绕这一点出几张卡，不离开学页"
+                      className="shrink-0 rounded-lg border border-neutral-200 px-2 text-[11px] text-neutral-500 transition-colors hover:border-teal-400 hover:text-teal-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-teal-500 dark:hover:text-teal-300"
+                    >
+                      {pc?.busy && pc.pointId === p.id ? '…' : '🃏'}
+                    </button>
+                  </div>
+                  {pc?.pointId === p.id ? (
+                    <div className="ml-2 mt-1 rounded-lg border border-teal-200/70 p-2 dark:border-teal-500/20">
+                      {pc.busy ? (
+                        <p className="text-[11px] text-neutral-400">出卡中…</p>
+                      ) : pc.drafts.length > 0 ? (
+                        <>
+                          {pc.drafts.map((d, j) => (
+                            <label key={j} className="flex cursor-pointer gap-1.5 py-1">
+                              <input
+                                type="checkbox"
+                                checked={pc.picked.has(j)}
+                                onChange={() =>
+                                  setPc((c) => {
+                                    if (!c) return c
+                                    const next = new Set(c.picked)
+                                    if (next.has(j)) next.delete(j)
+                                    else next.add(j)
+                                    return { ...c, picked: next, msg: '' }
+                                  })
+                                }
+                                className="mt-0.5 shrink-0"
+                              />
+                              <span className="min-w-0">
+                                <span className="block text-xs text-neutral-700 dark:text-neutral-200">
+                                  {d.front}
+                                </span>
+                                <span className="block text-[11px] text-neutral-500 dark:text-neutral-400">
+                                  {d.back}
+                                </span>
+                                {d.duplicate_of ? (
+                                  <span className="block text-[10px] text-amber-600 dark:text-amber-400">
+                                    可能的重复
+                                  </span>
+                                ) : null}
+                              </span>
+                            </label>
+                          ))}
+                          <div className="mt-1 flex items-center gap-2">
+                            <button
+                              onClick={() => void savePointCards()}
+                              className="rounded-full border border-teal-300 px-2 py-0.5 text-[10px] text-teal-700 transition-colors hover:bg-teal-50 dark:border-teal-600 dark:text-teal-300 dark:hover:bg-teal-950/40"
+                            >
+                              入库选中的
+                            </button>
+                            <button
+                              onClick={() => setPc(null)}
+                              className="text-[10px] text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+                            >
+                              收起
+                            </button>
+                          </div>
+                        </>
+                      ) : null}
+                      {pc.msg ? (
+                        <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{pc.msg}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ol>
@@ -1047,39 +1230,13 @@ export default function TutorPage() {
     </>
   )
 
-  // 「我学到哪了」：按概念收敛后的当前状态（纯派生）。**闲置时它在开场屏的右栏，
-  // 开了会话回到会话右栏**——同一份，两处不同时出现（所以不是重复）。
-  const conceptsPanel = (
-    <>
-      {concepts.length > 0 ? (
-        <div className="px-3 pb-3">
-          <div className="flex items-center justify-between pb-1.5">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-              学到哪了
-            </p>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => void runRoundtable()}
-                disabled={rtBusy}
-                title="开一场圆桌：三个 AI 视角（老师/同侪/考官）笔谈最近的卡点"
-                className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-sky-400 hover:text-sky-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-sky-500 dark:hover:text-sky-300"
-              >
-                {rtBusy && !rt ? '讨论中…' : '👥 圆桌'}
-              </button>
-              <button
-                onClick={() => void makeStuckPodcast()}
-                disabled={stuckBusy}
-                title="把最近的卡点做成一期双人讨论播客"
-                className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
-              >
-                {stuckBusy ? '生成中…' : '🎧 做成播客'}
-              </button>
-            </div>
-          </div>
-          {concepts.slice(0, CONCEPT_RAIL_CAP).map((c) => {
-            const evo = rows.filter((r) => r.concept === c.concept)
-            const expanded = openConcept === c.concept
-            return (
+  // 「学习地图」四档：已掌握 / 在学 / 卡住 / 未触及。**闲置时在开场屏右栏，开了会话
+  // 回到会话右栏**——同一份，两处不同时出现（所以不是重复）。前三档纯派生自教学记录，
+  // 第四档是 digest 拆出来、还没开成教学的点。是记录，不是待办：不催、不排期。
+  const conceptRow = (c: TutorConceptRow) => {
+    const evo = rows.filter((r) => r.concept === c.concept)
+    const expanded = openConcept === c.concept
+    return (
               <div key={c.concept} className="group/c relative">
                 <button
                   onClick={() => setOpenConcept(expanded ? null : c.concept)}
@@ -1162,12 +1319,79 @@ export default function TutorPage() {
                   </div>
                 ) : null}
               </div>
-            )
-          })}
-          {concepts.length > CONCEPT_RAIL_CAP ? (
-            <p className="pt-0.5 text-[10px] text-neutral-400">
-              更早的 {concepts.length - CONCEPT_RAIL_CAP} 个不在这一屏
+    )
+  }
+
+  // 一档 = 小标题 + 该档的概念行。**空档不渲染**（不摆一个「0 个卡住」给人看）。
+  const mapGroup = (label: string, cls: string, items: TutorConceptRow[]) =>
+    items.length > 0 ? (
+      <div key={label} className="pt-1.5">
+        <p className={`px-1 pb-0.5 text-[10px] font-medium ${cls}`}>
+          {label} <span className="text-neutral-400">{items.length}</span>
+        </p>
+        {items.slice(0, CONCEPT_RAIL_CAP).map(conceptRow)}
+      </div>
+    ) : null
+
+  const mapCount = learnMap
+    ? learnMap.mastered.length +
+      learnMap.learning.length +
+      learnMap.stuck.length +
+      learnMap.untouched.length
+    : 0
+
+  const conceptsPanel = (
+    <>
+      {learnMap && mapCount > 0 ? (
+        <div className="px-3 pb-3">
+          <div className="flex items-center justify-between pb-1.5">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+              学到哪了
             </p>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => void runRoundtable()}
+                disabled={rtBusy}
+                title="开一场圆桌：三个 AI 视角（老师/同侪/考官）笔谈最近的卡点"
+                className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-sky-400 hover:text-sky-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-sky-500 dark:hover:text-sky-300"
+              >
+                {rtBusy && !rt ? '讨论中…' : '👥 圆桌'}
+              </button>
+              <button
+                onClick={() => void makeStuckPodcast()}
+                disabled={stuckBusy}
+                title="把最近的卡点做成一期双人讨论播客"
+                className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
+              >
+                {stuckBusy ? '生成中…' : '🎧 做成播客'}
+              </button>
+            </div>
+          </div>
+          {mapGroup('已掌握', 'text-emerald-600 dark:text-emerald-400', learnMap.mastered)}
+          {mapGroup('在学', 'text-sky-600 dark:text-sky-400', learnMap.learning)}
+          {mapGroup('卡住', 'text-amber-600 dark:text-amber-400', learnMap.stuck)}
+          {learnMap.untouched.length > 0 ? (
+            <div className="pt-1.5">
+              <p className="px-1 pb-0.5 text-[10px] font-medium text-neutral-500">
+                未触及 <span className="text-neutral-400">{learnMap.untouched.length}</span>
+              </p>
+              {learnMap.untouched.slice(0, CONCEPT_RAIL_CAP).map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => void beginWith(p.point, '', 'socratic', p.id)}
+                  disabled={busy}
+                  title="拆自材料、还没开教——点开就专门搞懂这个点"
+                  className="block w-full rounded-lg py-1.5 pr-3 text-left transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800/70"
+                >
+                  <span className="block truncate text-xs text-neutral-700 dark:text-neutral-200">
+                    {p.point}
+                  </span>
+                  {p.why ? (
+                    <span className="block truncate text-[11px] text-neutral-400">{p.why}</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
           ) : null}
           {rt ? (
             <div className="mb-2 mt-2 rounded-lg border border-neutral-100 p-2 dark:border-neutral-800">
@@ -1278,7 +1502,10 @@ export default function TutorPage() {
         <div className="flex min-w-0 flex-1 flex-col">
           {sid === null ? (
             <div className="flex flex-1 flex-col overflow-y-auto px-6 py-10">
-              <div className="my-auto grid w-full gap-x-10 gap-y-6 xl:grid-cols-[minmax(0,1fr)_18rem]">
+              {/* 第二列跟内容同宽（`auto`），**不是固定 18rem**：那几条动作按钮只有
+                  约 95px 宽，固定 288px 会在 1280 以上每一档都空出约 193px 的带子
+                  （实测），看着像页面没排满。`auto` 之后主内容铺满，空带消失。 */}
+              <div className="my-auto grid w-full gap-x-10 gap-y-6 xl:grid-cols-[minmax(0,1fr)_auto]">
                 <div>
                 <h1 className="pb-1 text-2xl font-semibold tracking-tight">你想搞懂什么？</h1>
                 <p className="pb-4 text-sm text-neutral-500">
@@ -1455,13 +1682,6 @@ export default function TutorPage() {
                   className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-teal-600 transition-colors hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40 dark:text-teal-300 dark:hover:bg-teal-500/10"
                 >
                   {cfBusy ? '对质中…' : '⚔️ 对质'}
-                </button>
-                <button
-                  onClick={() => aside.toggle('/kb')}
-                  title="在右侧并排打开知识库——边学边翻材料，不用离开这场会话"
-                  className="shrink-0 rounded-lg px-2.5 py-1 text-xs text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 dark:text-amber-300 dark:hover:bg-amber-500/10"
-                >
-                  📚 资料
                 </button>
                 <button
                   onClick={reset}

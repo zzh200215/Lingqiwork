@@ -24,7 +24,6 @@ import {
 import AttachToThread from './AttachToThread'
 import FeedbackButtons from './FeedbackButtons'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
-import { useAside } from './split'
 import { streamDeliver, type DeliverReport, type ReportDraft } from './stream'
 
 /** 筛选条的固定顺序——和产出的种类一一对应，不随数据变。 */
@@ -219,7 +218,6 @@ export default function WorkPage() {
   const [filter, setFilter] = useState<WorkOutput['kind'] | ''>('')
   const [err, setErr] = useState('')
   const navigate = useNavigate()
-  const aside = useAside()
 
   // 工作流（§4-11）：定义、最近运行、失败原因同屏
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
@@ -781,13 +779,6 @@ export default function WorkPage() {
                   className="hidden shrink-0 group-hover:block"
                 />
                 <span className="shrink-0 text-[11px] text-neutral-400">{o.date.slice(5)}</span>
-                <button
-                  onClick={() => aside.toggle('/notes?path=' + encodeURIComponent(o.path))}
-                  className="hidden shrink-0 text-neutral-400 hover:text-violet-600 group-hover:block"
-                  title="在右侧并排打开 —— 一边看清单，一边读这一篇"
-                >
-                  ⧉
-                </button>
               </li>
             ))}
           </ul>

@@ -1031,8 +1031,11 @@ export interface TutorConceptRow {
   recalled: number
 }
 
-/** 「材料消化」拆出来的一个点：一句话 + 它为什么容易卡。不落库。 */
+/** 「材料消化」拆出来的一个点：一句话 + 它为什么容易卡。
+ * `id` 是它在 `digest_points`（建议日志）里的行号——点开成教学时带回去标记已教。
+ * 落库失败会退化成 0，此时按标题走，不影响开局。 */
 export interface TutorDigestPoint {
+  id: number
   title: string
   why: string
 }
@@ -1043,6 +1046,24 @@ export interface TutorDigestResult {
   source_label: string
   points: TutorDigestPoint[]
   error: string
+}
+
+/** 「未触及」：digest 拆出来、但还没开成教学的点。 */
+export interface TutorUntouchedPoint {
+  id: number
+  point: string
+  why: string
+  source: string
+  created_at: string
+}
+
+/** 学习地图：概念分四档。前三档是 TutorConceptRow 的子集（纯派生），
+ * 第四档读的是 digest_points 建议日志。 */
+export interface TutorLearningMap {
+  mastered: TutorConceptRow[]
+  learning: TutorConceptRow[]
+  stuck: TutorConceptRow[]
+  untouched: TutorUntouchedPoint[]
 }
 
 /** A row in the history rail. `turn_count` is a number here; `TutorDetail.turns`
@@ -1751,11 +1772,22 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     }),
 
   // ---------- 对话式教学 ----------
-  /** repo 非空 = 代码库陪读：会话取材限定在该仓库；mode = socratic | feynman */
-  tutorStart: (topic: string, repo?: string, mode?: 'socratic' | 'feynman' | 'future') =>
+  /** repo 非空 = 代码库陪读：会话取材限定在该仓库；mode = socratic | feynman。
+   * origin_point_id 非空 = 从「材料拆出的点」开场，带上就把它标成已教。 */
+  tutorStart: (
+    topic: string,
+    repo?: string,
+    mode?: 'socratic' | 'feynman' | 'future',
+    origin_point_id?: number,
+  ) =>
     request<TutorSessionStart>('/api/tutor/start', {
       method: 'POST',
-      body: JSON.stringify({ topic, repo: repo || '', mode: mode || 'socratic' }),
+      body: JSON.stringify({
+        topic,
+        repo: repo || '',
+        mode: mode || 'socratic',
+        origin_point_id: origin_point_id || null,
+      }),
     }),
   /** 懂了 / 半懂 / 没用 — the only manual input in the product */
   tutorEnd: (session_id: number, verdict: 'got' | 'half' | 'useless') =>
@@ -1771,6 +1803,8 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   tutorStuck: (limit = 200) =>
     request<{ stuck: TutorStuckRow[] }>(`/api/tutor/stuck?limit=${limit}`),
   tutorConcepts: () => request<{ concepts: TutorConceptRow[] }>('/api/tutor/concepts'),
+  /** 学习地图：已掌握 / 在学 / 卡住 / 未触及 四档（前三档纯派生，第四档读建议日志）。 */
+  tutorMap: () => request<TutorLearningMap>('/api/tutor/map'),
   /** 一份材料 → 「要搞懂的点」。逐点去搞懂走 tutorStart（话题就是那个点）。 */
   tutorDigest: (body: { source_path?: string; text?: string }) =>
     request<TutorDigestResult>('/api/tutor/digest', {

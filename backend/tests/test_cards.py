@@ -186,6 +186,22 @@ def test_prompt_kind_filter_appends_restriction():
         compose_gen_prompt("材料", "x", 5, kinds=["bogus"])
 
 
+def test_prompt_focus_scopes_generation_to_one_point():
+    """按点出卡：focus 非空时明说「只围绕这一点」——材料照给（要上下文），卡面只覆盖它。"""
+    system, user = compose_gen_prompt("材料", "x", 3, focus="await 到底把控制权交给了谁")
+    assert "只围绕这一点" in system
+    assert "await 到底把控制权交给了谁" in system
+    assert "材料" in user  # 材料仍然给：模型得知道上下文，才知道这一点在讲什么
+
+
+def test_prompt_without_focus_has_no_scope_sentence():
+    """不给 focus 就是照旧——整份材料随便出，不能被一句「只围绕这一点」误伤。"""
+    system, _ = compose_gen_prompt("材料", "x", 3)
+    assert "只围绕这一点" not in system
+    blank, _ = compose_gen_prompt("材料", "x", 3, focus="   ")
+    assert "只围绕这一点" not in blank
+
+
 def test_material_is_truncated_to_the_input_cap():
     _, user = compose_gen_prompt("A" * (MAX_INPUT_CHARS + 500), "x", 3)
     assert user.count("A") == MAX_INPUT_CHARS

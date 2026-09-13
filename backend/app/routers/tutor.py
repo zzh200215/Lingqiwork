@@ -26,6 +26,7 @@ class StartIn(BaseModel):
     topic: str
     repo: str = ""  # 代码库陪读：非空则取材限定在该仓库
     mode: str = "socratic"  # socratic（老师问你答）| feynman（你讲它追问）
+    origin_point_id: int | None = None  # 从「材料拆出的点」开场时带上，标记它已教
 
 
 class SayIn(BaseModel):
@@ -52,7 +53,9 @@ async def start(body: StartIn):
     """Open a session. Reports `model_ok` so a dead model is visible up front
     instead of on the first reply."""
     try:
-        return await core.start(body.topic, repo=body.repo, mode=body.mode)
+        return await core.start(
+            body.topic, repo=body.repo, mode=body.mode, origin_point_id=body.origin_point_id
+        )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -127,6 +130,13 @@ async def resolve_stuck(session_id: int, body: ResolveStuckIn):
 async def list_concepts():
     """按概念分组的学习轨迹（「我学到哪了」）：纯派生，无新表。"""
     return {"concepts": await core.concepts()}
+
+
+@router.get("/map")
+async def get_map():
+    """学习地图：已掌握 / 在学 / 卡住 / 未触及 四档，纯派生（未触及读的是
+    `digest_points` 建议日志）。"""
+    return await core.learning_map()
 
 
 @router.get("/starters")

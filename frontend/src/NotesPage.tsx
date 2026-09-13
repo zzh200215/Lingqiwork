@@ -8,7 +8,6 @@ import CodeBlock from './CodeBlock'
 import FeedbackButtons from './FeedbackButtons'
 import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry } from './api'
 import { streamCompose, streamPodcastGenerate, type ReportDraft } from './stream'
-import { useAside } from './split'
 
 type AiAction = 'continue' | 'polish' | 'summarize' | 'rewrite'
 type ViewMode = 'edit' | 'split' | 'preview'
@@ -48,7 +47,6 @@ const REWRITE_PRESETS: { label: string; instruction: string }[] = [
 ]
 
 export default function NotesPage() {
-  const aside = useAside()
   const [files, setFiles] = useState<NoteFile[]>([])
   const [viewMode, setViewMode] = useState<ViewMode>('edit')
   const [briefing, setBriefing] = useState<string | null>(null)
@@ -778,15 +776,6 @@ export default function NotesPage() {
                           <span className="truncate">📄 {f.path}</span>
                         </button>
                         <span className="ml-1 shrink-0 text-[10px] text-neutral-400">{relTime(f.mtime)}</span>
-                        {/* 「成文 + 笔记」那一对：在这篇里成文，把另一篇摆在侧栏。
-                            走的是 `?path=` 深链（Phase 1 就有了），不新造协议。 */}
-                        <button
-                          onClick={() => aside.toggle('/notes?path=' + encodeURIComponent(f.path))}
-                          className="ml-1 hidden shrink-0 text-neutral-400 hover:text-violet-600 group-hover:block"
-                          title="在右侧并排打开这一篇 —— 一边写，一边翻"
-                        >
-                          ⧉
-                        </button>
                         <button
                           onClick={() => removeNote(f.path)}
                           className="ml-1 hidden shrink-0 text-neutral-400 hover:text-red-500 group-hover:block"
@@ -906,14 +895,6 @@ export default function NotesPage() {
                   }`}
                 >
                   💬 对话
-                </button>
-                <button
-                  onClick={() => aside.toggle('/')}
-                  disabled={!activePath}
-                  title="在右侧并排打开对话——写一段、问一句，不用切页"
-                  className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-600 transition-colors hover:border-violet-400 hover:bg-violet-50 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-violet-500/10"
-                >
-                  ⧉ 侧栏对话
                 </button>
                 <button
                   onClick={togglePod}

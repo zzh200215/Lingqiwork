@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Link, Outlet, useNavigate } from 'react-router-dom'
 
 import PetWidget from './PetWidget'
-import SplitPane from './SplitPane'
 import { api } from './api'
 import { useModule } from './routes'
 
@@ -146,11 +145,10 @@ export default function Layout() {
           </div>
         </div>
       </aside>
-      {/* 滚动/高度容器已上提到 RouteShell（routes.tsx）——它与「页面能不能裸渲染」
-          是同一件事，两个地方都需要。 */}
-      <SplitPane>
-        <Outlet />
-      </SplitPane>
+      {/* 跨模块分栏（SplitPane）已整体移除（2026-09-13）：用得少，且开侧栏时主区
+          变窄却仍按**窗口**宽度选断点，排版不匹配。滚动/高度容器在 RouteShell
+          （routes.tsx）里，这里只把页面放回来。 */}
+      <Outlet />
       <PetWidget />
     </div>
   )

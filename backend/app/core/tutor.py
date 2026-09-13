@@ -160,14 +160,18 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # ---------- session lifecycle ----------
 
 
-async def start(topic: str, repo: str = "", mode: str = "socratic") -> dict:
+async def start(
+    topic: str, repo: str = "", mode: str = "socratic", origin_point_id: int | None = None
+) -> dict:
     """Open a session on `topic`. Pins the model so the teaching voice can't
     change mid-session; reports whether that model is known-broken so the page
     can say so instead of failing on the first turn.
 
     `repo` 非空 = 代码库陪读：这场会话的取材只在 repos/<repo>/ 的 chunk 里找，
     仓库必须已在 prefs 的 repos 里索引过。
-    `mode` = socratic（老师问你答，默认）| feynman（你讲它追问）。"""
+    `mode` = socratic（老师问你答，默认）| feynman（你讲它追问）。
+    `origin_point_id` 非空 = 这一场是从「材料拆出的某个点」开出来的，把它在
+    `digest_points` 里标成已教——它就不再算「未触及」。"""
     topic = (topic or "").strip()[:200]
     if not topic:
         raise ValueError("topic is empty")
@@ -192,6 +196,8 @@ async def start(topic: str, repo: str = "", mode: str = "socratic") -> dict:
         await db.commit()
         await db.refresh(row)
         sid = row.id
+    if origin_point_id:
+        await _mark_point_taught(origin_point_id, sid)
     return {
         "id": sid,
         "topic": topic,
@@ -200,6 +206,28 @@ async def start(topic: str, repo: str = "", mode: str = "socratic") -> dict:
         "model_id": model_id,
         "model_ok": bool(model_id) and not providers.is_unhealthy(model_id),
     }
+
+
+async def _mark_point_taught(point_id: int, session_id: int) -> None:
+    """一个建议点开成了教学 → 回填 `taught_session_id`，它不再是「未触及」。
+
+    已标过的行不覆盖：一个点先开的场次才是它的出处。失败不影响教学本身。
+    """
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import DigestPoint
+
+    try:
+        async with SessionLocal() as db:
+            row = (
+                await db.execute(select(DigestPoint).where(DigestPoint.id == point_id))
+            ).scalar_one_or_none()
+            if row is not None and row.taught_session_id is None:
+                row.taught_session_id = session_id
+                await db.commit()
+    except Exception:  # noqa: BLE001 - 标注失败不该挡住这场教学
+        log.warning("mark digest point taught failed", exc_info=True)
 
 
 async def add_turn(session_id: int, role: str, content: str) -> None:
@@ -445,6 +473,77 @@ async def concepts() -> list[dict]:
         cur["recalled"] += 1 if r.recalled else 0
     ordered = sorted(agg.values(), key=lambda c: c["last_at"], reverse=True)
     return ordered[:CONCEPTS_CAP]
+
+
+LEARNING_MAP_CAP = 200  # 每档一屏放得下的量
+UNTOUCHED_CAP = 50  # 「未触及」只列最近的这些；更早的靠重拆材料再出来
+
+
+async def learning_map() -> dict:
+    """学习地图：把概念分四档。**纯派生**（`untouched` 读的是 digest_points 建议日志）。
+
+    - **已掌握**：最近一次说通了，且**不止一场**（一次是运气，两次才算学会）
+    - **在学**：最近一次半懂，或只说通过一次
+    - **卡住**：还有**未解**的卡点
+    - **未触及**：digest 拆出来、但还没开成教学的点
+
+    与 `concepts()` 同一条规矩：`useless` 不算数，每个概念取最近一次。**不新增学习状态
+    表**——真值仍然只有 `tutor_sessions`；`digest_points` 只是建议日志。
+
+    「卡住」优先于前两档：一个还挂着未解卡点的概念，最该出现的位置是卡住那一档，哪怕它
+    最近一次是「说通了」。正常情况两者不冲突——说通了一个概念会自动把它的卡点关掉
+    （见 `_resolve_concept_stucks`），所以挂在卡住档的，正是还没走完这条路的概念。
+    """
+    cs = await concepts()
+    unresolved = {s["concept"] for s in await stuck_points() if not s.get("resolved_at")}
+    mastered: list[dict] = []
+    learning: list[dict] = []
+    stuck: list[dict] = []
+    for c in cs:
+        if c["concept"] in unresolved:
+            stuck.append(c)
+        elif c["verdict"] == "got" and c["sessions"] >= 2:
+            mastered.append(c)
+        else:
+            learning.append(c)
+    return {
+        "mastered": mastered[:LEARNING_MAP_CAP],
+        "learning": learning[:LEARNING_MAP_CAP],
+        "stuck": stuck[:LEARNING_MAP_CAP],
+        "untouched": await _untouched_points(),
+    }
+
+
+async def _untouched_points(limit: int = UNTOUCHED_CAP) -> list[dict]:
+    """digest 拆出来、还没开成教学的点（`taught_session_id IS NULL`），新→旧。"""
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import DigestPoint, iso_utc
+
+    try:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(DigestPoint)
+                    .where(DigestPoint.taught_session_id.is_(None))
+                    .order_by(DigestPoint.id.desc())
+                    .limit(max(1, min(int(limit or UNTOUCHED_CAP), 200)))
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 - 派生视图，坏了不挡教学
+        log.warning("tutor untouched points query failed", exc_info=True)
+        return []
+    return [
+        {
+            "id": r.id,
+            "point": r.point,
+            "why": r.why or "",
+            "source": r.source,
+            "created_at": iso_utc(r.created_at),
+        }
+        for r in rows
+    ]
 
 
 PROFILE_LIST_CAP = 12  # 注入块里每个清单最多列这么多概念，全量在设置页看
@@ -1045,8 +1144,11 @@ async def digest(source_path: str = "", text: str = "") -> dict:
     """一份材料 → 「要搞懂的点」。**两条线的交汇点**：材料进来是收敛的，哪几点要搞懂是发散的。
 
     这里只做一件事：读材料、挑点。逐点开教学走现成的 `start()`，出卡走现成的卡片链，
-    理解状态靠 `end()` 回写——不重复造任何一段，也**不落库**：点是一次性的建议，你点开
-    哪一条才作数（真值仍然只有 tutor_sessions）。
+    理解状态靠 `end()` 回写——不重复造任何一段。
+
+    拆出的点会写进 `digest_points`：那是**建议日志，不是学习状态**（学习状态的真值仍然
+    只有 `tutor_sessions`）。它存在的唯一理由，是让「拆出来但还没开教的点」有个落点，
+    供学习地图的「未触及」一档取用。点开成教学后回填 `taught_session_id`。
     """
     from app.core import cards as _cards
 
@@ -1067,7 +1169,51 @@ async def digest(source_path: str = "", text: str = "") -> dict:
     except Exception as e:  # noqa: BLE001 - 拆点挂了，材料本身不该跟着丢
         log.warning("tutor digest failed", exc_info=True)
         return {"source": source, "source_label": label, "points": [], "error": f"拆点失败：{e}"}
+    points = await _remember_points(source, points)
     return {"source": source, "source_label": label, "points": points, "error": ""}
+
+
+async def _remember_points(source: str, points: list[dict]) -> list[dict]:
+    """拆出的点写进 `digest_points`，回带 id（`[{id, title, why}]`）。
+
+    去重按 `(source, point)`：同一份材料重拆一遍不该堆出第二行。**已存在的行只复用 id，
+    不动 `taught_session_id`**——那个点教没教过是既成事实，重拆不改变它。
+
+    落库失败**不回退功能**：把点原样还给用户（id=0），只是「未触及」一档少几条记录。
+    """
+    if not points:
+        return []
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import DigestPoint
+
+    try:
+        async with SessionLocal() as db:
+            existing = {
+                r.point: r
+                for r in (
+                    await db.execute(select(DigestPoint).where(DigestPoint.source == source))
+                ).scalars().all()
+            }
+            out: list[dict] = []
+            seen: set[str] = set()
+            for p in points:
+                title = p.get("title", "")
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+                row = existing.get(title)
+                if row is None:
+                    row = DigestPoint(source=source, point=title, why=p.get("why", ""))
+                    db.add(row)
+                    await db.flush()  # 拿自增 id
+                out.append({"id": row.id, "title": title, "why": p.get("why", "")})
+            await db.commit()
+        return out
+    except Exception:  # noqa: BLE001 - 记不住建议不该拖垮拆点
+        log.warning("tutor digest points persist failed", exc_info=True)
+        return [{"id": 0, "title": p.get("title", ""), "why": p.get("why", "")} for p in points]
 
 
 async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str, str, str]:

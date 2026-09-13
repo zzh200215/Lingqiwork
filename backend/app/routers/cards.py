@@ -56,6 +56,8 @@ class GenerateIn(BaseModel):
     count: int = core.DEFAULT_CARDS
     kinds: list[str] = []
     model_id: str = ""
+    # 非空 = 只围绕这一点出卡（材料消化后「按点出卡」，卡面只覆盖那一点）
+    focus: str = ""
 
 
 class BatchIn(BaseModel):
@@ -107,6 +109,7 @@ async def generate_stream(body: GenerateIn):
                 count=body.count,
                 kinds=body.kinds or None,
                 model_id=body.model_id,
+                focus=body.focus,
             ):
                 if stage == "done":
                     yield _sse("done", data)

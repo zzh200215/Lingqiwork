@@ -6,6 +6,7 @@ import { render, screen } from '@testing-library/react'
 
 import {
   MaterialLine,
+  pointCardBody,
   RecallChip,
   shortSource,
 } from './TutorPage'
@@ -47,8 +48,7 @@ describe('RecallChip', () => {
   })
 })
 
-describe('MaterialLine', () => {
-  it('来源用短路径，且多个 chip 各自独立', () => {
+describe('MaterialLine', () => {  it('来源用短路径，且多个 chip 各自独立', () => {
     const { container } = render(
       <MaterialLine
         sources={[
@@ -117,5 +117,34 @@ describe('streamTutorSay', () => {
     )
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal)
+  })
+})
+
+describe('pointCardBody', () => {
+  it('有来源文件 → 用文件，把这一点作为 focus', () => {
+    expect(pointCardBody('await 到底交给谁', { source: 'notes/x.md' }, '')).toEqual({
+      source_path: 'notes/x.md',
+      focus: 'await 到底交给谁',
+      count: 3,
+    })
+  })
+
+  it('粘贴模式 → 用当初粘进去的那段，**不是点标题**', () => {
+    // 点标题只有十几个字，后端 MIN_INPUT_CHARS=80 会直接 400。
+    // 这个坑是浏览器实测抓到的：单测之前只覆盖了后端提示词，没覆盖这段。
+    const material = '材'.repeat(200)
+    const body = pointCardBody('await 到底交给谁', { source: '' }, material) as {
+      text: string
+      focus: string
+    }
+    expect(body.text).toBe(material)
+    expect(body.text).not.toBe('await 到底交给谁')
+    expect(body.focus).toBe('await 到底交给谁')
+  })
+
+  it('没有 dg 时按粘贴模式处理，不炸', () => {
+    const body = pointCardBody('某个点', null, '材料'.repeat(60))
+    expect(body).toMatchObject({ focus: '某个点', count: 3 })
+    expect(body).toHaveProperty('text')
   })
 })
