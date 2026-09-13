@@ -1731,3 +1731,69 @@ async def test_first_mastery_lets_zero_seven_say_it_once():
     await _seed("第二次", "React useEffect 依赖数组", "got")
     await core._note_first_mastery("React useEffect 依赖数组")
     assert len([e for e in pet.feed(limit=20) if e["kind"] == "mastered"]) == 1
+
+
+# ---------- 概念的「邻居」（学习地图做深：关系那半截） ----------
+
+
+async def _clean_threads() -> None:
+    from sqlalchemy import delete
+
+    from app.db import SessionLocal
+    from app.models import Thread, ThreadItem
+
+    async with SessionLocal() as db:
+        await db.execute(delete(ThreadItem))
+        await db.execute(delete(Thread))
+        await db.commit()
+
+
+async def test_neighbors_from_the_same_thread(monkeypatch):
+    """同一件「事」上的两个概念互为邻居，why 写「同一件事」——那是你自己归到一起的，
+    比向量猜的可信。fake embed 让这两个概念向量正交，排除语义这条路的干扰。"""
+    await _reset()
+    await _clean_threads()
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    from app.db import SessionLocal
+    from app.models import Thread, ThreadItem
+
+    a = await _seed("协程", "asyncio 事件循环", "got")
+    b = await _seed("闭包", "JS 闭包", "got")
+    async with SessionLocal() as db:
+        t = Thread(name="读 asyncio")
+        db.add(t)
+        await db.flush()
+        db.add_all(
+            [
+                ThreadItem(thread_id=t.id, kind="tutor", ref=str(a)),
+                ThreadItem(thread_id=t.id, kind="tutor", ref=str(b)),
+            ]
+        )
+        await db.commit()
+
+    nebs = await core.concept_neighbors("asyncio 事件循环")
+    assert [n["concept"] for n in nebs] == ["JS 闭包"]
+    assert "同一件事" in nebs[0]["why"]
+
+
+async def test_neighbors_by_semantic_similarity(monkeypatch):
+    """没有结构证据时，只剩语义近那条：why 空、score 过 `RECALL_MIN_SIM`。"""
+    await _reset()
+    await _clean_threads()
+    monkeypatch.setattr(core, "_embed", _fake_embed)  # 这两个词都落到同一根轴上 → 余弦 1
+    await _seed("A", "Docker 镜像分层", "got")
+    await _seed("B", "K8s 调度", "got")
+
+    nebs = await core.concept_neighbors("Docker 镜像分层")
+    assert [n["concept"] for n in nebs] == ["K8s 调度"]
+    assert nebs[0]["why"] == ""  # 只有语义，没有结构性证据
+    assert nebs[0]["score"] >= core.RECALL_MIN_SIM
+
+
+async def test_neighbors_empty_when_alone_or_blank():
+    await _reset()
+    await _clean_threads()
+    await _seed("只有我", "asyncio 事件循环", "got")
+    # 没有别的概念就直接返回——不该走到嵌入那一步（真模型没被 fake 掉也不会碰）
+    assert await core.concept_neighbors("asyncio 事件循环") == []
+    assert await core.concept_neighbors("  ") == []

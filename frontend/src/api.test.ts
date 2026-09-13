@@ -119,3 +119,17 @@ describe('tutorMastery', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/tutor/mastery')
   })
 })
+
+describe('tutorNeighbors', () => {
+  it('概念进 query 前先编码，空格 / 中文不至于拼坏 URL', async () => {
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('{"neighbors":[]}', { status: 200 })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await api.tutorNeighbors('asyncio 事件循环', 8)
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/tutor/neighbors?concept=' + encodeURIComponent('asyncio 事件循环') + '&limit=8'
+    )
+  })
+})

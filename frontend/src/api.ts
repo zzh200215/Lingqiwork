@@ -1084,6 +1084,14 @@ export interface TutorMastery {
   sessions: number
 }
 
+/** 一个概念的「邻居」：同一件事 / 同一份材料 / 语义相近。纯派生。 */
+export interface TutorNeighbor {
+  concept: string
+  /** 空 = 只是语义相近；否则是结构性证据（「同一件事 · 同一份材料」） */
+  why: string
+  score: number
+}
+
 /** A row in the history rail. `turn_count` is a number here; `TutorDetail.turns`
  * is the message list — two names because one key with two types gets misread. */
 export interface TutorSessionRow {
@@ -1899,6 +1907,11 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   tutorMap: () => request<TutorLearningMap>('/api/tutor/map'),
   /** 成长事件：概念「学会了」的时刻（零柒成长面板的原料）。纯派生。 */
   tutorMastery: () => request<TutorMastery>('/api/tutor/mastery'),
+  /** 一个概念的「邻居」（同一件事 / 同一份材料 / 语义相近）。纯派生。 */
+  tutorNeighbors: (concept: string, limit = 6) =>
+    request<{ neighbors: TutorNeighbor[] }>(
+      `/api/tutor/neighbors?concept=${encodeURIComponent(concept)}&limit=${limit}`
+    ),
   /** 一份材料 → 「要搞懂的点」。逐点去搞懂走 tutorStart（话题就是那个点）。 */
   tutorDigest: (body: { source_path?: string; text?: string }) =>
     request<TutorDigestResult>('/api/tutor/digest', {

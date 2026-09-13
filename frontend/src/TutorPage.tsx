@@ -14,6 +14,7 @@ import {
   type TutorDigestResult,
   type TutorEndResult,
   type TutorLearningMap,
+  type TutorNeighbor,
   type TutorSessionRow,
   type TutorStarter,
   type TutorStats,
@@ -161,6 +162,8 @@ export default function TutorPage() {
   const [learnMap, setLearnMap] = useState<TutorLearningMap | null>(null)
   // 展开中的概念（看它历次自评与卡点的演进）；一次只展开一个，右栏窄
   const [openConcept, setOpenConcept] = useState<string | null>(null)
+  // 概念的「邻居」按需拉、按概念缓存——没展开就不该有这一次向量计算
+  const [neighbors, setNeighbors] = useState<Record<string, TutorNeighbor[]>>({})
   const [stuckBusy, setStuckBusy] = useState(false)
   const [stuckMsg, setStuckMsg] = useState('')
   const [stuckAudio, setStuckAudio] = useState('')
@@ -1233,13 +1236,26 @@ export default function TutorPage() {
   // 「学习地图」四档：已掌握 / 在学 / 卡住 / 未触及。**闲置时在开场屏右栏，开了会话
   // 回到会话右栏**——同一份，两处不同时出现（所以不是重复）。前三档纯派生自教学记录，
   // 第四档是 digest 拆出来、还没开成教学的点。是记录，不是待办：不催、不排期。
+  // 展开一个概念：顺带把它的「邻居」拉回来（一次向量计算，按概念缓存，不重复请求）。
+  const openConceptRow = (concept: string) => {
+    const next = openConcept === concept ? null : concept
+    setOpenConcept(next)
+    if (next && neighbors[concept] === undefined) {
+      void api
+        .tutorNeighbors(concept)
+        .then((r) => setNeighbors((m) => ({ ...m, [concept]: r.neighbors })))
+        .catch(() => {})
+    }
+  }
+
   const conceptRow = (c: TutorConceptRow) => {
     const evo = rows.filter((r) => r.concept === c.concept)
     const expanded = openConcept === c.concept
+    const nebs = neighbors[c.concept]
     return (
               <div key={c.concept} className="group/c relative">
                 <button
-                  onClick={() => setOpenConcept(expanded ? null : c.concept)}
+                  onClick={() => openConceptRow(c.concept)}
                   title={expanded ? '收起' : '展开这个概念的历次记录'}
                   className="block w-full rounded-lg py-1.5 pr-5 text-left transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800/70"
                 >
@@ -1316,6 +1332,29 @@ export default function TutorPage() {
                         打开最近一场
                       </button>
                     )}
+                    {/* 「邻居」：同一件事 / 同一份材料 / 语义相近。是**观察**不是待办——
+                        旁边还有谁，不催你看。第一次要算向量，先占一行说着。 */}
+                    {nebs === undefined ? (
+                      <div className="pt-1 text-[10px] text-neutral-300 dark:text-neutral-600">
+                        看旁边还有谁…
+                      </div>
+                    ) : nebs.length > 0 ? (
+                      <div className="pt-1">
+                        <span className="text-[10px] text-neutral-400">旁边还有</span>
+                        <span className="flex flex-wrap gap-1 pt-0.5">
+                          {nebs.map((n) => (
+                            <button
+                              key={n.concept}
+                              onClick={() => openConceptRow(n.concept)}
+                              title={n.why || '语义相近'}
+                              className="max-w-full truncate rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600 transition-colors hover:bg-violet-100 hover:text-violet-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                            >
+                              {n.concept}
+                            </button>
+                          ))}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

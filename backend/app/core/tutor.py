@@ -554,6 +554,163 @@ async def _untouched_points(limit: int = UNTOUCHED_CAP) -> list[dict]:
     ]
 
 
+NEIGHBOR_LIMIT = 6  # 一屏列得下的邻居数
+
+
+async def _neighbors_via_thread(sids: list[int]) -> set[str]:
+    """同一件「事」上挂着的其它教学概念 —— 最结实的证据（是你自己归到一起的）。"""
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import ThreadItem, TutorSession
+
+    refs = [str(s) for s in sids]
+    try:
+        async with SessionLocal() as db:
+            threads = (
+                await db.execute(
+                    select(ThreadItem.thread_id).where(
+                        ThreadItem.kind == "tutor", ThreadItem.ref.in_(refs)
+                    )
+                )
+            ).scalars().all()
+            if not threads:
+                return set()
+            other_refs = (
+                await db.execute(
+                    select(ThreadItem.ref).where(
+                        ThreadItem.kind == "tutor",
+                        ThreadItem.thread_id.in_(list(threads)),
+                        ThreadItem.ref.notin_(refs),
+                    )
+                )
+            ).scalars().all()
+            ids = [int(r) for r in other_refs if str(r).isdigit()]
+            if not ids:
+                return set()
+            names = (
+                await db.execute(
+                    select(TutorSession.concept).where(
+                        TutorSession.id.in_(ids), TutorSession.concept != ""
+                    )
+                )
+            ).scalars().all()
+        return {n for n in names if n}
+    except Exception:  # noqa: BLE001 - 派生视图，坏了不挡教学
+        log.warning("tutor neighbors/thread failed", exc_info=True)
+        return set()
+
+
+async def _neighbors_via_material(sids: list[int]) -> set[str]:
+    """从**同一份材料**拆出来、又都教过的两个点 —— 共现的最直接形态。"""
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import DigestPoint, TutorSession
+
+    try:
+        async with SessionLocal() as db:
+            sources = (
+                await db.execute(
+                    select(DigestPoint.source).where(
+                        DigestPoint.taught_session_id.in_(sids), DigestPoint.source != ""
+                    )
+                )
+            ).scalars().all()
+            if not sources:
+                return set()
+            other = (
+                await db.execute(
+                    select(DigestPoint.taught_session_id).where(
+                        DigestPoint.source.in_(list(sources)),
+                        DigestPoint.taught_session_id.isnot(None),
+                        DigestPoint.taught_session_id.notin_(sids),
+                    )
+                )
+            ).scalars().all()
+            if not other:
+                return set()
+            names = (
+                await db.execute(
+                    select(TutorSession.concept).where(
+                        TutorSession.id.in_(list(other)), TutorSession.concept != ""
+                    )
+                )
+            ).scalars().all()
+        return {n for n in names if n}
+    except Exception:  # noqa: BLE001
+        log.warning("tutor neighbors/material failed", exc_info=True)
+        return set()
+
+
+async def concept_neighbors(concept: str, limit: int = NEIGHBOR_LIMIT) -> list[dict]:
+    """一个概念的「邻居」—— 三路证据，纯派生、不落库。
+
+    - **同一件事**：两个概念都挂在同一件「事」上（Thread 的 tutor 条目）；
+    - **同一份材料**：两个概念是从同一份材料拆出来的点教出来的（`digest_points.source`）；
+    - **语义相近**：概念名的嵌入余弦过 `RECALL_MIN_SIM`（就是召回那条实测底线，不另造一个）。
+
+    结构性证据（事 / 材料）排在语义前面：那是**你自己**归到一起的，比向量的猜测可信。
+    返回 `[{concept, why, score}]`，why 空 = 只是语义近。
+    """
+    concept = (concept or "").strip()
+    if not concept:
+        return []
+    others = {c["concept"] for c in await concepts() if c["concept"] and c["concept"] != concept}
+    if not others:
+        return []
+
+    try:
+        from sqlalchemy import select
+
+        from app.db import SessionLocal
+        from app.models import TutorSession
+
+        async with SessionLocal() as db:
+            sids = list(
+                (
+                    await db.execute(
+                        select(TutorSession.id).where(TutorSession.concept == concept)
+                    )
+                ).scalars().all()
+            )
+    except Exception:  # noqa: BLE001
+        sids = []
+
+    evidence: dict[str, set[str]] = {}
+
+    def _mark(names: set[str], why: str) -> None:
+        for n in names & others:  # 邻居必须是地图上真的存在的概念
+            evidence.setdefault(n, set()).add(why)
+
+    if sids:
+        _mark(await _neighbors_via_thread(sids), "同一件事")
+        _mark(await _neighbors_via_material(sids), "同一份材料")
+
+    sims: dict[str, float] = {}
+    try:
+        names = sorted(others)
+        vecs = await _embed([concept, *names])
+        base = vecs[0]
+        for n, v in zip(names, vecs[1:]):
+            s = _cosine(base, v)
+            if s >= RECALL_MIN_SIM:
+                sims[n] = s
+    except Exception:  # noqa: BLE001 - 向量挂了就只剩结构性证据
+        log.warning("tutor neighbors/embed failed", exc_info=True)
+
+    ranked = sorted(
+        set(evidence) | set(sims),
+        key=lambda n: (len(evidence.get(n, ())), sims.get(n, 0.0)),
+        reverse=True,
+    )
+    cap = max(1, min(int(limit or NEIGHBOR_LIMIT), 20))
+    return [
+        {"concept": n, "why": " · ".join(sorted(evidence.get(n, ()))), "score": round(sims.get(n, 0.0), 3)}
+        for n in ranked[:cap]
+    ]
+
+
 async def mastery_events() -> dict:
     """成长事件：一个概念「学会了」的那些时刻 —— 零柒成长模型的原料（A3）。
 

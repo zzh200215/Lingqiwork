@@ -146,6 +146,12 @@ async def get_mastery():
     return await core.mastery_events()
 
 
+@router.get("/neighbors")
+async def get_neighbors(concept: str, limit: int = 6):
+    """一个概念的「邻居」：同一件事 / 同一份材料 / 语义相近。纯派生，不落库。"""
+    return {"neighbors": await core.concept_neighbors(concept, limit)}
+
+
 @router.get("/starters")
 async def get_starters():
     """开场建议：半懂概念 + 日记疑问句，纯派生（[] = 没有什么可建议的）。"""
