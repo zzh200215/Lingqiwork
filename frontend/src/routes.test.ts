@@ -7,6 +7,7 @@ describe('parseRoute', () => {
     expect(parseRoute('/')).toBe('chat')
     expect(parseRoute('/kb')).toBe('kb')
     expect(parseRoute('/tutor')).toBe('tutor')
+    expect(parseRoute('/growth')).toBe('growth')
     expect(parseRoute('/review')).toBe('review')
   })
 

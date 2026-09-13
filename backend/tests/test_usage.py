@@ -43,8 +43,11 @@ async def _init_db() -> None:
 
 
 def test_valid_page_whitelist():
-    for good in ("chat", "tutor", "work", "review", "dashboard", "notes", "kb", "settings"):
+    # 遍历 PAGES 本身：往白名单里加一页（例如「成长」）时，这条测试自动跟着覆盖，
+    # 不会像手写清单那样漏掉新页——而漏掉的表现是前端每次打开都 400。
+    for good in core.PAGES:
         assert core.valid_page(good) is True
+    assert "growth" in core.PAGES  # 成长页在导航里，埋点必须认它
     for bad in ("", "  ", "weird.html", "chat/", "CON"):
         assert core.valid_page(bad) is False
 

@@ -42,11 +42,13 @@ function Logo() {
 
 // 「学」「工作」挨着：两条线是主线。`/review`（今日：复习队列 + 习惯打卡）也进导航——
 // 页面一直在，只是从前只有一处 11px 的隐藏链接够得着，那才是缺陷。
+// 「成长」跟在三条线后面：它读的就是 学 / 工作 / 习惯 的积累，是它们的合并视图。
 const NAV = [
   { href: '/', label: '对话', icon: '💬', key: 'chat' },
   { href: '/tutor', label: '学', icon: '🎓', key: 'tutor' },
   { href: '/work', label: '工作', icon: '🗂', key: 'work' },
   { href: '/threads', label: '事', icon: '🧵', key: 'threads' },
+  { href: '/growth', label: '成长', icon: '🌱', key: 'growth' },
   { href: '/review', label: '今日', icon: '☀️', key: 'review' },
   { href: '/dashboard', label: '仪表盘', icon: '📊', key: 'dashboard' },
   { href: '/notes', label: '笔记', icon: '📝', key: 'notes' },

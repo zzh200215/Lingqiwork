@@ -1203,7 +1203,7 @@ export interface PetGrowth {
 
 /** 插件面板：哪种面板 + 它要显示的数。sdk 里叫「面板」。 */
 export interface PetPluginPanel {
-  kind: 'counter' | 'timer'
+  kind: 'counter' | 'timer' | 'mood'
   unit?: string
   target?: number
   value?: number
@@ -1211,6 +1211,12 @@ export interface PetPluginPanel {
   remaining?: number
   minutes?: number
   default_minutes?: number
+  /** mood：1–5 的量表上限 */
+  scale?: number
+  /** mood：记录过的天数 */
+  days?: number
+  /** mood：最近几天（旧→新），画一条小曲线用 */
+  recent?: { day: string; value: number }[]
 }
 
 /** 一个装好的能力插件（openpets 范式：权限 / 配额 / 存储 / 计划 / 事件 / 命令 / 面板）。 */

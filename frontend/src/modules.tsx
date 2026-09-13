@@ -11,6 +11,7 @@ import { Route } from 'react-router-dom'
 
 import App from './App'
 import DashboardPage from './DashboardPage'
+import GrowthPage from './GrowthPage'
 import KBPage from './KBPage'
 import NotesPage from './NotesPage'
 import ReviewPage from './ReviewPage'
@@ -25,6 +26,7 @@ const PAGES: Record<Module, ReactNode> = {
   tutor: <TutorPage />,
   work: <WorkPage />,
   threads: <ThreadsPage />,
+  growth: <GrowthPage />,
   dashboard: <DashboardPage />,
   notes: <NotesPage />,
   kb: <KBPage />,

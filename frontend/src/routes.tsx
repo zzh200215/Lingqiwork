@@ -11,6 +11,7 @@ export type Module =
   | 'tutor'
   | 'work'
   | 'threads'
+  | 'growth'
   | 'dashboard'
   | 'notes'
   | 'kb'
@@ -24,6 +25,7 @@ export const ROUTES: Record<string, Module> = {
   '/tutor': 'tutor',
   '/work': 'work',
   '/threads': 'threads',
+  '/growth': 'growth',
   '/dashboard': 'dashboard',
   '/notes': 'notes',
   '/kb': 'kb',
@@ -36,6 +38,7 @@ const TITLES: Record<Module, string> = {
   tutor: '学',
   work: '工作',
   threads: '事',
+  growth: '成长',
   dashboard: '仪表盘',
   notes: '笔记',
   kb: '知识库',

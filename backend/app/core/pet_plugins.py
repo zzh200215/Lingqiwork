@@ -25,6 +25,8 @@ log = logging.getLogger(__name__)
 PERMISSIONS = ("notify", "store", "schedule", "command", "panel")
 
 WATER_TARGET = 8
+MOOD_SCALE = 5  # 心情 1–5（😞 到 😄）
+MOOD_KEEP = 90  # 只留最近 90 天，storage_json 不至于天长地久地涨
 
 # 内置插件的**声明**（唯一真值）。装好的一行 = 这份声明 + 它自己的存储。
 BUILTINS: dict[str, dict] = {
@@ -43,6 +45,14 @@ BUILTINS: dict[str, dict] = {
         "schedule": {"kind": "once"},
         "panel": {"kind": "timer", "default_minutes": 25},
         "commands": ["start", "stop"],
+    },
+    "mood": {
+        "label": "心情打卡",
+        "permissions": ["notify", "store", "schedule", "command", "panel"],
+        "quota": {"events_per_day": 2},
+        "schedule": {"hours": [21]},  # 晚上问一句——白天别打扰
+        "panel": {"kind": "mood", "scale": MOOD_SCALE},
+        "commands": ["set", "clear"],
     },
 }
 
@@ -81,6 +91,42 @@ def focus_due(state: dict, now: datetime) -> bool:
     """专注到点了没有：在计时、且已过（或正好到）结束时刻。"""
     rem = focus_remaining(state, now)
     return rem is not None and rem <= 0
+
+
+# ---------- 心情打卡：每天一格 1–5，留着当可回看的记录 ----------
+#
+# 存储形状 `{"days": {"2026-09-13": 4, ...}}`。**不做「连续几天没打卡」这类判定**——
+# 心情是自己的记录，不是要维持的指标（与「无目标习惯」同一条立场）。
+
+
+def mood_today(state: dict, today: str) -> int:
+    """今天记了几分；没记返回 0（0 = 还没记，不是「心情 0」）。"""
+    return int(((state or {}).get("days") or {}).get(today, 0) or 0)
+
+
+def mood_set(state: dict, today: str, value: int) -> dict:
+    """记下今天的心情（1–5）。返回新 state；只留最近 MOOD_KEEP 天。"""
+    if not (1 <= int(value) <= MOOD_SCALE):
+        raise ValueError(f"心情要在 1–{MOOD_SCALE} 之间")
+    days = dict((state or {}).get("days") or {})
+    days[today] = int(value)
+    if len(days) > MOOD_KEEP:  # 按日期丢掉最旧的
+        for d in sorted(days)[:-MOOD_KEEP]:
+            days.pop(d, None)
+    return {"days": days}
+
+
+def mood_clear(state: dict, today: str) -> dict:
+    days = dict((state or {}).get("days") or {})
+    days.pop(today, None)
+    return {"days": days}
+
+
+def mood_recent(state: dict, n: int = 14) -> list[dict]:
+    """最近 n 天记过的心情，旧→新（画一条小曲线用）。"""
+    days = (state or {}).get("days") or {}
+    picked = sorted(days)[-max(1, int(n)) :]
+    return [{"day": d, "value": int(days[d])} for d in picked]
 
 
 def _parse_iso(s: str) -> datetime | None:
@@ -150,6 +196,11 @@ def _panel(name: str, spec: dict, state: dict, today: str) -> dict:
         panel["running"] = rem is not None
         panel["remaining"] = max(0, rem or 0)
         panel["minutes"] = int(state.get("minutes") or panel.get("default_minutes") or 25)
+    elif name == "mood":
+        panel["scale"] = MOOD_SCALE
+        panel["value"] = mood_today(state, today)
+        panel["days"] = len((state or {}).get("days") or {})
+        panel["recent"] = mood_recent(state, 14)
     return panel
 
 
@@ -239,6 +290,12 @@ async def command(name: str, cmd: str, args: dict | None = None) -> dict:
             said = None
         elif name == "focus" and cmd == "stop":
             row.storage_json = "{}"
+            said = None
+        elif name == "mood" and cmd == "set":
+            row.storage_json = json.dumps(mood_set(state, today, args.get("value")), ensure_ascii=False)
+            said = None
+        elif name == "mood" and cmd == "clear":
+            row.storage_json = json.dumps(mood_clear(state, today), ensure_ascii=False)
             said = None
         else:
             raise ValueError(f"未实现的命令 {name}/{cmd}")
@@ -345,6 +402,29 @@ async def _focus_job() -> None:
     await _emit_for("focus", f"{minutes} 分钟到，抬头歇一下。")
 
 
+async def _mood_job() -> None:
+    """晚上问一句心情（今天还没记才问）。一天只在这个钟点跑一次，无需额外状态。"""
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import PetPlugin
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    async with SessionLocal() as db:
+        row = (
+            await db.execute(select(PetPlugin).where(PetPlugin.name == "mood"))
+        ).scalar_one_or_none()
+        if row is None or not row.enabled:
+            return
+        if mood_today(_loads(row.storage_json, {}), today):
+            return
+    await _emit_for("mood", "今天心情怎么样？记一笔就好。")
+
+
+# 「计划」是 hours 型的插件 → 它的整点作业。加一个新的同类插件，这里补一行即可。
+_HOURLY_JOBS = {"water": _water_job, "mood": _mood_job}
+
+
 def _sync_rows() -> list[dict]:
     """给 sync 的 reschedule() 用的直读（与 pet.status 同一路子）。"""
     import sqlite3
@@ -379,14 +459,15 @@ def reschedule() -> None:
             continue
         job_id = JOB_PREFIX + r["name"]
         hours = (r["spec"].get("schedule") or {}).get("hours")
-        if hours:  # 喝水：每天整点的 cron
+        handler = _HOURLY_JOBS.get(r["name"])
+        if hours and handler:  # hours 型（喝水 / 心情）：每天整点的 cron
             expr = "0 " + ",".join(str(int(h)) for h in hours) + " * * *"
             try:
-                sched.set_cron(job_id, _water_job, expr)
+                sched.set_cron(job_id, handler, expr)
                 keep.add(job_id)
             except ValueError:
-                log.warning("bad water schedule %r", expr)
-        else:  # 专注：一次性的到点作业（没在计时就不注册）
+                log.warning("bad schedule %r for %s", expr, r["name"])
+        elif r["name"] == "focus":  # 一次性到点作业（没在计时就不注册）
             fire = focus_fire_at(r["state"])
             if fire is not None:
                 sched.set_once(job_id, _focus_job, fire)

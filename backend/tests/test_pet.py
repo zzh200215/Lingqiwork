@@ -277,6 +277,10 @@ async def test_growth_counts_real_accumulation_and_only_grows():
     assert g["exp"] > before
     assert {p["key"] for p in g["parts"]} >= {"learning", "work", "habits", "review"}
     assert g["counts"]["mastered"] == 1  # 两场说通才算「学会」（与学习地图同一条）
+    # 界面按这些 key 读明细，缺一个就是「exp 对、明细写 0」（产出数曾经就是这么漏的）
+    assert {"mastered", "sessions", "runs_ok", "outputs", "habit_days", "reviews"} <= set(
+        g["counts"]
+    )
     assert g["level"] >= 1
     assert pet.growth()["exp"] == g["exp"]  # 累计量只增不减：再读一次不回落
 
@@ -284,11 +288,11 @@ async def test_growth_counts_real_accumulation_and_only_grows():
 # --- B2: 能力插件（openpets 范式） ------------------------------------------------
 
 
-async def test_plugins_seed_two_builtins_with_panels():
+async def test_plugins_seed_three_builtins_with_panels():
     await _tables()
     rows = await pp.list_plugins()
     names = {r["name"] for r in rows}
-    assert {"water", "focus"} <= names
+    assert {"water", "focus", "mood"} <= names
     water = next(r for r in rows if r["name"] == "water")
     assert water["panel"]["kind"] == "counter"
     assert water["panel"]["target"] == pp.WATER_TARGET
@@ -354,6 +358,48 @@ def test_focus_due_and_day_rollover():
         "cups": 0,
         "reminded": [],
     }
+
+
+# --- 心情打卡（openpets 第三个内置插件） ------------------------------------------
+
+
+def test_mood_set_read_recent_and_clear():
+    st = pp.mood_set({}, "2026-09-13", 4)
+    assert pp.mood_today(st, "2026-09-13") == 4
+    assert pp.mood_today(st, "2026-09-12") == 0  # 没记 = 0，不是「心情 0」
+    st = pp.mood_set(st, "2026-09-14", 2)
+    assert pp.mood_recent(st, 14) == [
+        {"day": "2026-09-13", "value": 4},
+        {"day": "2026-09-14", "value": 2},
+    ]
+    assert [d["day"] for d in pp.mood_recent(pp.mood_clear(st, "2026-09-13"))] == ["2026-09-14"]
+    for bad in (0, 6, -1, 99):
+        with pytest.raises(ValueError):
+            pp.mood_set({}, "2026-09-13", bad)
+
+
+def test_mood_keeps_only_the_most_recent_days():
+    from datetime import date, timedelta
+
+    d0 = date(2026, 1, 1)
+    st: dict = {}
+    for i in range(pp.MOOD_KEEP + 5):
+        st = pp.mood_set(st, (d0 + timedelta(days=i)).isoformat(), 3)
+    assert len(st["days"]) == pp.MOOD_KEEP
+    assert len(pp.mood_recent(st, 999)) == pp.MOOD_KEEP
+    assert min(st["days"]) == (d0 + timedelta(days=5)).isoformat()  # 最旧的 5 天被丢掉
+
+
+async def test_plugin_mood_command_records_today():
+    await _tables()
+    rows = await pp.list_plugins()
+    mood = next(r for r in rows if r["name"] == "mood")
+    assert mood["panel"]["kind"] == "mood" and mood["panel"]["value"] == 0
+    out = await pp.command("mood", "set", {"value": 4})
+    assert out["panel"]["value"] == 4
+    assert out["panel"]["recent"][-1]["value"] == 4
+    with pytest.raises(ValueError):
+        await pp.command("mood", "set", {"value": 9})  # 越界要在写库前挡住
 
 
 

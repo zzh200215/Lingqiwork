@@ -347,6 +347,9 @@ def growth() -> dict:
             conn.close()
     except Exception:  # noqa: BLE001 - growth is best-effort; the pet still sits there
         log.debug("pet growth db query failed", exc_info=True)
+    # 产出数不走 SQL（它是 vault 里的文件），所以单独补进 counts——界面要拿它显示
+    # 「交出 N 份」，exp 也要用它。漏了这一行，exp 对、明细却写 0。
+    counts["outputs"] = _count_outputs()
 
     parts = [
         {
@@ -357,7 +360,7 @@ def growth() -> dict:
         {
             "key": "work",
             "label": "把东西做出来",
-            "exp": counts["runs_ok"] * EXP_RUN_OK + _count_outputs() * EXP_OUTPUT,
+            "exp": counts["runs_ok"] * EXP_RUN_OK + counts["outputs"] * EXP_OUTPUT,
         },
         {"key": "habits", "label": "坚持", "exp": counts["habit_days"] * EXP_HABIT_DAY},
         {"key": "review", "label": "复习", "exp": counts["reviews"] * EXP_REVIEW},
