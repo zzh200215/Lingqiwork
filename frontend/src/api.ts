@@ -220,6 +220,125 @@ export interface PromptItem {
   created_at: string
 }
 
+// ---------- 提示词登记表 + 对照台（Q1）----------
+
+/** 登记表里的一条系统提示词。`sha` 是内容指纹：改了内容它就会变（测试会提醒你）。 */
+export interface PromptRegistryEntry {
+  name: string
+  module: string
+  purpose: string
+  kind: string
+  sha: string
+  bytes: number
+  /** 模块加载不出来 = 登记漂移（内容缺失） */
+  drifted: boolean
+  /** golden set 有几条用例；0 = 还没接线，跑不了对照 */
+  cases: number
+  fixture: string
+  /** 已登记内容最近一次跑出的成绩；null = 没有基线 */
+  baseline: {
+    at: string
+    passed: number
+    cases: number
+    rate: number
+    ci_low: number
+    ci_high: number
+    model_id: string
+    /** 基线是用**另一版内容**跑出来的（内容改过了，基线过期） */
+    stale: boolean
+  } | null
+}
+
+export interface PromptInlineNote {
+  module: string
+  line: number
+  purpose: string
+}
+
+/** 一条断言 + 它对应提示词的哪句话（`why` 由后端给，界面不抄）。 */
+export interface PromptCheckSpec {
+  name: string
+  why: string
+}
+
+export interface PromptCaseSpec {
+  id: string
+  intent: string
+  user: string
+  checks: string[]
+}
+
+export interface PromptRegistryEntryDetail {
+  name: string
+  module: string
+  purpose: string
+  kind: string
+  sha: string
+  content: string
+  fixture: string
+  note: string
+  cases: PromptCaseSpec[]
+  checks: PromptCheckSpec[]
+  runs: PromptCheckRun[]
+}
+
+export interface PromptCheckRun {
+  id: number
+  at: string
+  key: string
+  prompt_sha: string
+  variant_sha: string
+  variant_label: string
+  model_id: string
+  cases: number
+  passed: number
+  rate: number
+  ci_low: number
+  ci_high: number
+  seconds: number
+  detail_json: string
+}
+
+/** 一次对照的结果。**带 Wilson 区间**——裸比例会让人把噪声当结论。 */
+export interface PromptCheckReport {
+  key: string
+  module: string
+  purpose: string
+  kind: string
+  prompt_sha: string
+  /** 空 = 跑的是已登记内容（基线/回归）；非空 = 这是一段候选变体 */
+  variant_sha: string
+  variant_label: string
+  model_id: string
+  total: number
+  passed: number
+  rate: number
+  /** Wilson 区间 [lo, hi] */
+  ci: [number, number]
+  /** 这个 n 下区间的宽度够不够下结论 */
+  tell: boolean
+  assertions: { total: number; failed: number }
+  seconds: number
+  calls: number
+  baseline: { at: string; passed: number; total: number; variant_label: string } | null
+  /** 与基线比，哪几条用例翻面了 */
+  flips: { id: string; was: boolean; now: boolean }[]
+  context: string
+  run_id?: number
+  cases: {
+    id: string
+    intent: string
+    user: string
+    checks: string[]
+    passed: boolean
+    failed: { name: string; why: string }[]
+    reply: string
+    chars: number
+    seconds: number
+    error: string
+  }[]
+}
+
 export interface DashboardNarrative {
   today_messages: number
   yesterday_messages: number
@@ -1423,6 +1542,23 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   updatePrompt: (id: number, p: Partial<PromptItem>) =>
     request<PromptItem>(`/api/prompts/${id}`, { method: 'PUT', body: JSON.stringify(p) }),
   deletePrompt: (id: number) => request<{ ok: boolean }>(`/api/prompts/${id}`, { method: 'DELETE' }),
+
+  // ---------- 提示词登记表 + 对照台（Q1）----------
+  //
+  // 与上面那三个是**两个东西**：上面是用户的片段库（`Prompt` 表），这里是系统提示词的
+  // 登记表（`core/prompts.py::_SPECS`，32 条，有 sha 指纹）。**没有"改"这个动作**——
+  // 内容活在源码里，这里只读、只跑对照。
+  promptRegistry: () =>
+    request<{ prompts: PromptRegistryEntry[]; inline: PromptInlineNote[] }>(
+      '/api/prompts/registry'
+    ),
+  promptEntry: (key: string) =>
+    request<PromptRegistryEntryDetail>(`/api/prompts/registry/${encodeURIComponent(key)}`),
+  checkPrompt: (key: string, body: { variant?: string; variant_label?: string; model_id?: string }) =>
+    request<PromptCheckReport>(`/api/prompts/registry/${encodeURIComponent(key)}/check`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   listSkills: () => request<{ dir: string; skills: SkillItem[] }>('/api/skills'),
   installSkill: (url: string, name = '', overwrite = false) =>

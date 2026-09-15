@@ -41,6 +41,10 @@ vi.mock('./ThreadsPage', () => ({
     </div>
   ),
 }))
+// 实验室整页是 PromptLab（自己的测试文件钉它的行为），这里只验证标签挂上了
+vi.mock('./PromptLab', () => ({
+  default: () => <div data-testid="lab-stub">实验室</div>,
+}))
 import { api } from './api'
 import { streamDeliver } from './stream'
 
@@ -150,7 +154,7 @@ const GATED = task(3, '人工审', {
   last_status: 'ok',
 })
 
-function renderPage(opts: { tab?: 'engine' | 'follow' } = {}) {
+function renderPage(opts: { tab?: 'engine' | 'follow' | 'lab' } = {}) {
   return render(
     <MemoryRouter initialEntries={[opts.tab ? `/work?tab=${opts.tab}` : '/work']}>
       <WorkPage />
@@ -442,6 +446,12 @@ describe('WorkPage · 标签', () => {
   it('「跟进」标签渲染「事」，产出清单退场', async () => {
     renderPage({ tab: 'follow' })
     expect(await screen.findByTestId('threads-stub')).toBeTruthy()
+    expect(screen.queryByText('asyncio 事件循环')).toBeNull()
+  })
+
+  it('「实验室」标签渲染提示词对照台，产出清单退场（Q1 落在工作模块里）', async () => {
+    renderPage({ tab: 'lab' })
+    expect(await screen.findByTestId('lab-stub')).toBeTruthy()
     expect(screen.queryByText('asyncio 事件循环')).toBeNull()
   })
 
