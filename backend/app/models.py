@@ -614,6 +614,38 @@ class EngineEvalRun(Base):
     detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐用例的 findings / 分数 / 理由
 
 
+class PromptEvalRun(Base):
+    """一条提示词跑一遍 golden set 的对照成绩（Q1）。
+
+    `core/prompt_eval.py` 的落库形态：按 `backend/evals/prompts/*.json` 重放 n 条用例，
+    每条跑一组**声明式断言**（断言与它对应的提示词原句都在 `prompt_eval.CHECKS` 里）。
+
+    `variant_sha` 空 = 这一跑的是**已登记的内容**（基准/回归）；非空 = 拿一段候选内容比了比。
+    候选内容**只存在于 `detail_json` 里当证据**：没有任何代码会把它读回来当配置——
+    提示词的单一事实来源仍然是源码常量（`core/prompts.py` 的护栏）。
+
+    `prompt_sha` 与 `ArtifactFeedback` / `EngineEvalRun` **同一个算法**（content 的
+    sha256 前 12 位），所以「自动对照分」和「人点出来的满意率」落得到一起。
+    """
+
+    __tablename__ = "prompt_eval_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    key: Mapped[str] = mapped_column(String(80), index=True)  # 登记表里的属性名
+    prompt_sha: Mapped[str] = mapped_column(String(12), index=True)
+    variant_sha: Mapped[str] = mapped_column(String(12), default="", index=True)
+    variant_label: Mapped[str] = mapped_column(String(60), default="")
+    model_id: Mapped[str] = mapped_column(String(120), default="")
+    cases: Mapped[int] = mapped_column(Integer, default=0)
+    passed: Mapped[int] = mapped_column(Integer, default=0)
+    rate: Mapped[float] = mapped_column(Float, default=0.0)
+    ci_low: Mapped[float] = mapped_column(Float, default=0.0)
+    ci_high: Mapped[float] = mapped_column(Float, default=1.0)
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐用例：断言、回复、耗时
+
+
 class DecisionLog(Base):
     """一条「判断 + 依据 + 信心」，以及事后回看的应验结果（校准分）。
 
