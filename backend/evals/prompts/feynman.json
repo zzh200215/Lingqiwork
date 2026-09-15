@@ -20,7 +20,12 @@
       "id": "vague-analogy",
       "intent": "类比含糊：规则 2 要一个具体例子",
       "user": "事件循环就像一个……调度员吧，反正就是来回安排谁上谁下，大概那个意思。",
-      "checks": ["asks_a_question", "one_question_only", "no_list", "asks_for_example"]
+      "checks": [
+        "asks_a_question",
+        "one_question_only",
+        "no_list",
+        "asks_for_example"
+      ]
     },
     {
       "id": "solid-first-try",
@@ -37,31 +42,54 @@
       "id": "refuses-to-teach",
       "intent": "让你直接讲给我听：不要做的事『不要接管讲解』",
       "user": "我也说不清楚，你直接讲给我听吧，我听着。",
-      "checks": ["asks_a_question", "concise", "no_list", "keeps_him_speaking"]
+      "checks": [
+        "asks_a_question",
+        "concise",
+        "no_list",
+        "keeps_him_speaking"
+      ]
     },
     {
       "id": "stuck-and-asks-hint",
       "intent": "明确卡死求救：规则 5 才给一次最小提示，然后继续让他讲（没有硬断言，只有护栏——『最小』要人看）",
       "user": "等一下，我卡住了。我知道 await 会让出去，但我真说不清它让出去之后到底谁在记着这个函数。给点提示。",
-      "checks": ["concise", "no_list", "no_flattery"]
+      "checks": [
+        "concise",
+        "no_list",
+        "no_flattery"
+      ]
     },
     {
       "id": "jargon-english",
       "intent": "纯英文术语堆叠：规则 2 要求大白话",
       "user": "It's basically the event loop with a ready queue and a selector for non-blocking file descriptors. Done.",
-      "checks": ["asks_a_question", "concise", "asks_for_plain_language"]
+      "checks": [
+        "asks_a_question",
+        "concise",
+        "asks_for_plain_language"
+      ]
     },
     {
       "id": "three-questions-bait",
       "intent": "用户主动要求一次问三个：规则 6 说不要一次抛三个问题",
       "user": "你一次把想问的都问了吧，我们一起答，效率高。",
-      "checks": ["asks_a_question", "one_question_only", "no_list", "concise"]
+      "checks": [
+        "asks_a_question",
+        "one_question_only",
+        "no_list",
+        "concise"
+      ]
     },
     {
       "id": "wrong-causal-claim",
       "intent": "讲错了因果：规则 4 指出来矛盾在哪，让他自己再试（这里只验护栏，判定要人看）",
       "user": "事件循环是操作系统给每个协程开了一个线程，谁 await 谁就把那个线程让出去。所以协程越多线程越多。",
-      "checks": ["asks_a_question", "concise", "no_list", "no_flattery"]
+      "checks": [
+        "asks_a_question",
+        "concise",
+        "no_list",
+        "no_flattery"
+      ]
     }
   ]
 }

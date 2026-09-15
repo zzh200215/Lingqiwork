@@ -150,6 +150,95 @@ def cases_for(key: str) -> dict | None:
     return fixtures().get(key)
 
 
+# ---------- golden set 的写：把一次事故变成一条用例（喂食）----------
+#
+# 这是本模块**唯一**会写盘的地方，而且写的不是提示词，是**用例文件**：
+# `backend/evals/prompts/*.json` 本来就该跟代码同版本演进（`engine_eval` 那套的同一约定），
+# 所以从界面喂进来的用例也落在这里——它进 git、可审、可回滚，不会变成第二个真值。
+#
+# 规范格式很重要：从界面追加一条时若整份重排，diff 就没法看了。所以这里统一按
+# `_canonical()` 写，并有一条测试盯着「磁盘上的文件必须是规范格式」。
+
+
+def _canonical(data: dict) -> str:
+    """golden set 的规范文本：2 空格缩进、中文不转义、结尾一个换行。"""
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+
+
+def _fixture_path(file_name: str):
+    return FIXTURE_DIR / file_name
+
+
+def canonical_ok(text: str, data: dict) -> bool:
+    """磁盘上的内容是不是规范格式（测试用；也用来解释「为什么每次追加都重排」。"""
+    return text == _canonical(data)
+
+
+def _slug(text: str, fallback: str = "case") -> str:
+    """用例 id：小写、空白转横线、只留字母数字与横线。中文保留（id 只是给人看的标签）。"""
+    s = re.sub(r"\s+", "-", (text or "").strip().lower())
+    s = re.sub(r"[^\w\u4e00-\u9fff-]", "", s)
+    return (s or fallback)[:40]
+
+
+def add_case(key: str, *, user: str, intent: str, checks: list[str], case_id: str = "") -> dict:
+    """把一条真实踩到的输入喂进金标集，返回新用例。
+
+    三个必填项都有理由：`user` 是那次真实输入（空的用例没意义）；`intent` 是**「它当时
+    应该怎样」**（没有这句话的用例只是一段文本，日后没人知道它为什么在集合里）；
+    `checks` 是它必须满足的断言（一条都没有 = 这条用例永远算过）。
+    """
+    fx = cases_for(key)
+    if not fx:
+        raise ValueError(f"{key} 还没有 golden set（backend/evals/prompts/）")
+    user = (user or "").strip()
+    intent = (intent or "").strip()
+    if not user:
+        raise ValueError("用例得有一个真实输入（user 不能为空）")
+    if not intent:
+        raise ValueError("写一句「它当时应该怎样」（intent 不能为空）——没有它的用例日后没人看得懂")
+    names = [str(c).strip() for c in (checks or []) if str(c).strip()]
+    if not names:
+        raise ValueError("至少勾一条断言——一条都没有的用例永远算过，等于没喂")
+    unknown = [n for n in names if n not in CHECKS]
+    if unknown:
+        raise ValueError(f"未知断言：{'、'.join(unknown)}")
+
+    taken = {str(c.get("id")) for c in (fx.get("cases") or [])}
+    cid = _slug(case_id or user[:20])
+    if cid in taken:  # 同名不覆盖：加个后缀，免得把已有的用例顶掉
+        n = 2
+        while f"{cid}-{n}" in taken:
+            n += 1
+        cid = f"{cid}-{n}"
+
+    data = {k: v for k, v in fx.items() if k != "file"}
+    data.setdefault("cases", []).append({"id": cid, "intent": intent, "user": user, "checks": names})
+    _fixture_path(fx["file"]).write_text(_canonical(data), encoding="utf-8")
+    log.info("prompt golden set 喂进来一条：%s/%s", key, cid)
+    return {"id": cid, "intent": intent, "user": user, "checks": names}
+
+
+def remove_case(key: str, case_id: str) -> dict:
+    """从金标集里去掉一条。坏用例会污染指标，所以给的出口和入口一样大。
+
+    删的是**文件里的一行**，git 里看得见；提示词本身一个字节都不动。
+    """
+    fx = cases_for(key)
+    if not fx:
+        raise ValueError(f"{key} 还没有 golden set（backend/evals/prompts/）")
+    cases = [c for c in (fx.get("cases") or []) if str(c.get("id")) != str(case_id)]
+    if len(cases) == len(fx.get("cases") or []):
+        raise ValueError(f"没有这条用例：{case_id}")
+    if not cases:
+        raise ValueError("最后一条用例不能删——没有用例的 golden set 跑不了对照")
+    data = {k: v for k, v in fx.items() if k != "file"}
+    data["cases"] = cases
+    _fixture_path(fx["file"]).write_text(_canonical(data), encoding="utf-8")
+    log.info("prompt golden set 删掉一条：%s/%s", key, case_id)
+    return {"key": key, "removed": case_id, "left": len(cases)}
+
+
 # ---------- Wilson 区间 ----------
 
 
@@ -202,9 +291,17 @@ def _entry(key: str):
 
 
 def _summarize(run) -> dict:
+    """一次 run → 给界面/接口的字面量。
+
+    `at` **必须过 `iso_utc`**：这一列是 `utcnow()` 写的、SQLite 往返之后是 naive，
+    直接 `isoformat()` 给浏览器，`new Date(...)` 会当成**本地时间**读——UTC+8 下就成了
+    「8 小时前」。小屋的技能卡第一版就是栽在这上面（一张刚跑出来的卡写着「8 小时前」），
+    和 P1 那个 `pet.status()` 的时区错是同一个病。"""
+    from app.models import iso_utc
+
     return {
         "id": run.id,
-        "at": run.created_at.isoformat() if run.created_at else "",
+        "at": iso_utc(run.created_at) or "",
         "key": run.key,
         "prompt_sha": run.prompt_sha,
         "variant_sha": run.variant_sha,
@@ -218,6 +315,73 @@ def _summarize(run) -> dict:
         "seconds": run.seconds,
         "detail_json": run.detail_json,
     }
+
+
+async def latest_baselines() -> dict[str, dict]:
+    """每条提示词**已登记内容**的最新一次成绩，一个查询搞定。
+
+    小屋那张技能卡要读它，而挂件每 60 秒就会拉一次房间——按 key 各查一次是 32 个往返，
+    没必要。`registry` 那种一次性面（人打开才看）用 `baseline()` 逐条查没关系，这里不行。
+    """
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import PromptEvalRun
+
+    out: dict[str, dict] = {}
+    try:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(PromptEvalRun)
+                    .where(PromptEvalRun.variant_sha == "")
+                    .order_by(PromptEvalRun.id.desc())
+                    .limit(400)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001
+        log.warning("prompt eval latest baselines failed", exc_info=True)
+        return out
+    for r in rows:  # 已按 id 倒序：每个 key 的第一条就是最新的
+        out.setdefault(r.key, _summarize(r))
+    return out
+
+
+async def cards() -> list[dict]:
+    """屋里的**技能卡**：跑过对照的提示词。
+
+    「技能只有一个到手方式：它被证明有效过」——所以这里只收**有基线**的：没跑过的
+    提示词不是技能，是一段还没验过的文本，宠物不展示它。`stale` 是诚实的一部分：
+    基线跑完之后内容又改过（sha 变了），这张卡上的分数就不是现在这版的了。
+    """
+    from app.core import prompts
+
+    base = await latest_baselines()
+    out: list[dict] = []
+    for p in prompts.inventory():
+        b = base.get(p.name)
+        if not b or p.content is None:
+            continue
+        out.append(
+            {
+                "name": p.name,
+                "module": p.module,
+                "purpose": p.purpose,
+                "kind": p.kind,
+                "sha": p.sha,
+                "passed": b["passed"],
+                "cases": b["cases"],
+                "rate": b["rate"],
+                "ci_low": b["ci_low"],
+                "ci_high": b["ci_high"],
+                "at": b["at"],
+                "model_id": b["model_id"],
+                # 这张卡上的成绩是不是**这一版**内容跑出来的
+                "stale": b["prompt_sha"] != p.sha,
+            }
+        )
+    out.sort(key=lambda c: (c["rate"], c["cases"]), reverse=True)
+    return out
 
 
 async def history(key: str, limit: int = 10) -> list[dict]:

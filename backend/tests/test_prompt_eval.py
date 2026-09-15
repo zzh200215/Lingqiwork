@@ -288,6 +288,27 @@ def test_history_is_newest_first_and_capped():
     assert hist[0]["id"] > hist[1]["id"]
 
 
+def test_run_times_are_stamped_utc_for_the_browser():
+    """`at` 必须带偏移。
+
+    这一列是 `utcnow()` 写的、SQLite 往返之后是 naive；直接 `isoformat()` 给浏览器，
+    `new Date(...)` 会当**本地时间**读——UTC+8 下刚跑完的一次会显示成「8 小时前」。
+    小屋的技能卡第一版就是这么错的（和 P1 那个 `pet.status()` 的时区错同一个病）。
+    """
+    rep = asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="tz/model", generate=_gen()))
+    hist = asyncio.run(pe.history("FEYNMAN_PROMPT", limit=1))
+    assert hist[0]["id"] == rep["run_id"]
+    at = hist[0]["at"]
+    assert at.endswith("+00:00"), f"at 没有时区：{at}"
+    from datetime import datetime, timezone
+
+    parsed = datetime.fromisoformat(at)
+    assert parsed.tzinfo is not None
+    # 与「现在」比，应该就在几十秒内（而不是差一个时区偏移）
+    drift = abs((datetime.now(timezone.utc) - parsed).total_seconds())
+    assert drift < 120, f"at 与现在差了 {drift:.0f} 秒，多半是时区错"
+
+
 def test_check_names_are_exposed_for_the_ui():
     names = {c["name"] for c in pe.check_names()}
     assert names == set(pe.CHECKS)
@@ -303,3 +324,166 @@ def test_the_new_table_is_created_by_create_all_not_by_an_alter():
 
     assert PromptEvalRun.__tablename__ == "prompt_eval_runs"
     assert asyncio.run(pe.history("FEYNMAN_PROMPT", limit=1)), "前面跑的分应该落在这张表里"
+
+
+# --- 喂食：把一次事故变成一条用例（写的是 golden set 文件，不是提示词）-------------
+
+
+@pytest.fixture()
+def _restore_fixture():
+    """用例文件会被改：每个用例跑完把原文写回去。
+
+    这一组测的**就是**写文件，所以得自己收拾干净——不还原的话，`feynman.json` 会在跑测试
+    的过程中慢慢长出垃圾用例。原文存一份、跑完盖回去，比事后手工清理可靠。
+    """
+    path = pe.FIXTURE_DIR / "feynman.json"
+    original = path.read_text(encoding="utf-8")
+    yield path
+    path.write_text(original, encoding="utf-8")
+
+
+def test_the_fixture_on_disk_is_canonical(_restore_fixture):
+    """磁盘上的 golden set 必须是规范格式。
+
+    理由很实际：从界面喂进来的用例走 `_canonical()` 写整份文件；手写的文件若不是规范格式，
+    每喂一条就整篇重排，diff 就没法看了。
+    """
+    text = _restore_fixture.read_text(encoding="utf-8")
+    assert pe.canonical_ok(text, json.loads(text)), "feynman.json 不是规范格式"
+    assert text.endswith("\n")
+
+
+def test_add_case_writes_it_into_the_golden_set(_restore_fixture):
+    before = len(pe.cases_for("FEYNMAN_PROMPT")["cases"])
+    new = pe.add_case(
+        "FEYNMAN_PROMPT",
+        user="事件循环就是把所有协程塞进一个线程里串着跑。",
+        intent="它该指出「串着跑」和「等的时候让出去」是两回事",
+        checks=["asks_a_question", "no_list"],
+    )
+    after = pe.cases_for("FEYNMAN_PROMPT")
+    assert len(after["cases"]) == before + 1
+    assert [c["id"] for c in after["cases"]][-1] == new["id"]
+    assert new["checks"] == ["asks_a_question", "no_list"]
+    text = _restore_fixture.read_text(encoding="utf-8")
+    assert pe.canonical_ok(text, json.loads(text))  # 仍是规范格式，下次追加不会重排
+    # 直接能跑：新用例带着自己的断言进了对照
+    rep = asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="fake/model", generate=_gen()))
+    assert any(c["id"] == new["id"] for c in rep["cases"])
+    assert rep["total"] == before + 1
+
+
+def test_add_case_refuses_a_case_nobody_can_judge(_restore_fixture):
+    """三样缺一不可：真实输入、它当时应该怎样、至少一条断言。"""
+    with pytest.raises(ValueError, match="真实输入"):
+        pe.add_case("FEYNMAN_PROMPT", user="  ", intent="x", checks=["no_list"])
+    with pytest.raises(ValueError, match="它当时应该怎样"):
+        pe.add_case("FEYNMAN_PROMPT", user="输入", intent="", checks=["no_list"])
+    with pytest.raises(ValueError, match="至少勾一条断言"):
+        pe.add_case("FEYNMAN_PROMPT", user="输入", intent="意图", checks=[])
+    with pytest.raises(ValueError, match="未知断言"):
+        pe.add_case("FEYNMAN_PROMPT", user="输入", intent="意图", checks=["no_such_check"])
+    with pytest.raises(ValueError, match="还没有 golden set"):
+        pe.add_case("CHAT_SYSTEM", user="输入", intent="意图", checks=["no_list"])
+
+
+def test_add_case_never_overwrites_an_existing_id(_restore_fixture):
+    first = pe.add_case(
+        "FEYNMAN_PROMPT", user="同一个输入", intent="第一次", checks=["no_list"], case_id="dup"
+    )
+    second = pe.add_case(
+        "FEYNMAN_PROMPT", user="同一个输入", intent="第二次", checks=["no_list"], case_id="dup"
+    )
+    assert first["id"] == "dup"
+    assert second["id"] == "dup-2"  # 不顶掉已有的那条
+    ids = [c["id"] for c in pe.cases_for("FEYNMAN_PROMPT")["cases"]]
+    assert ids.count("dup") == 1 and "dup-2" in ids
+
+
+def test_remove_case_takes_it_back_out(_restore_fixture):
+    before = len(pe.cases_for("FEYNMAN_PROMPT")["cases"])
+    out = pe.remove_case("FEYNMAN_PROMPT", "vague-analogy")
+    assert out == {"key": "FEYNMAN_PROMPT", "removed": "vague-analogy", "left": before - 1}
+    assert "vague-analogy" not in [c["id"] for c in pe.cases_for("FEYNMAN_PROMPT")["cases"]]
+    with pytest.raises(ValueError, match="没有这条用例"):
+        pe.remove_case("FEYNMAN_PROMPT", "vague-analogy")
+
+
+def test_remove_case_refuses_to_empty_the_set(_restore_fixture):
+    ids = [c["id"] for c in pe.cases_for("FEYNMAN_PROMPT")["cases"]]
+    for cid in ids[:-1]:
+        pe.remove_case("FEYNMAN_PROMPT", cid)
+    with pytest.raises(ValueError, match="最后一条"):
+        pe.remove_case("FEYNMAN_PROMPT", ids[-1])
+
+
+def test_feeding_cases_never_touches_the_prompt_itself(_restore_fixture):
+    """喂食改的是**用例**——提示词一个字节都不动（这条是这一整个模块的护栏）。"""
+    before = [(p.name, p.sha, p.content) for p in prompts.inventory()]
+    pe.add_case("FEYNMAN_PROMPT", user="新的输入", intent="新的意图", checks=["no_list"])
+    pe.remove_case("FEYNMAN_PROMPT", "vague-analogy")
+    assert [(p.name, p.sha, p.content) for p in prompts.inventory()] == before
+
+
+# --- 技能卡：只有跑过对照的才进屋 ---------------------------------------------
+
+
+def test_cards_only_include_prompts_with_a_baseline():
+    """「技能只有一个到手方式：它被证明有效过」——没基线的提示词不是技能。"""
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="card/model", generate=_gen()))
+    cards = asyncio.run(pe.cards())
+    assert [c["name"] for c in cards] == ["FEYNMAN_PROMPT"]  # 另外 31 条一条都不出现
+    card = cards[0]
+    assert card["passed"] <= card["cases"] and card["cases"] > 0
+    assert 0.0 <= card["ci_low"] <= card["ci_high"] <= 1.0
+    assert card["stale"] is False  # 刚跑的就是这一版内容
+    assert card["purpose"] and card["kind"]
+    assert card["model_id"] == "card/model"
+
+
+def test_a_card_goes_stale_when_the_prompt_changes(monkeypatch):
+    """内容改过之后，卡上的分数就不是这一版的了——这件事得写在卡上，不能装作没事。"""
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="card/model", generate=_gen()))
+    real = pe._entry("FEYNMAN_PROMPT")
+
+    class Fake:
+        name = real.name
+        module = real.module
+        purpose = real.purpose
+        kind = real.kind
+        content = real.content + "\n（改过一行）"
+        sha = "changed00000"
+
+    monkeypatch.setattr(prompts, "inventory", lambda: [Fake()])
+    cards = asyncio.run(pe.cards())
+    assert cards and cards[0]["stale"] is True
+
+
+def test_variant_runs_never_become_a_card():
+    """候选变体跑得再好也不是技能：它不对应任何已登记的内容。
+
+    这个文件的库是全文件共用的，前面已经有基线了——所以要验的不是「卡片数为零」，
+    而是「卡片上写的是**基线**那次的成绩，候选那次没混进来」。
+    """
+    base = asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="card/model", generate=_gen()))
+    asyncio.run(
+        pe.check(
+            "FEYNMAN_PROMPT",
+            variant="候选",
+            variant_label="只有候选",
+            model_id="card/model",
+            generate=_gen("1. 清单\n2. 两项"),  # 丢掉 no_list，必挂
+        )
+    )
+    cards = asyncio.run(pe.cards())
+    assert [c["name"] for c in cards] == ["FEYNMAN_PROMPT"]  # 一张卡，不是两张
+    assert cards[0]["passed"] == base["passed"]  # 卡上是基线那次的分
+    assert cards[0]["cases"] == base["total"]
+
+
+def test_latest_baselines_picks_the_newest_run_per_key():
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="card/model", generate=_gen("问题？")))
+    first = asyncio.run(pe.latest_baselines())["FEYNMAN_PROMPT"]
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="card/model", generate=_gen("1. 清单\n2. 两项")))
+    second = asyncio.run(pe.latest_baselines())["FEYNMAN_PROMPT"]
+    assert second["id"] > first["id"]

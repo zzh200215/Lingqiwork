@@ -39,7 +39,8 @@ async def pet_growth():
 
 @router.get("/room")
 async def pet_room(limit: int = 8):
-    """零柒的小屋（P4 · 维度四）：它攒下的东西 + 今天喂了它什么 + 架上那几份成品。
+    """零柒的小屋（P4 · 维度四）：它攒下的东西 + 今天喂了它什么 + 架上那几份成品
+    + **它学会的技能**（Q2：跑过对照的那些提示词）。
 
     「已掌握」的规则只有 `tutor.mastery_events()` 那一份（一场是运气、两场才算），
     这里**把它取来喂给纯函数**，而不是在房间模块里再写一遍 SQL——两处规则迟早分叉。
@@ -50,6 +51,7 @@ async def pet_room(limit: int = 8):
     """
     from app.core import pet
     from app.core import pet_room as room
+    from app.core import prompt_eval
     from app.core import tutor
     from app.routers.work import list_outputs
 
@@ -60,6 +62,8 @@ async def pet_room(limit: int = 8):
     out["shelf"] = [o for o in rows if pet.is_output_path(o.get("path", ""))][:cap]
     # 身上挂的那件可能是**刚交出去的那份成品**（门槛是稀疏的，叼回来是每份都发生的）
     out["carried"] = room.carried(out.get("carried"), out["shelf"])
+    # 技能卡（Q2）：**只有跑过对照的那些提示词**才进屋。没基线的不是技能，是还没验过的文本。
+    out["skills"] = await prompt_eval.cards()
     return out
 
 

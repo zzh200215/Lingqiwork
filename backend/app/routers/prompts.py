@@ -156,6 +156,41 @@ async def registry_entry(key: str):
     }
 
 
+class CaseIn(BaseModel):
+    user: str
+    intent: str
+    checks: list[str]
+    id: str = ""
+
+
+@router.post("/registry/{key}/cases")
+async def add_case(key: str, body: CaseIn):
+    """喂一条用例进金标集（**写的是 `backend/evals/prompts/*.json`**，不是提示词）。
+
+    这是「一次事故 → 一个用例」那一步：把真实踩到的输入抄进来，写一句"它当时应该怎样"，
+    勾上它必须满足的断言。改动落在文件里、进 git 可审——所以界面上会提醒你提交。
+    """
+    from app.core import prompt_eval
+
+    try:
+        return prompt_eval.add_case(
+            key, user=body.user, intent=body.intent, checks=body.checks, case_id=body.id
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.delete("/registry/{key}/cases/{case_id}")
+async def remove_case(key: str, case_id: str):
+    """去掉一条用例（坏用例会污染指标，所以出口和入口一样大）。"""
+    from app.core import prompt_eval
+
+    try:
+        return prompt_eval.remove_case(key, case_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 class CheckIn(BaseModel):
     variant: str | None = None
     variant_label: str = ""
