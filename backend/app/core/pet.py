@@ -347,7 +347,7 @@ EXP_TAUGHT_PET = 40
 EXP_TAUGHT_HALF = 12
 _OUTPUT_DIRS = ("research", "decisions", "conflicts", "recap", "deliver")
 
-# 「已掌握」的 SQL 版：与 `tutor._mastered` 同一条规则——最近一次自评说通了、且不止一场。
+# 「已掌握」的 SQL 版：与 `tutor.is_mastered` 同一条规则——最近一次自评说通了、且不止一场。
 _MASTERED_SQL = (
     "SELECT COUNT(*) FROM ("
     " SELECT concept, COUNT(*) AS n,"
