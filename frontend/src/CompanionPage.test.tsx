@@ -21,6 +21,7 @@ vi.mock('./api', () => ({
       carried: null,
       shelf: [],
       today: { meals: [], date: '2026-09-14' },
+      skills: [],
       empty: true,
     }),
   },
@@ -120,6 +121,7 @@ beforeEach(() => {
     carried: null,
     shelf: [],
     today: { meals: [], date: '2026-09-14' },
+    skills: [],
     empty: true,
   })
   // 一轮完整的 SSE：delta 然后 done。少了 done 帧，`streamTutorSay` 会判定

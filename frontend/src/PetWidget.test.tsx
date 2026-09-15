@@ -20,6 +20,7 @@ vi.mock('./api', () => ({
       carried: null,
       shelf: [],
       today: { meals: [], date: '2026-09-14' },
+      skills: [],
       empty: true,
     }),
     listTasks: vi.fn().mockResolvedValue([]),
@@ -147,6 +148,7 @@ beforeEach(() => {
     carried: null,
     shelf: [],
     today: { meals: [], date: '2026-09-14' },
+    skills: [],
     empty: true,
   })
   // feed 轮询：没有系统事件
@@ -595,6 +597,7 @@ describe('PetWidget · 它身上带着的那件东西', () => {
       carried,
       shelf: [],
       today: { meals: [], date: '2026-09-14' },
+      skills: [],
       empty: !carried,
     }
   }

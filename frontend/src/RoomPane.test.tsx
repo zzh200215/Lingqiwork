@@ -4,11 +4,11 @@
 // 1. 每件东西标的是「到手那天」，不是「最近更新」；
 // 2. 屋里空着 / 今天没吃东西时，说的是实话，**没有「还差 N 件」「它饿了」这种欠账口吻**。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import RoomPane from './RoomPane'
-import type { PetMeal, PetRoom, PetThing, WorkOutput } from './api'
+import type { PetMeal, PetRoom, PetSkillCard, PetThing, WorkOutput } from './api'
 
 vi.mock('./api', () => ({ api: { petRoom: vi.fn() } }))
 import { api } from './api'
@@ -52,11 +52,29 @@ const SHELF: WorkOutput[] = [
   { kind: 'deliver', label: '交付', title: '给领导的汇报', date: '2026-09-12', path: 'deliver/a.md', mtime: 1 },
 ]
 
+/** 一张技能卡（Q2）：跑过对照的提示词。 */
+const SKILL: PetSkillCard = {
+  name: 'FEYNMAN_PROMPT',
+  module: 'app.core.tutor',
+  purpose: '费曼反转教学：用户讲，模型当那个没搞懂的学生 + 考官',
+  kind: 'prompt',
+  sha: 'e9fd94ec9044',
+  passed: 2,
+  cases: 8,
+  rate: 0.25,
+  ci_low: 0.07,
+  ci_high: 0.59,
+  at: '2026-09-15T10:00:00',
+  model_id: 'sensenova/flash-lite',
+  stale: false,
+}
+
 const ROOM: PetRoom = {
   things: [STACK, thing({})],
   carried: STACK,
   shelf: SHELF,
   today: { meals: [MEAL], date: '2026-09-14' },
+  skills: [SKILL],
   empty: false,
 }
 
@@ -65,6 +83,7 @@ const EMPTY: PetRoom = {
   carried: null,
   shelf: [],
   today: { meals: [], date: '2026-09-14' },
+  skills: [],
   empty: true,
 }
 
@@ -169,5 +188,41 @@ describe('RoomPane', () => {
     vi.mocked(api.petRoom).mockRejectedValue(new Error('后端不在'))
     renderPane()
     expect(await screen.findByText(/读小屋出错了：后端不在/)).toBeTruthy()
+  })
+})
+
+// Q2 · 技能卡：技能只有一个到手方式——一条提示词跑过一次对照。
+describe('RoomPane · 它学会的技能', () => {
+  it('摆出有基线的那张卡：名字、过了几条、区间，点开进实验室', async () => {
+    const { container } = renderPane()
+    const card = await waitFor(() => {
+      const el = container.querySelector('[data-room-skill="FEYNMAN_PROMPT"]')
+      if (!el) throw new Error('还没有技能卡')
+      return el as HTMLAnchorElement
+    })
+    expect(card.textContent).toContain('FEYNMAN_PROMPT')
+    expect(card.textContent).toContain('2/8')
+    expect(card.textContent).toContain('25%')
+    expect(card.textContent).toContain('7–59%') // 区间照直写，不做四舍五入的美化
+    // 点开就是那一条的对照台
+    expect(card.getAttribute('href')).toBe('/work?tab=lab&prompt=FEYNMAN_PROMPT')
+  })
+
+  it('一张卡都没有时说清楚路径，不摆空位也不催', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue(EMPTY)
+    renderPane()
+    expect(await screen.findByText('它学会的技能')).toBeTruthy()
+    expect(screen.getByText(/技能只有一个到手方式/)).toBeTruthy()
+    expect(screen.queryByText(/还差/)).toBeNull()
+  })
+
+  it('基线过期就直说——卡上的分数不是这一版的了', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue({
+      ...ROOM,
+      skills: [{ ...SKILL, stale: true }],
+    })
+    const { container } = renderPane()
+    await waitFor(() => expect(container.querySelector('[data-room-skill]')).toBeTruthy())
+    expect(screen.getByText('基线过期')).toBeTruthy()
   })
 })

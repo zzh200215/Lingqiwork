@@ -12,9 +12,17 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { api, type PetMeal, type PetRoom, type PetThing } from './api'
+import { api, type PetMeal, type PetRoom, type PetSkillCard, type PetThing } from './api'
 import EmptyHint from './EmptyHint'
 import { ago, isFresh } from './reltime'
+
+/** 技能卡上的小图标：按提示词的种类给，四种，不多不少。 */
+const KIND_ICON: Record<string, string> = {
+  system: '⚙️',
+  prompt: '📣',
+  instruction: '🔧',
+  persona: '🎭',
+}
 
 function Thing({ t, now }: { t: PetThing; now: number }) {
   const fresh = isFresh(t.at_ts, now)
@@ -40,8 +48,50 @@ function Thing({ t, now }: { t: PetThing; now: number }) {
   )
 }
 
-function Meal({ m }: { m: PetMeal }) {
+/** 一张技能卡（Q2）：**跑过对照**的提示词。
+ *
+ *  卡上写的是事实：过了几条、区间多宽、什么时候跑的。**没有进度条、没有熟练度**——
+ *  技能不是攒出来的经验条，是「它被证明有效过」这件事本身。基线过期就直说。 */
+function Skill({ s, now }: { s: PetSkillCard; now: number }) {
   return (
+    <Link
+      to={`/work?tab=lab&prompt=${encodeURIComponent(s.name)}`}
+      data-room-skill={s.name}
+      title={`${s.purpose}｜最近的对照：${s.passed}/${s.cases}（${s.model_id}）`}
+      className="block rounded-xl border border-neutral-200 bg-white px-3 py-2.5 transition-colors hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+    >
+      <div className="flex items-baseline gap-2">
+        <span className="text-lg leading-none">{KIND_ICON[s.kind] ?? '🔧'}</span>
+        <span className="truncate font-mono text-xs text-neutral-700 dark:text-neutral-200">
+          {s.name}
+        </span>
+        <div className="flex-1" />
+        <span className="shrink-0 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+          {s.passed}/{s.cases}
+        </span>
+      </div>
+      <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+        {s.purpose}
+      </div>
+      <div className="mt-1 flex items-center gap-2 text-[10px] text-neutral-400">
+        <span>
+          最近对照 {Math.round(s.rate * 100)}%（{Math.round(s.ci_low * 100)}–
+          {Math.round(s.ci_high * 100)}%）
+        </span>
+        <div className="flex-1" />
+        {s.stale ? (
+          <span className="text-amber-600 dark:text-amber-400" title="内容改过，卡上的分数不是这一版的了">
+            基线过期
+          </span>
+        ) : (
+          <span>{ago(new Date(s.at).getTime() / 1000, now)}</span>
+        )}
+      </div>
+    </Link>
+  )
+}
+
+function Meal({ m }: { m: PetMeal }) {  return (
     <span
       data-room-meal={m.key}
       className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-[11px] dark:border-neutral-800 dark:bg-neutral-900"
@@ -152,6 +202,30 @@ export default function RoomPane() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+      </section>
+
+      {/* 它学会的技能：跑过对照的提示词。**没跑过的不摆**——没验过的不是技能。 */}
+      <section>
+        <div className="mb-2 flex items-baseline gap-2">
+          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+            它学会的技能
+          </h2>
+          <div className="flex-1" />
+          <Link to="/work?tab=lab" className="text-xs text-violet-500 hover:underline">
+            去实验室
+          </Link>
+        </div>
+        {room.skills.length === 0 ? (
+          <p className="text-sm text-neutral-400 dark:text-neutral-500">
+            还没有一张技能卡。技能只有一个到手方式：一条提示词在实验室里跑过一次对照。
+          </p>
+        ) : (
+          <div data-room-skills className="grid gap-2 sm:grid-cols-2">
+            {room.skills.map((s) => (
+              <Skill key={s.name} s={s} now={now} />
+            ))}
           </div>
         )}
       </section>

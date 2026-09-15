@@ -1443,7 +1443,28 @@ export interface PetMeal {
   count: number
 }
 
-/** 零柒的小屋：攒下的东西（道具 / 徽章）、架上的真产出、今天喂了什么。
+/** 屋里的**技能卡**（Q2）：跑过对照的提示词才算技能。
+ *
+ *  「技能只有一个到手方式：它被证明有效过」——没有基线的提示词不是技能，是一段还没验过的
+ *  文本，宠物不展示它。`stale` 是诚实的一部分：基线跑完之后内容又改过，卡上的分数就不是
+ *  这一版的了。 */
+export interface PetSkillCard {
+  name: string
+  module: string
+  purpose: string
+  kind: string
+  sha: string
+  passed: number
+  cases: number
+  rate: number
+  ci_low: number
+  ci_high: number
+  at: string
+  model_id: string
+  stale: boolean
+}
+
+/** 零柒的小屋：攒下的东西（道具 / 徽章）、架上的真产出、今天喂了什么、学会的技能。
  *
  *  `carried` 是**它身上挂着的那件**：屋里最新到手的一件，或一份刚交出去的成品——
  *  门槛是稀疏的（第 1、5、25 份），而「交出一份成品 → 它叼回来」每一份都发生。
@@ -1454,6 +1475,8 @@ export interface PetRoom {
   carried: PetThing | null
   shelf: WorkOutput[]
   today: { meals: PetMeal[]; date: string }
+  /** 它学会的技能（Q2）：只收跑过对照的提示词 */
+  skills: PetSkillCard[]
   empty: boolean
 }
 
@@ -1559,6 +1582,20 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** 喂一条用例进金标集（**写的是 `backend/evals/prompts/*.json`**，不是提示词）。 */
+  addPromptCase: (
+    key: string,
+    body: { user: string; intent: string; checks: string[]; id?: string }
+  ) =>
+    request<PromptCaseSpec>(`/api/prompts/registry/${encodeURIComponent(key)}/cases`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  removePromptCase: (key: string, caseId: string) =>
+    request<{ key: string; removed: string; left: number }>(
+      `/api/prompts/registry/${encodeURIComponent(key)}/cases/${encodeURIComponent(caseId)}`,
+      { method: 'DELETE' }
+    ),
 
   listSkills: () => request<{ dir: string; skills: SkillItem[] }>('/api/skills'),
   installSkill: (url: string, name = '', overwrite = false) =>

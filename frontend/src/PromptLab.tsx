@@ -15,6 +15,7 @@
  *  - **候选只是候选**：跑出来的变体永远不改登记表，要采纳得去改代码（改完 sha 会变）。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import {
   api,
@@ -74,6 +75,14 @@ export default function PromptLab() {
   const [label, setLabel] = useState('')
   const [showContent, setShowContent] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // 喂食：把小屋技能卡 / 别的页面指过来的那一条直接打开（`/work?tab=lab&prompt=FEYNMAN_PROMPT`）
+  const [params] = useSearchParams()
+  const wantKey = params.get('prompt') ?? ''
+  // 喂食表单：从哪来（报告里那一条的输入原样带过来）+ 意图 + 勾的断言
+  const [feed, setFeed] = useState<{ open: boolean; user: string; intent: string; checks: string[] }>(
+    { open: false, user: '', intent: '', checks: [] }
+  )
+  const [feedMsg, setFeedMsg] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -95,12 +104,56 @@ export default function PromptLab() {
     setReport(null)
     setErr(null)
     setShowContent(false)
+    setFeed({ open: false, user: '', intent: '', checks: [] })
+    setFeedMsg('')
     try {
       setDetail(await api.promptEntry(k))
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
   }, [])
+
+  // 深链：`?prompt=` 指过来的那一条直接打开（技能卡「去实验室」就是这么跳的）
+  useEffect(() => {
+    if (wantKey && list && !key) void openKey(wantKey)
+  }, [wantKey, list, key, openKey])
+
+  /** 喂一条用例：改动落在 `backend/evals/prompts/*.json` 里，所以界面明说要提交。 */
+  const submitFeed = useCallback(async () => {
+    if (!key) return
+    setErr(null)
+    try {
+      const made = await api.addPromptCase(key, {
+        user: feed.user,
+        intent: feed.intent,
+        checks: feed.checks,
+      })
+      setFeed({ open: false, user: '', intent: '', checks: [] })
+      setFeedMsg(`已喂进金标集：${made.id}（写进了 ${detail?.fixture || 'golden set'}，记得提交）`)
+      setDetail(await api.promptEntry(key))
+      await load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [key, feed, detail, load])
+
+  const dropCase = useCallback(
+    async (caseId: string) => {
+      if (!key) return
+      if (!window.confirm(`把用例「${caseId}」从金标集里删掉？（写进 golden set 文件，git 里看得见）`))
+        return
+      setErr(null)
+      try {
+        await api.removePromptCase(key, caseId)
+        setFeedMsg(`已删掉用例 ${caseId}`)
+        setDetail(await api.promptEntry(key))
+        await load()
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [key, load]
+  )
 
   const run = useCallback(async () => {
     if (!key || busy) return
@@ -231,7 +284,89 @@ export default function PromptLab() {
                 </span>
                 <div className="flex-1" />
                 <span className="text-[10px] text-neutral-400">{detail.fixture}</span>
+                <button
+                  data-lab-feed-open
+                  onClick={() =>
+                    setFeed({ open: !feed.open, user: '', intent: '', checks: [] })
+                  }
+                  className="text-[11px] text-violet-500 hover:underline"
+                >
+                  {feed.open ? '收起' : '喂一条进来'}
+                </button>
               </div>
+
+              {/* 喂食表单：这一整套的入口只有一句话——把真实踩到的那句抄进来 */}
+              {feed.open && (
+                <div
+                  data-lab-feed
+                  className="space-y-2 border-b border-neutral-100 bg-violet-50/40 px-3 py-2.5 dark:border-neutral-800 dark:bg-violet-500/5"
+                >
+                  <p className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                    喂的是**用例**：一次真实输入 + 一句「它当时应该怎样」+ 它必须满足的断言。
+                    改动写进 <span className="font-mono">{detail.fixture}</span>（进 git，可审可回滚）
+                    ——提示词本身一个字节都不动。
+                  </p>
+                  <textarea
+                    data-lab-feed-user
+                    value={feed.user}
+                    onChange={(e) => setFeed((f) => ({ ...f, user: e.target.value }))}
+                    placeholder="那次的真实输入（把它原样抄进来）"
+                    className="h-16 w-full rounded-lg border border-neutral-300 bg-white p-2 text-[11px] text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+                  />
+                  <input
+                    data-lab-feed-intent
+                    value={feed.intent}
+                    onChange={(e) => setFeed((f) => ({ ...f, intent: e.target.value }))}
+                    placeholder="它当时应该怎样（一句话——没有这句的用例日后没人看得懂）"
+                    className="w-full rounded-lg border border-neutral-300 bg-white px-2 py-1.5 text-[11px] text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+                  />
+                  <div className="flex flex-wrap gap-1.5">
+                    {detail.checks.map((c) => {
+                      const on = feed.checks.includes(c.name)
+                      return (
+                        <button
+                          key={c.name}
+                          data-lab-feed-check={c.name}
+                          title={c.why}
+                          onClick={() =>
+                            setFeed((f) => ({
+                              ...f,
+                              checks: on
+                                ? f.checks.filter((x) => x !== c.name)
+                                : [...f.checks, c.name],
+                            }))
+                          }
+                          className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+                            on
+                              ? 'border-violet-400 bg-violet-100 text-violet-700 dark:border-violet-500/60 dark:bg-violet-500/20 dark:text-violet-200'
+                              : 'border-neutral-300 text-neutral-500 hover:border-violet-300 dark:border-neutral-700 dark:text-neutral-400'
+                          }`}
+                        >
+                          {c.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <button
+                    data-lab-feed-save
+                    onClick={() => void submitFeed()}
+                    disabled={!feed.user.trim() || !feed.intent.trim() || feed.checks.length === 0}
+                    className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                  >
+                    喂进金标集
+                  </button>
+                </div>
+              )}
+
+              {feedMsg && (
+                <div
+                  data-lab-feed-msg
+                  className="border-b border-neutral-100 bg-emerald-50/60 px-3 py-1.5 text-[11px] text-emerald-700 dark:border-neutral-800 dark:bg-emerald-950/30 dark:text-emerald-300"
+                >
+                  {feedMsg}
+                </div>
+              )}
+
               <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
                 {detail.cases.map((c) => (
                   <li key={c.id} data-lab-case={c.id} className="px-3 py-2 text-xs">
@@ -240,6 +375,15 @@ export default function PromptLab() {
                         {c.id}
                       </span>
                       <span className="text-neutral-400 dark:text-neutral-500">{c.intent}</span>
+                      <div className="flex-1" />
+                      <button
+                        data-lab-case-drop={c.id}
+                        onClick={() => void dropCase(c.id)}
+                        title="从金标集里删掉这条（坏用例会污染指标）"
+                        className="shrink-0 text-[10px] text-neutral-400 hover:text-rose-500"
+                      >
+                        删
+                      </button>
                     </div>
                     <div className="mt-1 text-neutral-600 dark:text-neutral-300">「{c.user}」</div>
                     <div className="mt-1 flex flex-wrap gap-1">
@@ -360,6 +504,31 @@ export default function PromptLab() {
                           {c.id}
                         </span>
                         <div className="flex-1" />
+                        <button
+                          data-lab-feed-from={c.id}
+                          onClick={() => {
+                            // 把这一条的**输入原样**带进表单：喂的是「它当时该怎样」，
+                            // 不是重新编一个输入
+                            setFeed({
+                              open: true,
+                              user: c.user,
+                              intent: '',
+                              checks: [
+                                ...new Set([
+                                  ...c.failed.map((f) => f.name),
+                                  ...c.checks.filter((n) =>
+                                    detail.checks.some((x) => x.name === n)
+                                  ),
+                                ]),
+                              ].filter((n) => detail.checks.some((x) => x.name === n)),
+                            })
+                            setFeedMsg('')
+                          }}
+                          title="把它喂进金标集（写一句「它当时应该怎样」）"
+                          className="shrink-0 text-[11px] text-violet-500 hover:underline"
+                        >
+                          喂进金标集
+                        </button>
                         <span className="text-[10px] tabular-nums text-neutral-400">
                           {c.chars} 字 · {c.seconds}s
                         </span>

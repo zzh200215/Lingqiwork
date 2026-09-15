@@ -6,6 +6,7 @@
 // 3. 候选变体只出现在报告里，绝不回写登记表。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 
 import PromptLab from './PromptLab'
 import type { PromptCheckReport, PromptRegistryEntry, PromptRegistryEntryDetail } from './api'
@@ -15,6 +16,8 @@ vi.mock('./api', () => ({
     promptRegistry: vi.fn(),
     promptEntry: vi.fn(),
     checkPrompt: vi.fn(),
+    addPromptCase: vi.fn(),
+    removePromptCase: vi.fn(),
   },
 }))
 import { api } from './api'
@@ -71,6 +74,7 @@ const DETAIL: PromptRegistryEntryDetail = {
     { name: 'asks_a_question', why: '规则 1「像一个真诚困惑的学生那样提问」' },
     { name: 'asks_for_plain_language', why: '规则 2「要求他用大白话重说一遍」' },
     { name: 'asks_for_layperson', why: '规则 7「给完全外行的人再讲一遍」' },
+    { name: 'no_list', why: '规则 6「不要列清单」' },
   ],
   runs: [
     {
@@ -149,6 +153,15 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
+/** 实验室现在读 `?prompt=` 深链（技能卡跳过来的那条），所以测试得给它一个 Router。 */
+function renderLab(entry = '/work?tab=lab') {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <PromptLab />
+    </MemoryRouter>
+  )
+}
+
 describe('PromptLab', () => {
   it('列出登记表，并给三种事实之一：有用例 / 没有基线 / 没有用例', async () => {
     vi.mocked(api.promptRegistry).mockResolvedValue({
@@ -159,7 +172,7 @@ describe('PromptLab', () => {
       ],
       inline: [],
     })
-    render(<PromptLab />)
+    renderLab()
     expect(await screen.findByText('6/8 · 75%')).toBeTruthy()
     expect(screen.getByText('没有基线')).toBeTruthy()
     expect(screen.getByText('没有用例')).toBeTruthy()
@@ -167,7 +180,7 @@ describe('PromptLab', () => {
   })
 
   it('选一条：看到用例、断言（鼠标停上去是哪句话）、内容只读折叠', async () => {
-    const { container } = render(<PromptLab />)
+    const { container } = renderLab()
     fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
     await waitFor(() => expect(api.promptEntry).toHaveBeenCalledWith('FEYNMAN_PROMPT'))
     expect(await screen.findByText('golden set 2 条')).toBeTruthy()
@@ -181,7 +194,7 @@ describe('PromptLab', () => {
   })
 
   it('跑一次对照：k/n、Wilson、逐条结果与失败的那条断言为什么挂', async () => {
-    const { container } = render(<PromptLab />)
+    const { container } = renderLab()
     fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
     fireEvent.click(await screen.findByText('跑一次对照（已登记内容）'))
 
@@ -206,7 +219,7 @@ describe('PromptLab', () => {
   })
 
   it('逐条结果里摊着模型的原话——失败时人能自己看一眼', async () => {
-    render(<PromptLab />)
+    renderLab()
     fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
     fireEvent.click(await screen.findByText('跑一次对照（已登记内容）'))
     await screen.findByText(/1\/2/)
@@ -214,7 +227,7 @@ describe('PromptLab', () => {
   })
 
   it('候选变体：报告标出「候选」，并明说它不会进登记表', async () => {
-    const { container } = render(<PromptLab />)
+    const { container } = renderLab()
     fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
     fireEvent.click(await screen.findByText(/拿一段候选变体比一比/))
     fireEvent.change(container.querySelector('textarea') as HTMLTextAreaElement, {
@@ -246,7 +259,7 @@ describe('PromptLab', () => {
 
   it('没有用例的那条：跑不了，按钮是禁用的（不假装能跑）', async () => {
     vi.mocked(api.promptEntry).mockResolvedValue({ ...DETAIL, cases: [] })
-    render(<PromptLab />)
+    renderLab()
     fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
     const btn = (await screen.findByText('跑一次对照（已登记内容）')) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
@@ -254,7 +267,124 @@ describe('PromptLab', () => {
 
   it('登记表读不到时给一句话，不是空白页', async () => {
     vi.mocked(api.promptRegistry).mockRejectedValue(new Error('后端不在'))
-    render(<PromptLab />)
+    renderLab()
     expect(await screen.findByText(/读登记表出错了：后端不在/)).toBeTruthy()
+  })
+
+  it('深链 ?prompt=<key> 直接打开那一条（技能卡就是这么跳过来的）', async () => {
+    renderLab('/work?tab=lab&prompt=FEYNMAN_PROMPT')
+    await waitFor(() => expect(api.promptEntry).toHaveBeenCalledWith('FEYNMAN_PROMPT'))
+    expect(await screen.findByText('golden set 2 条')).toBeTruthy()
+  })
+})
+
+// Q2 · 喂食：把一次真实踩到的输入变成一条用例。
+//
+// 这一组的分量在于：它是整个实验室里**唯一会写盘**的动作，而写的是**用例文件**——
+// 提示词一个字节都不动。所以三条必须钉住：写进去的东西三样齐全、能删回来、明说要提交。
+describe('PromptLab · 喂食', () => {
+  async function openFeed(container: HTMLElement) {
+    fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
+    await screen.findByText(/golden set 2 条/)
+    fireEvent.click(screen.getByText('喂一条进来'))
+    return container.querySelector('[data-lab-feed]') as HTMLElement
+  }
+
+  it('写输入 + 意图 + 勾断言 → 喂进金标集，并提醒这次改动要提交', async () => {
+    vi.mocked(api.addPromptCase).mockResolvedValue({
+      id: 'from-real-life',
+      intent: '它该指出「串着跑」和「等的时候让出去」是两回事',
+      user: '事件循环就是把协程塞进一个线程里串着跑。',
+      checks: ['asks_a_question'],
+    })
+    const { container } = renderLab()
+    const form = await openFeed(container)
+    expect(form.textContent).toContain('feynman.json') // 写哪儿，先说明白
+    expect(form.textContent).toContain('提示词本身一个字节都不动')
+
+    fireEvent.change(container.querySelector('[data-lab-feed-user]') as HTMLTextAreaElement, {
+      target: { value: '事件循环就是把协程塞进一个线程里串着跑。' },
+    })
+    fireEvent.change(container.querySelector('[data-lab-feed-intent]') as HTMLInputElement, {
+      target: { value: '它该指出「串着跑」和「等的时候让出去」是两回事' },
+    })
+    fireEvent.click(container.querySelector('[data-lab-feed-check="asks_a_question"]') as HTMLElement)
+    fireEvent.click(container.querySelector('[data-lab-feed-save]') as HTMLElement)
+
+    await waitFor(() =>
+      expect(api.addPromptCase).toHaveBeenCalledWith('FEYNMAN_PROMPT', {
+        user: '事件循环就是把协程塞进一个线程里串着跑。',
+        intent: '它该指出「串着跑」和「等的时候让出去」是两回事',
+        checks: ['asks_a_question'],
+      })
+    )
+    expect(await screen.findByText(/已喂进金标集：from-real-life/)).toBeTruthy()
+    expect(screen.getByText(/记得提交/)).toBeTruthy()
+  })
+
+  it('三样缺一不可：没填全 / 没勾断言时，保存按钮是禁用的', async () => {
+    const { container } = renderLab()
+    await openFeed(container)
+    const save = () => container.querySelector('[data-lab-feed-save]') as HTMLButtonElement
+    expect(save().disabled).toBe(true)
+
+    fireEvent.change(container.querySelector('[data-lab-feed-user]') as HTMLTextAreaElement, {
+      target: { value: '一个真实输入' },
+    })
+    expect(save().disabled).toBe(true) // 缺意图
+    fireEvent.change(container.querySelector('[data-lab-feed-intent]') as HTMLInputElement, {
+      target: { value: '它当时应该怎样' },
+    })
+    expect(save().disabled).toBe(true) // 缺断言
+    fireEvent.click(container.querySelector('[data-lab-feed-check="no_list"]') as HTMLElement)
+    expect(save().disabled).toBe(false)
+  })
+
+  it('从报告里那一条喂：输入原样带过来，勾上它挂掉的那条断言', async () => {
+    const { container } = renderLab()
+    fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
+    fireEvent.click(await screen.findByText('跑一次对照（已登记内容）'))
+    await screen.findByText(/1\/2/)
+
+    fireEvent.click(
+      container.querySelector('[data-lab-feed-from="solid-first-try"]') as HTMLElement
+    )
+    const user = container.querySelector('[data-lab-feed-user]') as HTMLTextAreaElement
+    expect(user.value).toBe('事件循环就是一个不停转的圈。') // 原样，不重编
+    const checked = container.querySelector('[data-lab-feed-check="asks_for_layperson"]')
+    expect(checked?.className).toContain('violet') // 它挂掉的那条已勾上
+  })
+
+  it('删一条用例：先问一句，确认了才动文件', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.mocked(api.removePromptCase).mockResolvedValue({
+      key: 'FEYNMAN_PROMPT',
+      removed: 'vague-analogy',
+      left: 1,
+    })
+    const { container } = renderLab()
+    fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
+    await screen.findByText(/golden set 2 条/)
+    fireEvent.click(
+      container.querySelector('[data-lab-case-drop="solid-first-try"]') as HTMLElement
+    )
+    await waitFor(() => expect(api.removePromptCase).toHaveBeenCalledWith('FEYNMAN_PROMPT', 'solid-first-try'))
+    expect(confirmSpy).toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('喂食出错（比如忘勾断言被后端拦下）时照实说', async () => {
+    vi.mocked(api.addPromptCase).mockRejectedValue(new Error('至少勾一条断言'))
+    const { container } = renderLab()
+    await openFeed(container)
+    fireEvent.change(container.querySelector('[data-lab-feed-user]') as HTMLTextAreaElement, {
+      target: { value: '输入' },
+    })
+    fireEvent.change(container.querySelector('[data-lab-feed-intent]') as HTMLInputElement, {
+      target: { value: '意图' },
+    })
+    fireEvent.click(container.querySelector('[data-lab-feed-check="no_list"]') as HTMLElement)
+    fireEvent.click(container.querySelector('[data-lab-feed-save]') as HTMLElement)
+    expect(await screen.findByText(/至少勾一条断言/)).toBeTruthy()
   })
 })
