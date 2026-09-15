@@ -26,16 +26,85 @@ touch real user data.
 **装饰** —— 它们只在「每文件一进程」时生效，而那种模式下本来就是孤立的。删掉它们是一次
 20+ 文件的机械改动，收益是「不再误导读者」；这一轮留着，并在这里说清：
 **新写的测试不要再加这种块**，隔离已经由下面这个 fixture 提供了。
+
+**沙箱要自己收掉（补记）**：每个测试**进程**建一个 `wb-test-sandbox-`，而它从来没有被删过
+—— 实测 `%TEMP%` 里积了 **1592 个、215 MB**（09-14 到 09-15）。所以现在两件事都做：
+进程正常退出时删掉自己那一个（`atexit`），进程被打断留下的旧目录由下面这次**保守清扫**
+顺手扫掉（认前缀、且只清一小时以前的；正在跑的进程不会用一小时前的目录）。
+这与 `turn_eval._sweep_stale_chroma` 是同一条经验：**「跑完把临时目录收掉」这件事，
+不写下来就一定会再犯。**
 """
 import asyncio
+import atexit
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 
 _SANDBOX = Path(tempfile.mkdtemp(prefix="wb-test-sandbox-"))
+
+
+def _sweep_stale_sandboxes(older_than: float = 3600.0) -> int:
+    """清掉以前留下的旧沙箱（进程被打断、Ctrl-C 时留下的那些）。返回清了几个。
+
+    **认前缀、认时间**：认不出来就绝不下手 —— 删错一个正在用的目录，症状是几条毫不相干的
+    测试开始随机失败，那是这个仓库最不想再见到的那类 bug。
+    """
+    root = Path(tempfile.gettempdir())
+    now = time.time()
+    n = 0
+    for d in root.glob("wb-test-sandbox-*"):
+        try:
+            if not d.is_dir() or now - d.stat().st_mtime < older_than:
+                continue
+            shutil.rmtree(d, ignore_errors=True)
+            n += 1
+        except OSError:
+            continue
+    return n
+
+
+def _drop_handles() -> None:
+    """把沙箱里还握着的文件句柄放掉，**不然删不掉**。
+
+    Windows 上这一步不能省：实测 `atexit` 里光 `rmtree(ignore_errors=True)` 是**静默失败**的
+    —— sqlite 的连接还开着，目录里那一堆文件删得掉、`workbench.db` 删不掉，于是每次测试跑
+    都在 `%TEMP%` 里留一个「看起来删过了」的目录（这正是它积到 1592 个的原因）。
+    """
+    try:
+        from app.db import engine
+
+        asyncio.run(engine.dispose())
+    except Exception:  # noqa: BLE001 - 收尾失败不该让测试进程报错
+        pass
+    try:  # chromadb 的共享 client 也握着临时向量库的句柄（同 `turn_eval._drop_index_client`）
+        from app.core import indexer
+
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+        indexer._client = None  # noqa: SLF001
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _remove_sandbox() -> None:
+    _drop_handles()
+    shutil.rmtree(_SANDBOX, ignore_errors=True)
+
+
+def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
+    """会话结束就收掉自己那一个（正常路径）。"""
+    _remove_sandbox()
+
+
+# 进程被打断（Ctrl-C、崩了）时 `pytest_sessionfinish` 不一定跑得到，所以再兜一层。
+atexit.register(_remove_sandbox)
+# 别人（以前）留下的：顺手扫一遍。
+_sweep_stale_sandboxes()
 
 # A stray WB_* export from the shell must not defeat the sandbox.
 for _name in (

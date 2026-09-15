@@ -398,6 +398,16 @@ config 删掉），autouse。顺带把沙箱位置定死（原来 `settings.db_p
 | CI 路径 `run_tests.py` | **ALL 63 TEST FILES PASSED** |
 | `test_migrations.py` | 11 条：没有待跑的不备份、dry-run 真的不写、迁移炸了不许记成已应用、版本号是契约 |
 
+**补记（做 W2a 时顺手发现的）：沙箱从来没有被收掉。** 每个测试**进程**建一个
+`wb-test-sandbox-`，而它一次都没被删过 —— `%TEMP%` 里积了 **1592 个、215 MB**（09-14 到 09-15，
+`run_tests.py` 跑一遍就 +66 个）。修法与 §11 那条同源，而且**第一版修法是错的**：只在 `atexit`
+里 `rmtree(ignore_errors=True)` 是**静默失败**的 —— sqlite 的连接还开着，目录里别的文件删得掉、
+`workbench.db` 删不掉，于是每次都留下一个「看起来删过了」的目录（实测：1592 → 146，但下一次跑
+又 +1）。真正的出口是**先放句柄再删**：`engine.dispose()` + chroma 的
+`SharedSystemClient.clear_system_cache()`，然后 `pytest_sessionfinish` 收自己那一个，
+`atexit` 兜被 Ctrl-C 打断的情况，另加一次保守清扫（认前缀、只清一小时以前的）把历史遗留扫光。
+实测：清理前 146 个（旧的全扫掉了），跑一遍测试后仍是 **146**。
+
 ### W5 最小版：回合账本
 
 **做了什么。** `turn_traces` 一行一回合：轮数、**每个工具**的名称/参数与结果**字节数**/毫秒/
