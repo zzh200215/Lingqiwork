@@ -355,6 +355,18 @@ async def _generate(req: ChatRequest):
 
     llm_messages = [_replay_message(m) for m in history]
 
+    # ---- W3：确定性路由（把「这一轮算不算交付型」从模型手里拿走）----
+    # 每级都记决策与依据（level / confidence / reason），写进回合账本，可离线复算。
+    # 它现在决定两件事：W2a 的补跑要不要动手，以及账本上这一轮是哪一类。
+    from app.core import length_budget, routing
+
+    route_decision = routing.route(req.content or query_text)
+    turn_budget = length_budget.parse_budget(req.content or query_text)
+    if draft is not None:
+        draft["route_level"] = route_decision.level
+        draft["route_kind"] = route_decision.kind
+    log.debug("route %s → %s", (req.content or query_text)[:40], routing.describe(route_decision))
+
     # context compaction: if history is huge, summarize the oldest half
     summary_block: str | None = None
     from app.core import compaction
@@ -504,8 +516,6 @@ async def _generate(req: ChatRequest):
     # 这两条底线之外的第三件事（W4）：**用户这一句里有没有字数预算**。
     # 认出来就挂到这一轮上，`save_artifact` 落盘时报的是服务端数过的字数 ——
     # 「超没超」不再靠模型自我叙述。认不出就是 None（不猜）。
-    from app.core import length_budget
-
     turn_budget = length_budget.parse_budget(req.content or query_text)
 
     async def run_one(r: ResolvedModel, uid: str | None):
@@ -593,10 +603,17 @@ async def _generate(req: ChatRequest):
         # 「该不该补跑」还要看**用户有没有明说要落盘**：判断「这算不算一份成品」是 W3 的活，
         # 在这里猜错的代价是把闲聊变成产出（见 turn_quality.should_retry）。
         quality["asked_to_save"] = turn_quality.asked_to_save(req.content or query_text)
+        quality["route"] = {
+            "delivery": route_decision.delivery,
+            "kind": route_decision.kind,
+            "level": route_decision.level,
+            "confidence": route_decision.confidence,
+            "reason": route_decision.reason,
+        }
         bad = turn_quality.findings(text, saved_by_uid.get(uid))
         # W4：字数那一栏**记服务端数过的数**。没认预算就如实写 None（不编一个「不限」出来）。
         quality["length"] = _length_note(turn_budget, turn_traces[uid], saved_by_uid.get(uid))
-        if turn_quality.should_retry(bad, req.content or query_text):
+        if turn_quality.should_retry(bad, req.content or query_text, route_decision.delivery):
             quality["findings_before"] = bad
             turn_traces[uid]["retried"] = 1
             # 先告诉界面「这一轮没落盘、要补一次」：上一轮那篇长文已经流出去了，
@@ -620,7 +637,9 @@ async def _generate(req: ChatRequest):
             streamed_parts.clear()
             del partial_parts[mark:]
             try:
-                final2 = await one_pass(turn_quality.retry_instruction(bad, req.content or query_text))
+                final2 = await one_pass(
+                    turn_quality.retry_instruction(bad, req.content or query_text, route_decision.delivery)
+                )
             except BaseException:
                 # 补跑炸了：把上一轮那篇正文还给错误分支（那是用户唯一的一份东西）
                 partial_parts.append(kept_text)

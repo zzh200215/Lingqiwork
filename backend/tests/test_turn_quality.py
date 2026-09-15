@@ -135,6 +135,21 @@ def test_a_plain_long_explanation_without_a_claim_is_not_retried():
         assert tq.should_retry(bad, "讲讲数据库索引为什么能让查询变快。") is False
 
 
+def test_a_delivery_verdict_from_the_router_is_enough_to_retry():
+    """W3 接上之后补上的那条：自然说法「帮我写一份本周周报」不带「存」字，
+    以前根本不会补跑（W2a 的边界），现在由路由判定「这是交付型」来触发。"""
+    bad = tq.findings(LONG, [])
+    assert tq.should_retry(bad, "帮我写一份本周周报，300 字左右。", delivery=False) is False
+    assert tq.should_retry(bad, "帮我写一份本周周报，300 字左右。", delivery=True) is True
+    assert tq.retry_instruction(bad, "帮我写一份本周周报，300 字左右。", delivery=True)
+
+
+def test_a_chat_verdict_still_never_retries():
+    """路由说闲聊，就一次都不补 —— 误判的代价是把闲聊变成产出。"""
+    bad = tq.findings(LONG, [])
+    assert tq.should_retry(bad, "讲讲 asyncio 是怎么工作的。", delivery=False) is False
+
+
 def test_an_invented_path_is_never_retried():
     """救不了那句话（它已经说出去了），重跑只是白花一次调用。"""
     bad = tq.findings("产出在 recap/x.md 里。", [])

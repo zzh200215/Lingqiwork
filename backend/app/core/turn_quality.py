@@ -141,16 +141,18 @@ def drop_broken_receipts(artifacts: list | None, vault_dir=None) -> tuple[list, 
     return kept, dropped
 
 
-def should_retry(bad: list[dict], ask: str = "") -> bool:
+def should_retry(bad: list[dict], ask: str = "", delivery: bool = False) -> bool:
     """该不该再跑一次。Pure。**只重试一次，而且只重试「这一轮自己说它是交付」。**
 
-    「这一轮算不算一份成品」**不是 W2a 的判断** —— 那是 W3 的路由。W2a 只在两种情况下
-    动手，两种都不是它猜的：
+    「这一轮算不算一份成品」**不是 W2a 的判断** —— 那是 W3 的路由（`core/routing.py`）。
+    W2a 只在三种情况下动手，三种都不是它猜的：
 
     - **用户明说要落盘**（「存进产出」，`asked_to_save`）：话是用户说的。
     - **模型自己声称存了**（`claims_a_save_without_one`）：话是模型说的。实测那 2/22 轮
-      谎报就是这么来的 —— 正文摊在对话里，开头写着「已存入产出」。它自己都认定这是一次
-      交付了，补跑不涉及「把闲聊变成产出」那个风险。
+      谎报就是这么来的 —— 正文摊在对话里，开头写着「已存入产出」。
+    - **路由判定了这一轮是交付型**（`delivery`，W3）：判据在 `core/routing.py`，在 64 条
+      金标上量过（负例零误判）。这一条补上了 W2a 原来那个缺口 —— 自然说法「帮我写一份
+      本周周报」不带「存」字，以前根本不会补跑。
 
     反过来，一次又长又没落盘、也**没说是交付**的回答（正常的详细解释、空 vault 下
     「我不想凭空编」的正确拒绝）**一次都不补**：误判的代价是把闲聊变成产出，比漏判烦人
@@ -163,7 +165,7 @@ def should_retry(bad: list[dict], ask: str = "") -> bool:
     codes = {f["code"] for f in bad}
     if "long_body_without_a_receipt" not in codes:
         return False
-    return asked_to_save(ask) or "claims_a_save_without_one" in codes
+    return asked_to_save(ask) or bool(delivery) or "claims_a_save_without_one" in codes
 
 
 # 用户明确说要落盘的说法。**收窄到「说了存」这一件事**，不去猜「这算不算成品」：
@@ -181,7 +183,7 @@ def asked_to_save(ask: str) -> bool:
     return any(h.lower() in text for h in SAVE_HINTS)
 
 
-def retry_instruction(bad: list[dict], ask: str = "") -> str:
+def retry_instruction(bad: list[dict], ask: str = "", delivery: bool = False) -> str:
     """重试那一轮要额外带上的一句话。Pure。
 
     明说「上一轮没有落盘」并点名要调哪个工具 —— 这是**结构化的一点**：不指望模型自己
@@ -192,7 +194,7 @@ def retry_instruction(bad: list[dict], ask: str = "") -> str:
     它编。所以结尾明说「不该存就说明理由」—— 补跑问的是「你刚才写的那篇存了吗」，
     不是「无论如何给我存一份」。
     """
-    if not should_retry(bad, ask):
+    if not should_retry(bad, ask, delivery):
         return ""
     return (
         "【系统提示】你上一轮把成品写在对话里了，但一次 `save_artifact` 都没有调用，"

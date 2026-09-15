@@ -304,6 +304,45 @@ def test_no_budget_in_the_ask_means_no_budget_in_the_trace(monkeypatch):
     assert "over" not in trace["flags"]
 
 
+def test_a_natural_delivery_ask_now_gets_the_retry_it_never_had(monkeypatch):
+    """**W3 接进 W2a 之后补上的那个缺口。** 「帮我写一份本周周报，300 字左右。」里没有
+    「存进产出」这四个字，所以 W2a 原来一次都不会补跑 —— 而实测里模型对自然说法几乎不存
+    （两批 1/18）。现在路由判定它是交付型，补跑照常触发。"""
+    asyncio.run(_prepare_db(9109))
+    seen: list = []
+    _stub_turn(
+        monkeypatch,
+        [
+            (LONG, []),
+            ("", [ToolCall("1", "save_artifact", {"kind": "deliver", "title": "周报", "content": "正文"})]),
+            ("存好了。", []),
+        ],
+        seen=seen,
+    )
+    _drive(9109, "帮我写一份本周周报，300 字左右。")
+
+    assert len(seen) == 3, "自然说法也该补跑一次（路由说它是交付型）"
+    trace = _trace(9109)
+    assert trace["retried"] == 1 and trace["quality"]["repaired"] is True
+    assert trace["quality"]["route"]["delivery"] is True
+    assert trace["quality"]["route"]["kind"] == "deliver"
+    assert trace["route_level"] == "rule" and trace["route_kind"] == "deliver"
+
+
+def test_a_chat_turn_records_the_route_and_is_not_retried(monkeypatch):
+    """反过来：闲聊判定的长正文**一次都不补**，而且账本上写着它是闲聊。"""
+    asyncio.run(_prepare_db(9110))
+    seen: list = []
+    _stub_turn(monkeypatch, [(LONG, [])], seen=seen)
+    _drive(9110, "讲讲 asyncio 事件循环是怎么工作的。")
+
+    assert len(seen) == 1
+    trace = _trace(9110)
+    assert trace["retried"] == 0
+    assert trace["quality"]["route"]["delivery"] is False
+    assert trace["route_kind"] == ""
+
+
 # ---------- 白名单：回执指向的文件在半路没了 ----------
 
 
