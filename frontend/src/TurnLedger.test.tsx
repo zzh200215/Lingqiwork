@@ -91,6 +91,50 @@ describe('TurnLedger · 一行事实', () => {
     expect(container.querySelector('[data-turn-flag="lie"]')?.textContent).toBe('声称存了没存')
     expect(container.querySelector('[data-turn-flag="slow"]')?.textContent).toBe('慢')
   })
+
+  // W3：这一轮被判成交付型还是闲聊，判在哪一级。**判定在后端**，界面只显示。
+  it('把路由结论摊出来：交付型带体裁与判据级别', () => {
+    const { container } = render(
+      <ul>
+        <TurnRow
+          t={trace({
+            route_level: 'rule',
+            route_kind: 'deliver',
+            quality: {
+              route: { delivery: true, kind: 'deliver', level: 'rule', confidence: 0.9, reason: '祈使动词 + 体裁名词（deliver）' },
+            },
+          })}
+          now={Date.now()}
+          labels={{}}
+        />
+      </ul>
+    )
+    const tag = container.querySelector('[data-turn-route]')
+    expect(tag?.textContent).toBe('交付型·deliver（rule）')
+    expect(tag?.getAttribute('title')).toContain('祈使动词')
+  })
+
+  it('闲聊也如实写出来（不是不显示）', () => {
+    const { container } = render(
+      <ul>
+        <TurnRow
+          t={trace({ route_level: 'vector', quality: { route: { delivery: false, level: 'vector' } } })}
+          now={Date.now()}
+          labels={{}}
+        />
+      </ul>
+    )
+    expect(container.querySelector('[data-turn-route]')?.textContent).toBe('闲聊（vector）')
+  })
+
+  it('老行没有这一项就不显示 —— 不编一个「闲聊」出来', () => {
+    const { container } = render(
+      <ul>
+        <TurnRow t={trace()} now={Date.now()} labels={{}} />
+      </ul>
+    )
+    expect(container.querySelector('[data-turn-route]')).toBeNull()
+  })
 })
 
 describe('TurnLedger · 这一栏', () => {

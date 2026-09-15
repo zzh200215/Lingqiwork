@@ -31,6 +31,13 @@ function shortModel(id: string): string {
 
 export function TurnRow({ t, now, labels }: { t: TurnTrace; now: number; labels: Record<string, string> }) {
   const tools = t.tool_calls.length
+  const r = t.quality?.route
+  // 「交付型·交付（rule）」/「闲聊（vector）」/ 老行没有这一项就不显示（不编一个）
+  const route = r
+    ? r.delivery
+      ? `交付型${r.kind ? `·${r.kind}` : ''}（${r.level}）`
+      : `闲聊（${r.level}）`
+    : ''
   return (
     <li data-turn={t.id} className="border-t border-neutral-100 py-1.5 text-xs dark:border-neutral-800">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -47,6 +54,17 @@ export function TurnRow({ t, now, labels }: { t: TurnTrace; now: number; labels:
         <span className="text-neutral-400">
           {t.artifacts.length > 0 ? `${t.artifacts.length} 份产出` : `正文 ${t.answer_chars} 字`}
         </span>
+        {route ? (
+          // W3：这一轮被判成交付型还是闲聊，以及判在哪一级。**判定在后端**（`core/routing.py`），
+          // 这里只显示 —— 界面自己再算一遍就是第二份实现。
+          <span
+            data-turn-route={route}
+            className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+            title={t.quality?.route?.reason || '确定性路由（W3）'}
+          >
+            {route}
+          </span>
+        ) : null}
         {t.retried > 0 ? <span className="text-amber-600 dark:text-amber-400">重试 {t.retried}</span> : null}
         {/* 毛病：标签与筛选项同一份文案（后端的 FILTERS），这里不另立说法 */}
         {t.flags.map((f) => (

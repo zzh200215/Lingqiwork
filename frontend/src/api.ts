@@ -1308,6 +1308,11 @@ export interface TurnTrace {
   /** 确定性路由（W3）：还没接路由时是 '' */
   route_level: string
   route_kind: string
+  /** W2a/W4 的校验结论：那些数**由后端算**，界面只显示（`quality`） */
+  quality?: QualityNote & {
+    route?: { delivery?: boolean; kind?: string; level?: string; confidence?: number; reason?: string }
+    length?: { budget?: number | null; chars?: number; over?: boolean; saves?: number }
+  }
   rounds: number
   tool_calls: { name: string; args_chars: number; result_chars: number; ms: number; ok: boolean }[]
   tokens_in: number
