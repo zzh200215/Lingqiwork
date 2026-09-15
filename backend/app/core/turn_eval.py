@@ -474,6 +474,51 @@ def _reset_index() -> None:
         log.debug("turn eval: retriever invalidate failed", exc_info=True)
 
 
+def _drop_index_client() -> None:
+    """把临时向量库的 client 与 chroma 的**共享 system 缓存**一起丢掉。
+
+    只把 `indexer._client` 置空是不够的：chromadb 自己有一个按 path 索引的共享 system
+    单例，它继续握着文件句柄，于是临时目录在 Windows 上删不掉（实测一次测试跑下来积了
+    18 个）。`clear_system_cache()` 是 chromadb 1.5 提供的官方出口。
+    """
+    import gc
+
+    from app.core import indexer
+
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+    except Exception:  # noqa: BLE001 - 换版本时这个方法可能没了，不该让评测挂掉
+        log.debug("turn eval: chroma shared system cache not cleared", exc_info=True)
+    indexer._client = None  # noqa: SLF001 - 这就是那条缝
+    gc.collect()
+
+
+def _sweep_stale_chroma() -> int:
+    """顺手清掉**以前**留下的临时向量库（进程被打断时留下的那些）。
+
+    靠 `_drop_index_client` 当场删是主路；这一条是兜底：上一轮崩了、Ctrl-C 了，
+    残留就永远躺在那儿。只删这个进程之外的旧目录，且认前缀 —— 认不出来就绝不下手。
+    """
+    import shutil
+    import tempfile
+    import time
+
+    root = Path(tempfile.gettempdir())
+    now = time.time()
+    n = 0
+    for d in root.glob(f"{SCRATCH_CHROMA_MARK}*"):
+        try:
+            if not d.is_dir() or now - d.stat().st_mtime < 3600:
+                continue  # 一小时以内的可能正被别的进程用着
+            shutil.rmtree(d)
+            n += 1
+        except OSError:
+            continue
+    return n
+
+
 @contextmanager
 def _scratch_index():
     """跑评测时换一个**临时向量库** —— 铺进去的材料要能被产品自己的检索找到。
@@ -494,16 +539,18 @@ def _scratch_index():
     try:
         yield tmp
     finally:
-        indexer._client = None  # noqa: SLF001 - 先把临时 client 丢掉
-        indexer._client, settings.chroma_path = old  # noqa: SLF001
+        settings.chroma_path = old[1]
+        _drop_index_client()
+        indexer._client = old[0]  # noqa: SLF001
         _rmtree_retry(tmp)
 
 
 def _rmtree_retry(path: Path, tries: int = 3) -> None:
     """删临时目录，带重试。**Windows 上 chroma 会多握一会儿文件句柄**。
 
-    不重试的话每跑一次评测就在系统 temp 里留一个几十 MB 的库（实测留下了 29 个）。
-    删不掉也不报错 —— 一个留在 temp 里的目录不值得让评测失败，但会记一条 debug。
+    不重试的话每跑一次评测就在系统 temp 里留一个几十 MB 的库（实测一次测试跑下来 18 个）。
+    删不掉也不报错 —— 一个留在 temp 里的目录不值得让评测失败，但会记一条 debug，
+    并且下次跑的时候 `_sweep_stale_chroma` 会把它扫掉。
     """
     import gc
     import shutil
@@ -515,7 +562,7 @@ def _rmtree_retry(path: Path, tries: int = 3) -> None:
         except OSError:
             gc.collect()
             if i == tries - 1:
-                log.debug("turn eval: 临时向量库没删掉（留在 %s）", path)
+                log.debug("turn eval: 临时向量库没删掉（留在 %s，下次会扫）", path)
 
 
 @contextmanager
@@ -659,6 +706,9 @@ async def run(
 
     reps = max(1, int(repeat or 1))
     t0 = time.time()
+    swept = _sweep_stale_chroma()
+    if swept:
+        log.info("turn eval: 扫掉了 %s 个以前留下的临时向量库", swept)
     with _scratch_vault() as vault, _scratch_index():
         async with usage_ledger.span("turn_eval", scenario):
             results: list[dict] = []
