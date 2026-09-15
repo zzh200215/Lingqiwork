@@ -5,10 +5,17 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import CodeBlock from './CodeBlock'
 import ArtifactReceipt from './ArtifactReceipt'
-import { upsertArtifact, claimsSaveWithoutArtifact } from './artifacts'
+import { upsertArtifact, saveHint } from './artifacts'
 import SaveToVault from './SaveToVault'
 import { api, type AgentPreset, type Conversation, type PromptItem, type ProviderConfig } from './api'
-import { streamChat, streamCollab, type ArtifactRef, type SourceRef, type ToolTrace } from './stream'
+import {
+  streamChat,
+  streamCollab,
+  type ArtifactRef,
+  type QualityNote,
+  type SourceRef,
+  type ToolTrace,
+} from './stream'
 import { useVoiceInput } from './voice'
 import type { SearchHit } from './api'
 
@@ -22,6 +29,9 @@ interface ChatMessage {
   /** 这一轮落盘的产出（`save_artifact` 的副产物）。正文在 vault 文件里，
    *  这里只留回执——点开才看正文，对话流不被长文淹。 */
   artifacts?: ArtifactRef[]
+  /** W2a：服务端对这一轮两条底线的校验结论（该存的存了没 / 有没有编路径）。
+   *  **判定在服务端**，这里只显示。 */
+  quality?: QualityNote
   modelId?: string // which model produced this answer (comparison mode)
   modelLabel?: string
   streamUid?: string // 'a'/'b' while streaming in comparison mode
@@ -164,14 +174,35 @@ const MessageRow = React.memo(function MessageRow({
               ))}
             </ul>
           )}
-          {!m.streaming && claimsSaveWithoutArtifact(m.content, m.artifacts) && (
-            // 说了存、其实没落盘。不能装作没看见——用户会以为东西在产出区。
-            // 也不删那句话：它是模型真说的，删掉等于替它圆谎。
-            <p className="not-prose mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
-              ⚠️ 这一轮说「已存入产出」，但实际没有落盘——东西只在上面这段回复里，
-              产出区里没有。用下面的「📄 存进产出」补一下。
-            </p>
-          )}
+          {!m.streaming &&
+            (() => {
+              // 这一轮该不该给用户一句实话。判据在服务端（W2a），这里只显示。
+              const hint = saveHint(m.content, m.artifacts, m.quality)
+              if (!hint) return null
+              return (
+                <p
+                  data-save-hint={hint.primary ? 'primary' : 'info'}
+                  className={
+                    hint.primary
+                      ? 'not-prose mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                      : 'not-prose mt-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900/60'
+                  }
+                >
+                  {hint.primary ? '⚠️ ' : 'ℹ️ '}
+                  {hint.text}
+                  {/* 一键补：**提到最显眼处**（不靠 hover 才出现的操作栏）。内容已经在
+                      手上，点一个体裁就落盘——这是 W2a 修复失败时的人工出口。 */}
+                  {hint.primary && convId !== undefined && m.id !== undefined && onSavedArtifact ? (
+                    <SaveToVault
+                      conversationId={convId}
+                      messageId={m.id}
+                      onSaved={onSavedArtifact}
+                      className="ml-1 align-middle"
+                    />
+                  ) : null}
+                </p>
+              )
+            })()}
           {m.tools && m.tools.length > 0 && (
             <details className="not-prose mt-2 rounded-lg border border-neutral-200 bg-neutral-50 text-xs transition-colors dark:border-neutral-800 dark:bg-neutral-900/60">
               <summary className="cursor-pointer px-3 py-1.5 text-neutral-500 transition-colors hover:text-violet-600 dark:hover:text-violet-400">
@@ -571,6 +602,9 @@ function ChatView() {
         // 产出回执是这一轮唯一有信息量的东西（正文可能在 vault 文件里）——
         // 不hydrate 它，刷新后就只剩一条空壳消息。
         artifacts: m.artifacts ?? undefined,
+        // W2a 的校验结论也在账本里：不 hydrate 它，刷新后那条「没落盘」的实话就没了，
+        // 而用户看到的是一条看起来正常、其实东西没进产出区的回答。
+        quality: m.quality ?? undefined,
         feedback: m.feedback ?? undefined,
       })) || []
     )
@@ -735,6 +769,51 @@ function ChatView() {
             })
           },
           onError: (msg) => setError(msg),
+          onQuality: (note, uid) => {
+            // W2a。两种帧：①正在补跑（`retried`）——上一轮那篇长文已经流到屏幕上了，
+            // 这一帧就是让界面把它丢掉，换成补跑那一句短回执（长文不进对话是这件事的
+            // 全部目的，光在库里不存、屏幕上还留着，等于没做）；
+            // ②收尾那一帧——把服务端的判据结论挂在这条消息上，提示由它决定。
+            if (note.retried && !note.repaired) {
+              setMessages((prev) => {
+                const next = [...prev]
+                const idx =
+                  uid != null
+                    ? next.findLastIndex((m) => m.streaming && m.streamUid === uid)
+                    : next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
+                if (idx === -1) return next
+                next[idx] = { ...next[idx], content: '', quality: note }
+                return next
+              })
+              // 补跑那一轮的正文要重新累积：自动播报读的是这里的文本
+              if (!uid || uid === 'a') streamedPrimary = ''
+              pending[uid ?? 'none'] = ''
+              return
+            }
+            setMessages((prev) => {
+              const next = [...prev]
+              const idx =
+                uid != null
+                  ? next.findLastIndex((m) => m.streaming && m.streamUid === uid)
+                  : next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
+              if (idx === -1) return next
+              next[idx] = { ...next[idx], quality: note }
+              return next
+            })
+          },
+          onSaved: (messageId, uid) => {
+            // 这一轮刚落库的那条消息：把 id 接上，「📄 存进产出」当场就能点。
+            setMessages((prev) => {
+              const next = [...prev]
+              const idx =
+                uid != null
+                  ? next.findLastIndex((m) => m.streamUid === uid)
+                  : next.findLastIndex((m) => m.role === 'assistant')
+              if (idx === -1) return next
+              next[idx] = { ...next[idx], id: messageId }
+              return next
+            })
+          },
           onDone: () => {},
           onFollowups: (qs) => setFollowups(qs),
           onMemorized: (facts) => {
@@ -981,6 +1060,7 @@ function ChatView() {
           content: msg.content,
           sources: (msg as { sources?: SourceRef[] | null }).sources ?? undefined,
           artifacts: msg.artifacts ?? undefined,
+          quality: msg.quality ?? undefined,
         })) || []
       )
       setFollowups([])

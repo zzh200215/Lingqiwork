@@ -6,7 +6,7 @@
  *  否则**流式期间**会看到 2～4 条指向同一个文件的链接，刷新之后才变成 1 条。
  *  两条链接点开是同一份东西——多出来的那条是谎话。
  */
-import type { ArtifactRef } from './stream'
+import type { ArtifactRef, QualityNote } from './stream'
 
 /** 按 `path` 去重、留最后一条（最后一条带着最新的落盘动作，如「更新」）。 */
 export function upsertArtifact(
@@ -47,4 +47,43 @@ export function claimsSaveWithoutArtifact(
   const text = (content ?? '').trim()
   if (!text) return false
   return SAVE_CLAIM_MARKERS.some((m) => text.includes(m))
+}
+
+/** 这一轮该不该给用户一句提示，以及提示什么。 */
+export interface SaveHint {
+  text: string
+  /** 要不要把「📄 存进产出」提到最显眼处（一键补）。
+   *  **只有「用户明说要落盘、它却没落」时才为真** —— 对一次「没有素材，我不想凭空编」
+   *  的正确拒绝，提那个按钮是在误导人。 */
+  primary: boolean
+}
+
+/** 这一轮要显示的那一条产出提示（没有就返回 null）。
+ *
+ *  **判据不在前端**（W2a）：`long_body_without_a_receipt` / `invented_path` 由服务端在
+ *  `core/turn_quality.py` 一处判、随 `quality` 帧发过来，这里只负责把它变成一句话。
+ *  前端唯一自己判的是「说了存却没回执」——那条本来就在前端有一份（`claimsSaveWithoutArtifact`），
+ *  和后端 `chat._save_claim_markers` 是成对的，两边的例句是同一批。
+ */
+export function saveHint(
+  content: string | undefined,
+  artifacts: ArtifactRef[] | undefined,
+  quality?: QualityNote
+): SaveHint | null {
+  const has = !!artifacts?.length
+  const codes = quality?.codes ?? []
+  if (!has && claimsSaveWithoutArtifact(content, artifacts)) {
+    return { text: '这一轮说「已存入产出」，但实际没有落盘——东西只在上面这段回复里，产出区里没有。', primary: true }
+  }
+  if (!has && codes.includes('long_body_without_a_receipt') && quality?.asked_to_save) {
+    return { text: '这段回答是一份成品，却没进产出区（服务端补跑过一次还是没落盘）。', primary: true }
+  }
+  if (codes.includes('invented_path')) {
+    return { text: '回复里提到的产出路径不在这一轮的回执里——点开是空的。', primary: false }
+  }
+  const dropped = quality?.dropped_receipts?.[0]
+  if (dropped) {
+    return { text: `有一条产出回执没给出去：${dropped.why ?? '过不了校验'}`, primary: false }
+  }
+  return null
 }

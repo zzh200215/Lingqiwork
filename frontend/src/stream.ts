@@ -28,6 +28,23 @@ export interface ArtifactRef {
   action?: string
 }
 
+/** W2a：服务端对**这一轮**的两条底线校验结论。判定在 `core/turn_quality.py` 一处，
+ *  界面只负责显示 —— 前端再算一遍就是第二份实现，两份分叉的那天这条提示就没人敢信了。 */
+export interface QualityNote {
+  /** 命中的判据代码（`long_body_without_a_receipt` / `invented_path` /
+   *  `claims_a_save_without_one`…）。空数组 = 这一轮两条底线都过了。 */
+  codes?: string[]
+  /** 服务端替它补跑过一次（上一轮没落盘）。 */
+  retried?: boolean
+  /** 补跑成功、东西真进产出区了。 */
+  repaired?: boolean
+  /** 用户这一句里明说过要落盘（「存进产出」）。**只有为真时**才把「存进产出」
+   *  按钮提到最显眼处 —— 对一次「我不想凭空编」的正确拒绝，提那个按钮是在误导人。 */
+  asked_to_save?: boolean
+  /** 没能给出去的回执（过不了白名单）与原因。界面不渲染成链接，但要如实说一句。 */
+  dropped_receipts?: { path?: string; why?: string }[]
+}
+
 export interface StreamCallbacks {
   onDelta: (text: string, uid?: string) => void
   onError: (message: string) => void
@@ -35,6 +52,10 @@ export interface StreamCallbacks {
   onSources?: (sources: SourceRef[]) => void
   onTool?: (tc: ToolTrace) => void
   onToolResult?: (name: string, meta: Record<string, unknown>, uid?: string) => void
+  onQuality?: (note: QualityNote, uid?: string) => void
+  /** 这一轮刚落库的那条消息的 id（跑完才有）。界面拿它把气泡接上后端，
+   *  于是「📄 存进产出」当场就能点，不用先刷新。 */
+  onSaved?: (messageId: number, uid?: string) => void
   onFollowups?: (questions: string[]) => void
   onModelDone?: (uid: string) => void
   onMemorized?: (facts: string[]) => void
@@ -96,6 +117,8 @@ export async function streamChat(
       else if (event === 'tool_call') cb.onTool?.({ name: data.name as string, arguments: data.arguments as Record<string, unknown> })
       else if (event === 'tool_result')
         cb.onToolResult?.(data.name as string, (data.meta ?? {}) as Record<string, unknown>, data.uid as string | undefined)
+      else if (event === 'quality') cb.onQuality?.(data as QualityNote, data.uid as string | undefined)
+      else if (event === 'saved') cb.onSaved?.(data.message_id as number, data.uid as string | undefined)
       else if (event === 'followups') cb.onFollowups?.(data.questions as string[])
       else if (event === 'answer_done') cb.onModelDone?.(data.uid as string)
       else if (event === 'memorized') cb.onMemorized?.(data.facts as string[])

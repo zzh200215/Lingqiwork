@@ -6,8 +6,8 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { upsertArtifact, claimsSaveWithoutArtifact } from './artifacts'
-import type { ArtifactRef } from './stream'
+import { upsertArtifact, claimsSaveWithoutArtifact, saveHint } from './artifacts'
+import type { ArtifactRef, QualityNote } from './stream'
 
 function art(path: string, extra: Partial<ArtifactRef> = {}): ArtifactRef {
   return {
@@ -76,5 +76,54 @@ describe('claimsSaveWithoutArtifact', () => {
     for (const text of HONEST) {
       expect(claimsSaveWithoutArtifact(text, undefined), text).toBe(false)
     }
+  })
+})
+
+// W2a：提示该不该出现、要不要把「存进产出」提到最显眼处。
+// **判据在服务端**（`core/turn_quality.py`，随 `quality` 帧下来），这里只负责把它
+// 变成一句话 —— 唯一自己判的是上面那条「说了存却没回执」。
+describe('saveHint', () => {
+  const LONG_REPLY = '本周的工作可以分成三段。'.repeat(40)
+
+  it('说了存却没回执 → 一条警告，而且按钮要提到最显眼处', () => {
+    const hint = saveHint('已存入产出：周报', undefined)
+    expect(hint?.primary).toBe(true)
+    expect(hint?.text).toContain('没有落盘')
+  })
+
+  it('服务端判了「长文没落盘」且用户说过要存 → 警告 + 一键补', () => {
+    const q: QualityNote = { codes: ['long_body_without_a_receipt'], asked_to_save: true }
+    const hint = saveHint(LONG_REPLY, undefined, q)
+    expect(hint?.primary).toBe(true)
+  })
+
+  it('用户没说要存 → 不提示也不给按钮（对一次正确的拒绝是在误导人）', () => {
+    const q: QualityNote = { codes: ['long_body_without_a_receipt'], asked_to_save: false }
+    expect(saveHint(LONG_REPLY, undefined, q)).toBeNull()
+  })
+
+  it('有回执就都不提示 —— 东西确实在产出区', () => {
+    const arts = [art('deliver/x.md')]
+    const q: QualityNote = { codes: ['long_body_without_a_receipt'], asked_to_save: true }
+    expect(saveHint(LONG_REPLY, arts, q)).toBeNull()
+  })
+
+  it('编造路径 → 一条说明，但**不提按钮**（没有东西可补，正文就是正文）', () => {
+    const hint = saveHint('见 recap/编的.md', undefined, { codes: ['invented_path'] })
+    expect(hint?.primary).toBe(false)
+    expect(hint?.text).toContain('不在这一轮的回执里')
+  })
+
+  it('回执没给出去 → 把原因如实说出来', () => {
+    const hint = saveHint('存好了', undefined, {
+      codes: [],
+      dropped_receipts: [{ path: 'recap/x.md', why: '回执指向的文件不在盘上：recap/x.md' }],
+    })
+    expect(hint?.primary).toBe(false)
+    expect(hint?.text).toContain('不在盘上')
+  })
+
+  it('一切正常 → 没有提示', () => {
+    expect(saveHint('写完了，你看这样行不行。', undefined, { codes: [] })).toBeNull()
   })
 })

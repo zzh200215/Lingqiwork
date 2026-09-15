@@ -1,6 +1,6 @@
 // API types + fetch helpers
 
-import type { ArtifactRef } from './stream'
+import type { ArtifactRef, QualityNote } from './stream'
 
 export interface ProviderConfig {
   id: number
@@ -208,6 +208,8 @@ export interface Message {
   /** 这一轮落盘的产出回执（`save_artifact` 的副产物）。正文在 vault 文件里，
    *  刷新后就是靠它把「已存入产出」那行重建出来的。 */
   artifacts?: ArtifactRef[] | null
+  /** W2a 的两条底线校验结论（从回合账本读，不在界面重算）。 */
+  quality?: QualityNote | null
   model_id?: string | null
   feedback?: 'up' | 'down' | null
   created_at: string

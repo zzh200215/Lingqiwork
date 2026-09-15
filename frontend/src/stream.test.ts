@@ -263,3 +263,57 @@ describe('streamChat 的 tool_result', () => {
     }
   })
 })
+
+// W2a：两条底线的校验结论 + 这一轮刚落库的消息 id。两帧都哑了的话，界面既看不到
+// 「该存没存」的实话，也点不了那条「📄 存进产出」的人工出口（它按 message id 存）。
+describe('streamChat 的 quality / saved', () => {
+  it('quality 帧带着判据结论与 uid', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([
+      'event: quality\ndata: {"codes":["long_body_without_a_receipt"],"retried":true,"asked_to_save":true}\n\n' +
+        'event: done\ndata: {}\n\n',
+    ])))
+    try {
+      const seen: { codes?: string[]; retried?: boolean; asked?: boolean; uid?: string }[] = []
+      await streamChat(1, 'x', false, {
+        onDelta: () => {},
+        onError: () => {},
+        onDone: () => {},
+        onQuality: (note, uid) =>
+          seen.push({ codes: note.codes, retried: note.retried, asked: note.asked_to_save, uid }),
+      }, new AbortController().signal)
+      expect(seen).toEqual([{ codes: ['long_body_without_a_receipt'], retried: true, asked: true, uid: undefined }])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('saved 帧把 message_id 交给界面（对比模式带 uid）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([
+      'event: done\ndata: {}\n\n' +
+        'event: saved\ndata: {"uid":"b","message_id":42}\n\n',
+    ])))
+    try {
+      const seen: [number, string | undefined][] = []
+      await streamChat(1, 'x', false, {
+        onDelta: () => {},
+        onError: () => {},
+        onDone: () => {},
+        onSaved: (id, uid) => seen.push([id, uid]),
+      }, new AbortController().signal)
+      expect(seen).toEqual([[42, 'b']])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('两种帧都没接时不炸', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([
+      'event: quality\ndata: {"codes":[]}\n\nevent: saved\ndata: {"message_id":1}\n\nevent: done\ndata: {}\n\n',
+    ])))
+    try {
+      await streamChat(1, 'x', false, { onDelta: () => {}, onError: () => {}, onDone: () => {} }, new AbortController().signal)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
