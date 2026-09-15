@@ -4,8 +4,12 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import CodeBlock from './CodeBlock'
+import ArtifactReceipt from './ArtifactReceipt'
+import { upsertArtifact, claimsSaveWithoutArtifact } from './artifacts'
+import SaveToVault from './SaveToVault'
 import { api, type AgentPreset, type Conversation, type PromptItem, type ProviderConfig } from './api'
-import { streamChat, streamCollab, type SourceRef, type ToolTrace } from './stream'
+import { streamChat, streamCollab, type ArtifactRef, type SourceRef, type ToolTrace } from './stream'
+import { useVoiceInput } from './voice'
 import type { SearchHit } from './api'
 
 interface ChatMessage {
@@ -15,6 +19,9 @@ interface ChatMessage {
   streaming?: boolean
   sources?: SourceRef[]
   tools?: ToolTrace[] // tool calls made this turn (ephemeral, not persisted)
+  /** 这一轮落盘的产出（`save_artifact` 的副产物）。正文在 vault 文件里，
+   *  这里只留回执——点开才看正文，对话流不被长文淹。 */
+  artifacts?: ArtifactRef[]
   modelId?: string // which model produced this answer (comparison mode)
   modelLabel?: string
   streamUid?: string // 'a'/'b' while streaming in comparison mode
@@ -44,6 +51,8 @@ const MessageRow = React.memo(function MessageRow({
   onFeedback,
   onSpeak,
   speaking,
+  convId,
+  onSavedArtifact,
 }: {
   m: ChatMessage
   onRegenerate?: () => void
@@ -52,6 +61,8 @@ const MessageRow = React.memo(function MessageRow({
   onFeedback?: (rating: 'up' | 'down' | null) => void
   onSpeak?: (m: ChatMessage) => void
   speaking?: boolean
+  convId?: number
+  onSavedArtifact?: (art: ArtifactRef) => void
 }) {
   const [copied, setCopied] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -144,6 +155,23 @@ const MessageRow = React.memo(function MessageRow({
           )}
           <MarkdownBody text={m.content} />
           {m.streaming && <span className="stream-cursor" />}
+          {m.artifacts && m.artifacts.length > 0 && (
+            <ul className="not-prose mt-2 space-y-1.5">
+              {m.artifacts.map((a, i) => (
+                <li key={`${a.path}-${i}`}>
+                  <ArtifactReceipt art={a} />
+                </li>
+              ))}
+            </ul>
+          )}
+          {!m.streaming && claimsSaveWithoutArtifact(m.content, m.artifacts) && (
+            // 说了存、其实没落盘。不能装作没看见——用户会以为东西在产出区。
+            // 也不删那句话：它是模型真说的，删掉等于替它圆谎。
+            <p className="not-prose mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+              ⚠️ 这一轮说「已存入产出」，但实际没有落盘——东西只在上面这段回复里，
+              产出区里没有。用下面的「📄 存进产出」补一下。
+            </p>
+          )}
           {m.tools && m.tools.length > 0 && (
             <details className="not-prose mt-2 rounded-lg border border-neutral-200 bg-neutral-50 text-xs transition-colors dark:border-neutral-800 dark:bg-neutral-900/60">
               <summary className="cursor-pointer px-3 py-1.5 text-neutral-500 transition-colors hover:text-violet-600 dark:hover:text-violet-400">
@@ -230,6 +258,13 @@ const MessageRow = React.memo(function MessageRow({
               ↻ 重新生成
             </button>
           )}
+          {convId !== undefined && m.id !== undefined && onSavedArtifact && (
+            <SaveToVault
+              conversationId={convId}
+              messageId={m.id}
+              onSaved={onSavedArtifact}
+            />
+          )}
           {onFork && (
             <button
               onClick={onFork}
@@ -308,10 +343,13 @@ function ChatView() {
   const [queuedMsgs, setQueuedMsgs] = useState<string[]>([])
   const queuedRef = useRef<string[]>([])
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const [recording, setRecording] = useState(false)
-  const [transcribing, setTranscribing] = useState(false)
-  const recorderRef = useRef<MediaRecorder | null>(null)
-  const micChunksRef = useRef<Blob[]>([])
+  // 录音 → 转写：实现搬去了 `voice.ts`，三处共用（这里、今日日记、零柒面板）。
+  // 拆出 `recording` / `transcribing` 是为了下面的 JSX 一个字都不用改。
+  const voice = useVoiceInput(
+    (t) => setInput((prev) => (prev ? `${prev} ${t}` : t)),
+    setError
+  )
+  const { recording, transcribing } = voice
   const [ocrBusy, setOcrBusy] = useState('')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [speakingKey, setSpeakingKey] = useState<string | null>(null)
@@ -530,6 +568,9 @@ function ChatView() {
         role: m.role,
         content: m.content,
         sources: (m as { sources?: SourceRef[] | null }).sources ?? undefined,
+        // 产出回执是这一轮唯一有信息量的东西（正文可能在 vault 文件里）——
+        // 不hydrate 它，刷新后就只剩一条空壳消息。
+        artifacts: m.artifacts ?? undefined,
         feedback: m.feedback ?? undefined,
       })) || []
     )
@@ -550,6 +591,14 @@ function ChatView() {
         prev.map((x) => (x === m ? { ...x, feedback: m.feedback } : x))
       )
     }
+  }
+
+  /** 人工把一条回答存成产出后，把回执挂回那条消息。落盘已经由服务端做完，
+   *  这里只更新界面——回执是点开 vault 文件的那条线索，不能等下次刷新才有。 */
+  function attachSavedArtifact(m: ChatMessage, art: ArtifactRef) {
+    setMessages((prev) =>
+      prev.map((x) => (x === m ? { ...x, artifacts: upsertArtifact(x.artifacts, art) } : x))
+    )
   }
 
   async function newChat() {
@@ -666,6 +715,25 @@ function ChatView() {
               return next
             })
           },
+          onToolResult: (_name, meta, uid) => {
+            const art = meta.artifact as ArtifactRef | undefined
+            if (!art?.href) return
+            setMessages((prev) => {
+              const next = [...prev]
+              // uid 只在对比模式（A/B 两路）里有值；单路时找最后一条流式消息
+              const idx =
+                uid != null
+                  ? next.findLastIndex((m) => m.streaming && m.streamUid === uid)
+                  : next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
+              if (idx === -1) return next
+              const cur = next[idx]
+              // 按 path 去重留最后一条：同一轮里同一个文件被存了两版时，流式期间
+              // 不能并排出现两条指向同一处的回执（刷新后从库里读到的只有一条，
+              // 两边不一致更糟）。见 `artifacts.ts`。
+              next[idx] = { ...cur, artifacts: upsertArtifact(cur.artifacts, art) }
+              return next
+            })
+          },
           onError: (msg) => setError(msg),
           onDone: () => {},
           onFollowups: (qs) => setFollowups(qs),
@@ -691,16 +759,17 @@ function ChatView() {
       setMessages((prev) => {
         const next = [...prev]
         if (!got) {
-          // nothing streamed — drop trailing empty placeholders
+          // 一个字都没吐：真正的空占位丢掉。但**落过产出的那一轮不能丢**——正文在
+          // vault 文件里，那行回执是这一轮仅有的记录，pop 掉它等于当场把它抹了。
           while (next.length && !next[next.length - 1].content && next[next.length - 1].streaming) {
+            if (next[next.length - 1].artifacts?.length) break
             next.pop()
           }
-        } else {
-          for (let i = 0; i < next.length; i++) {
-            if (next[i].streaming) {
-              const { streamUid: _s, ...rest } = next[i] as ChatMessage & { streamUid?: string }
-              next[i] = { ...rest, streaming: false }
-            }
+        }
+        for (let i = 0; i < next.length; i++) {
+          if (next[i].streaming) {
+            const { streamUid: _s, ...rest } = next[i] as ChatMessage & { streamUid?: string }
+            next[i] = { ...rest, streaming: false }
           }
         }
         return next
@@ -719,44 +788,6 @@ function ChatView() {
         await dispatchMessage(activeId, next)
       }
     }
-  }
-
-  function toggleMic() {
-    if (recording) {
-      recorderRef.current?.stop()
-      return
-    }
-    if (transcribing) return
-    setError('')
-    navigator.mediaDevices
-      .getUserMedia({ audio: true })
-      .then((stream) => {
-        const rec = new MediaRecorder(stream)
-        micChunksRef.current = []
-        rec.ondataavailable = (e) => {
-          if (e.data.size > 0) micChunksRef.current.push(e.data)
-        }
-        rec.onstop = async () => {
-          stream.getTracks().forEach((t) => t.stop())
-          setRecording(false)
-          const blob = new Blob(micChunksRef.current, { type: rec.mimeType || 'audio/webm' })
-          if (blob.size < 800) return // accidental tap — nothing audible
-          setTranscribing(true)
-          try {
-            const r = await api.transcribeAudio(blob)
-            if (r.text) setInput((prev) => (prev ? `${prev} ${r.text}` : r.text))
-            else setError('没有识别到语音内容')
-          } catch (e) {
-            setError(`语音识别失败：${String(e)}`)
-          } finally {
-            setTranscribing(false)
-          }
-        }
-        rec.start()
-        recorderRef.current = rec
-        setRecording(true)
-      })
-      .catch(() => setError('无法访问麦克风 — 请检查系统/浏览器权限'))
   }
 
   async function send() {
@@ -949,6 +980,7 @@ function ChatView() {
           role: msg.role,
           content: msg.content,
           sources: (msg as { sources?: SourceRef[] | null }).sources ?? undefined,
+          artifacts: msg.artifacts ?? undefined,
         })) || []
       )
       setFollowups([])
@@ -1325,6 +1357,13 @@ function ChatView() {
                     m.role === 'assistant' && !m.streaming ? () => void speakText(m.content, msgKey(m)) : undefined
                   }
                   speaking={speakingKey === msgKey(m)}
+                  convId={activeId ?? undefined}
+                  onSavedArtifact={
+                    // 已经有回执的不再提供——这条出口是为「模型没存」那一轮准备的
+                    !busy && m.id && !m.streaming && !m.artifacts?.length
+                      ? (art) => attachSavedArtifact(m, art)
+                      : undefined
+                  }
                 />
               ))}
               {memorizedNote && (
@@ -1426,7 +1465,9 @@ function ChatView() {
             </span>
           </div>
         )}
-        <div className="relative mx-auto flex max-w-3xl items-end gap-2">
+        {/* data-pet-clear：右下角的零柒按这个属性给自己让位——
+            这个输入行在窄屏上正好压在它底下（见 PetWidget 的 dodge）。 */}
+        <div data-pet-clear className="relative mx-auto flex max-w-3xl items-end gap-2">
           {/* min-w-0：输入框自己的固有宽度（textarea 按字符数算）不肯缩，
               右边的按钮又都是固定宽。窄窗格（分栏侧栏最窄 260）里这一行会顶出去。 */}
           <div className="relative min-w-0 flex-1">
@@ -1611,7 +1652,7 @@ function ChatView() {
             📷
           </button>
           <button
-            onClick={toggleMic}
+            onClick={voice.toggle}
             disabled={transcribing}
             title={recording ? '停止录音并转写' : transcribing ? '转写中…' : '语音输入（再次点击结束）'}
             className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-2xl border text-lg transition-all disabled:opacity-40 ${

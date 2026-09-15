@@ -5,8 +5,9 @@ import CardList from './CardList'
 import CardMaker from './CardMaker'
 import HabitStrip, { type HabitStripHandle } from './HabitStrip'
 import { Markdown } from './markdown'
+import PageShell from './PageShell'
 import SelfCheckLine from './SelfCheckLine'
-import { api, type CardGrade, type CardItem, type CardStats, type TodayNext } from './api'
+import { api, type CardGrade, type CardItem, type CardStats, type TodaySummaryRow } from './api'
 
 // Keyboard-first 今日 page: the review queue plus the habit grid. Every action
 // has a key because a 20-card session done with the mouse feels like a chore and
@@ -54,7 +55,7 @@ export default function ReviewPage() {
   const [makerOpen, setMakerOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [habitSummary, setHabitSummary] = useState({ done: 0, total: 0 })
-  const [next, setNext] = useState<TodayNext | null>(null)
+  const [summary, setSummary] = useState<TodaySummaryRow[]>([])
 
   const shownAt = useRef(0)
   const requeued = useRef<Record<number, number>>({})
@@ -78,7 +79,7 @@ export default function ReviewPage() {
       setSession({ again: 0, hard: 0, good: 0, easy: 0, ms: 0 })
       setPhase('overview')
       shownAt.current = performance.now()
-      api.todayNext().then(setNext).catch(() => setNext(null))
+      api.todaySummary().then((r) => setSummary(r.rows)).catch(() => setSummary([]))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setPhase('overview')
@@ -310,19 +311,22 @@ export default function ReviewPage() {
 
   return (
     <>
-      <div className="mx-auto max-w-3xl px-6 py-6">
-        <header className="mb-5 flex flex-wrap items-center gap-3">
-          <h1 className="bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-xl font-semibold text-transparent">
-            今日
-          </h1>
-          {stats && (
-            <span className="text-xs text-neutral-500 dark:text-neutral-400">
+      <PageShell
+        title="今日"
+        description="复习队列 + 习惯打卡。键盘优先：每一步都有快捷键。"
+        maxWidth="3xl"
+        bodyClassName="space-y-4"
+        stats={
+          stats ? (
+            <span>
               {stats.total} 张 · 今天已过 {stats.today_reviewed}
               {stats.streak > 0 ? ` · 连续 ${stats.streak} 天` : ''}
               {habitSummary.total > 0 ? ` · 习惯 ${habitSummary.done}/${habitSummary.total}` : ''}
             </span>
-          )}
-          <div className="ml-auto flex items-center gap-2 text-xs">
+          ) : undefined
+        }
+        actions={
+          <>
             <button
               onClick={() => setMakerOpen((v) => !v)}
               className="rounded-lg border border-neutral-200 px-2.5 py-1 text-neutral-600 transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500"
@@ -337,8 +341,9 @@ export default function ReviewPage() {
             >
               ?
             </button>
-          </div>
-        </header>
+          </>
+        }
+      >
 
         {error && (
           <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600 dark:bg-rose-500/10 dark:text-rose-300">
@@ -441,34 +446,37 @@ export default function ReviewPage() {
               )}
             </section>
 
-            {next && (
-              <section
-                className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border px-3 py-2.5 text-xs ${
-                  next.tone === 'bad'
-                    ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300'
-                    : 'border-neutral-200/80 text-neutral-500 dark:border-neutral-800/80 dark:text-neutral-400'
-                }`}
-              >
-                {/* 两档：报障（模型挂了 / 作业连着失败 → 去设置）与「最近那件事」
-                    （→ 去那件事接着看）。**都不是待办**——没有计数、没有到期、没有催。 */}
-                <span className="shrink-0">👋 今天</span>
-                <span>{next.text}</span>
-                {next.action.kind !== 'none' && (
-                  <Link
-                    to={
-                      next.action.kind === 'thread'
-                        ? `/threads?thread=${next.action.thread_id}`
-                        : '/settings'
-                    }
-                    className={`ml-auto shrink-0 rounded-lg border px-2.5 py-1 font-medium transition-colors ${
-                      next.tone === 'bad'
-                        ? 'border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10'
-                        : 'border-neutral-300 text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800'
-                    }`}
-                  >
-                    {next.action.label} →
-                  </Link>
-                )}
+            {summary.length > 0 && (
+              <section className="rounded-xl border border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
+                {/* 五档概览：失败任务 > 未消化 > 到期卡 > 卡点 > 进行中产出，每行带直达。
+                    空档后端就不返回，所以这里没有 0 行。和 `next_suggestion` 那句建议不同：
+                    那是「说一句」，这是「有几件、在哪」——计数是让你一眼看完全局。 */}
+                <ul className="divide-y divide-neutral-100 dark:divide-neutral-800/70">
+                  {summary.map((r) => (
+                    <li key={r.key} className="flex items-center gap-3 py-1.5">
+                      <span
+                        className={`shrink-0 text-[11px] font-medium ${
+                          r.tone === 'bad'
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : r.tone === 'warn'
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-neutral-500 dark:text-neutral-400'
+                        }`}
+                      >
+                        {r.label}
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-neutral-700 dark:text-neutral-200">
+                        {r.count}
+                      </span>
+                      <Link
+                        to={r.href}
+                        className="ml-auto shrink-0 rounded-lg border border-neutral-300 px-2.5 py-0.5 text-[11px] text-neutral-600 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                      >
+                        去处理 →
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
               </section>
             )}
 
@@ -671,7 +679,7 @@ export default function ReviewPage() {
             </div>
           </section>
         )}
-      </div>
+      </PageShell>
     </>
   )
 }

@@ -17,9 +17,13 @@ export type Module =
   | 'kb'
   | 'settings'
   | 'review'
+  | 'assets'
+  | 'companion'
 
 /** 路径 → 模块。`/review` 现在是**进了导航的「今日」**（复习队列 + 习惯打卡）——
-    够不着是客观缺陷，已修；主动提醒本身仍然封存（复习是你想起来才做的事）。 */
+    够不着是客观缺陷，已修；主动提醒本身仍然封存（复习是你想起来才做的事）。
+    `/assets` 是「资产」：产出物速览 + 各个库的入口（导航收缩成五区后的集中点）。
+    `/companion` 是「陪伴」：零柒的整页聊天 / 成长 / 有声——刻意不进导航，入口是宠物。 */
 export const ROUTES: Record<string, Module> = {
   '/': 'chat',
   '/tutor': 'tutor',
@@ -31,6 +35,20 @@ export const ROUTES: Record<string, Module> = {
   '/kb': 'kb',
   '/settings': 'settings',
   '/review': 'review',
+  '/assets': 'assets',
+  '/companion': 'companion',
+}
+
+/** 导航收缩后「整页搬家」的旧地址 → 新地址（带 search）。
+ *
+ *  只收**真的不再有自己的页面**的路径；页面还活着的（/notes、/kb、/dashboard）
+ *  不进这里——它们的入口挪到了资产页，但地址没变，书签照用。
+ *  `/threads` 搬进工作页的「跟进」标签；`/growth` 搬进陪伴页的「成长」标签
+ *  （成长本来就是宠物那条线的账）。
+ */
+export const REDIRECTS: Record<string, string> = {
+  '/threads': '/work?tab=follow',
+  '/growth': '/companion?tab=growth',
 }
 
 const TITLES: Record<Module, string> = {
@@ -44,6 +62,8 @@ const TITLES: Record<Module, string> = {
   kb: '知识库',
   settings: '设置',
   review: '今日',
+  assets: '资产',
+  companion: '陪伴',
 }
 
 /** 把路径规范化成路由表里的形状；不是已知路由就返回 null。
@@ -80,15 +100,34 @@ export function titleFor(href: string): string {
  *  **`search` 和 `hash` 必须原样带上。** 存量书签打过来的是
  *  `/kb.html?clip=<url>&title=<t>`——剪藏的参数就在 search 里，只把路径改掉而丢掉
  *  query，等于把这条集成从「能用」变成「点了没反应」。
+ *
+ *  两层：`.html` 别名先摆正成路由路径；再查 `REDIRECTS`（整页搬家的路径）。
+ *  搬家目标自带 search 时两边合并——旧参数保留、新参数说了算
+ *  （`/threads?thread=3` → `/work?tab=follow&thread=3`）。目标不带 search 时
+ *  旧 search **一个字节都不动**（上面书签小工具那条测试钉死了这一点）。
  */
 export function legacyTarget(
   pathname: string,
   search: string,
   hash: string
 ): { pathname: string; search: string; hash: string } | null {
-  const target = normalizePath(pathname)
-  if (target === null || target === pathname) return null
-  return { pathname: target, search, hash }
+  const normalized = normalizePath(pathname)
+  if (normalized === null) return null
+
+  const moved = REDIRECTS[normalized]
+  if (moved === undefined) {
+    if (normalized === pathname) return null
+    return { pathname: normalized, search, hash }
+  }
+
+  const q = moved.indexOf('?')
+  const toPath = q === -1 ? moved : moved.slice(0, q)
+  if (q === -1) return { pathname: toPath, search, hash }
+
+  const merged = new URLSearchParams(search)
+  for (const [k, v] of new URLSearchParams(moved.slice(q + 1))) merged.set(k, v)
+  const s = merged.toString()
+  return { pathname: toPath, search: s ? `?${s}` : '', hash }
 }
 
 /** 当前路径对应的模块。Layout 用它决定高亮和埋点。 */

@@ -7,6 +7,7 @@ import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
 import FeedbackButtons from './FeedbackButtons'
 import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry } from './api'
+import { ago } from './reltime'
 import { streamCompose, streamPodcastGenerate, type ReportDraft } from './stream'
 
 type AiAction = 'continue' | 'polish' | 'summarize' | 'rewrite'
@@ -152,17 +153,11 @@ export default function NotesPage() {
     return groups.filter((g) => g.items.length > 0)
   }, [files])
 
-  // 相对时间文案
+  // 相对时间文案。**7 天以内**走全站通用的 `ago`；更早的换成绝对日期——
+  // 这一页按今天/本周/更早分组，「23 天前」在这里不如一个日期有用。
   function relTime(ts: number) {
-    const diff = Date.now() - ts * 1000
-    const m = Math.floor(diff / 60000)
-    if (m < 1) return '刚刚'
-    if (m < 60) return `${m} 分钟前`
-    const h = Math.floor(m / 60)
-    if (h < 24) return `${h} 小时前`
-    const d = Math.floor(h / 24)
-    if (d < 7) return `${d} 天前`
-    return new Date(ts * 1000).toLocaleDateString()
+    const days = Math.floor((Date.now() - ts * 1000) / 86400000)
+    return days < 7 ? ago(ts) : new Date(ts * 1000).toLocaleDateString()
   }
 
   // 标题大纲（供导航）

@@ -4,6 +4,8 @@ import { Link, useSearchParams } from 'react-router-dom'
 import AttachToThread from './AttachToThread'
 import FeedbackButtons from './FeedbackButtons'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
+import OutputCard from './OutputCard'
+import RunPanel from './RunPanel'
 import {
   api,
   type CardDraft,
@@ -14,10 +16,12 @@ import {
   type TutorDigestResult,
   type TutorEndResult,
   type TutorLearningMap,
+  type TutorMastery,
   type TutorNeighbor,
   type TutorSessionRow,
   type TutorStarter,
   type TutorStats,
+  type TutorStuckRow,
   type TutorTurn,
 } from './api'
 import {
@@ -54,6 +58,15 @@ const VERDICT_LABEL: Record<string, string> = {
   half: '半懂',
   useless: '没用',
 }
+
+// 会话里的讲法快捷指令（ChatGPT Study Mode 参考）：一键发指令，不用自己组织措辞。
+// 最后一条是反转——让它考你，等你答了再评，不是直接讲。
+const QUICK_ASKS: [string, string][] = [
+  ['更简单地讲', '我没完全跟上。用更简单、更基础的方式再讲一遍，少用术语。'],
+  ['举个例子', '举一个具体的例子，最好是我熟悉领域里的。'],
+  ['换个角度', '换个角度再讲一遍这个点。'],
+  ['考我一题', '就这个话题考我一道题。先别给答案，等我答了你再点评。'],
+]
 
 /** 右栏「学到哪了」一屏列多少个概念；更多的靠会话历史翻（纯展示上限，不落库）。 */
 const CONCEPT_RAIL_CAP = 12
@@ -144,6 +157,19 @@ function Bubble({ turn }: { turn: Turn }) {
   )
 }
 
+/** 跑完了的一行回执：整篇正文收成一行，指到已存的产物（/notes 详情页）。
+ *  流式 / 出错态不套这个——那时候正文正是要看的；「读全文」随时能把它展开回来。
+ *  导出是为了单测——整页渲染设施这个仓库还没有。 */
+export function ReceiptLine({ title, meta, saved }: { title: string; meta: string; saved: string }) {
+  return (
+    <OutputCard
+      title={title}
+      meta={saved ? `${meta} · 已存入` : meta}
+      href={saved ? `/notes?path=${encodeURIComponent(saved)}` : undefined}
+    />
+  )
+}
+
 export default function TutorPage() {
   const [searchParams] = useSearchParams()
   const [sid, setSid] = useState<number | null>(null)
@@ -195,7 +221,15 @@ export default function TutorPage() {
   const [cfSubject, setCfSubject] = useState('')
   const [cfMsg, setCfMsg] = useState('')
   const [cfSaved, setCfSaved] = useState('')
+  // 三张成文卡跑完后默认收成一行回执（正文只活在 /notes 详情页），这三个开关把它展开回来
+  const [rsOpen, setRsOpen] = useState(false)
+  const [dcOpen, setDcOpen] = useState(false)
+  const [cfOpen, setCfOpen] = useState(false)
   const [stats, setStats] = useState<TutorStats | null>(null)
+  // 「最近搞懂」的时刻（成长事件的同源数据）：概念、时间、是否从半懂到懂
+  const [mastery, setMastery] = useState<TutorMastery | null>(null)
+  // 全部卡点清单（独立于右栏的 50 行窗口），待解的在这里集中看
+  const [stuckRows, setStuckRows] = useState<TutorStuckRow[]>([])
   // 材料消化：一份材料 → 要搞懂的点。面板是拉取式的——你点它才跑。
   // 拆出的点写进 `digest_points`（建议日志，学习地图「未触及」的来源）；学习状态的真值
   // 仍然只有 tutor_sessions。
@@ -221,6 +255,32 @@ export default function TutorPage() {
   const [pcNotice, setPcNotice] = useState('') // 入库回执：正面的话，不和报错混在一起
   // 开场建议（DeepTutor 参考项）：从记录里派生的就近入口，挂了就静默没有
   const [starters, setStarters] = useState<TutorStarter[]>([])
+  // 工具卡点开后的独立输入面板：每个工具自己收话题，不再逼你先去顶部输入框
+  const [toolOpen, setToolOpen] = useState<'' | 'research' | 'decide' | 'conflict'>('')
+  const [toolTopic, setToolTopic] = useState('')
+  // 学习地图的档位筛选：点档位标签只看那一档，再点一次回到全部
+  const [mapFilter, setMapFilter] = useState<
+    null | 'mastered' | 'learning' | 'stuck' | 'untouched'
+  >(null)
+  // 开场屏的三个标签：学（开教学/研究等）、练（模拟测验）、记录（地图与历史）。
+  // 一屏只做一类事，页面不再无限往下滚。
+  const [tab, setTab] = useState<'learn' | 'practice' | 'record'>('learn')
+  // 模拟测验（Quizlet Test 模式）：一份材料 → 出几道题 → 逐题自判 →
+  // 没答上的一键开教学补课。出题复用按材料出卡的通路，不落库。
+  const [qzMode, setQzMode] = useState<'file' | 'text'>('text')
+  const [qzQuery, setQzQuery] = useState('')
+  const [qzSources, setQzSources] = useState<CardSources | null>(null)
+  const [qzSource, setQzSource] = useState('')
+  const [qzText, setQzText] = useState('')
+  const [qzBusy, setQzBusy] = useState(false)
+  const [qzMsg, setQzMsg] = useState('')
+  const [qz, setQz] = useState<{
+    cards: CardDraft[]
+    idx: number
+    revealed: boolean
+    answer: string
+    marks: (null | 'hit' | 'miss')[]
+  } | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
   // 正在流式回复的会话：再学一个 / 开新会话 / 离开页面时掐断它，
   // 否则 fetch 会读完整段回复、上游也把 token 烧完（中断传播的前端一半）
@@ -237,6 +297,8 @@ export default function TutorPage() {
     api.tutorSessions().then((r) => setRows(r.sessions)).catch(() => {})
     api.tutorStats().then(setStats).catch(() => {})
     api.tutorMap().then(setLearnMap).catch(() => {})
+    api.tutorMastery().then(setMastery).catch(() => {})
+    api.tutorStuck().then((r) => setStuckRows(r.stuck)).catch(() => {})
   }, [])
 
   // 卡点的手动出口：标已解 / 标回待解。右栏是上下文，失败静默。
@@ -263,6 +325,18 @@ export default function TutorPage() {
     }, dgQuery ? 250 : 0)
     return () => clearTimeout(t)
   }, [dgOpen, dgQuery])
+
+  // 测验的取材列表：同一套服务端筛选
+  useEffect(() => {
+    if (tab !== 'practice') return
+    const t = setTimeout(() => {
+      api
+        .cardSources(qzQuery)
+        .then(setQzSources)
+        .catch(() => setQzSources(null))
+    }, qzQuery ? 250 : 0)
+    return () => clearTimeout(t)
+  }, [tab, qzQuery])
 
   const runDigest = useCallback(async () => {
     const body = dgMode === 'text' ? { text: dgText } : { source_path: dgSource }
@@ -357,6 +431,47 @@ export default function TutorPage() {
     setDgBusy(false)
   }, [])
 
+  // 模拟测验：出题（复用按材料出卡的通路，count=5，不落库）
+  const runQuiz = useCallback(async () => {
+    if (qzBusy) return
+    const hasMaterial = qzMode === 'text' ? !!qzText.trim() : !!qzSource
+    if (!hasMaterial) return
+    setQzBusy(true)
+    setQzMsg('')
+    setQz(null)
+    try {
+      const body =
+        qzMode === 'text' ? { text: qzText, count: 5 } : { source_path: qzSource, count: 5 }
+      const done = await streamCardsGenerate(body, () => {})
+      if (!done.ok) {
+        setQzMsg(done.error || '出题失败')
+        return
+      }
+      const cards = (done.cards ?? []) as CardDraft[]
+      if (!cards.length) {
+        setQzMsg('这份材料没出成题，换一份试试')
+        return
+      }
+      setQz({ cards, idx: 0, revealed: false, answer: '', marks: cards.map(() => null) })
+    } catch (e) {
+      setQzMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setQzBusy(false)
+    }
+  }, [qzBusy, qzMode, qzText, qzSource])
+
+  // 逐题自判：答上 / 没答上。判完翻到下一题；最后一题判完留在总结页
+  const markQuiz = useCallback((m: 'hit' | 'miss') => {
+    setQz((q) => {
+      if (!q) return q
+      const marks = [...q.marks]
+      marks[q.idx] = m
+      const next = q.idx + 1
+      if (next >= q.cards.length) return { ...q, marks, revealed: false }
+      return { ...q, marks, idx: next, revealed: false, answer: '' }
+    })
+  }, [])
+
   // 卡点讨论播客（对话播客 2.0）：拉取式——你点它才生成，生成完就地能听
   const makeStuckPodcast = useCallback(async () => {
     if (stuckBusy) return
@@ -406,8 +521,8 @@ export default function TutorPage() {
   // 研究（学习闭环的中间两跳）：以本会话话题为输入拉取式跑一次「搜 → 读 → 成文」。
   // 进度走 rsMsg；结果卡出来后可以「存进知识库」——落 vault/research/ 并进索引，
   // 下一次相关话题的取材块就能捞到它（那一跳是现成的，这里不需要多做）。
-  const runResearch = useCallback(async () => {
-    const t = topic.trim()
+  const runResearch = useCallback(async (override?: string) => {
+    const t = (override ?? topic).trim()
     if (!t || rsBusy) return
     rsAbortRef.current?.abort()
     const ctl = new AbortController()
@@ -493,8 +608,8 @@ export default function TutorPage() {
   // 方案（拿不准的事，理清楚再出方案）：以本会话话题为输入，先读题、再取材料。
   // `frame` 在取材料之前就渲染出来——读错题是这类功能第一位的失败模式，
   // 题没读懂，后面写得再顺也没用。
-  const runDecide = useCallback(async () => {
-    const t = topic.trim()
+  const runDecide = useCallback(async (override?: string) => {
+    const t = (override ?? topic).trim()
     if (!t || dcBusy) return
     dcAbortRef.current?.abort()
     const ctl = new AbortController()
@@ -583,8 +698,8 @@ export default function TutorPage() {
 
   // 对质：先出 `frame`（我理解要比的是什么），再取材，然后 `finding`
   // 把「哪两处对不上」扫出来——一处都没有就直接给结论，不再烧一次长篇成文。
-  const runConflict = useCallback(async () => {
-    const t = topic.trim()
+  const runConflict = useCallback(async (override?: string) => {
+    const t = (override ?? topic).trim()
     if (!t || cfBusy) return
     cfAbortRef.current?.abort()
     const ctl = new AbortController()
@@ -833,15 +948,27 @@ export default function TutorPage() {
   // 硬约束——而这三件事本来就不需要一场教学当门票。
   const reportCards = (
     <>
-      {/* 研究卡就地展开在会话流里：进度 → 带引用的讲解 → 存进知识库。
-          它是这一场会话的动作，不落右栏、不计数。 */}
+      {/* 研究卡：RunPanel 统一壳——进度/停止/重试/成品动作都归框架，
+          卡里只剩这个动作自己的内容。 */}
       {rs || rsDraft || rsBusy || rsMsg ? (
-        <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-500/30 dark:bg-sky-500/10">
-          <div className="flex items-center justify-between gap-2 pb-1">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-sky-700 dark:text-sky-300">
-              🔍 研究{rs && rs.rounds && rs.rounds > 1 ? ` · 搜了 ${rs.rounds} 轮` : ''}
-            </p>
-            {rs ? (
+        <RunPanel
+          phase={rs ? 'done' : rsDraft ? 'streaming' : rsBusy ? 'progress' : 'error'}
+          tone="sky"
+          icon="🔍"
+          title={`研究${rs && rs.rounds && rs.rounds > 1 ? ` · 搜了 ${rs.rounds} 轮` : ''}`}
+          status={rs || rsDraft ? undefined : rsMsg || undefined}
+          error={!rs && !rsDraft && !rsBusy && rsMsg ? rsMsg : undefined}
+          onCancel={() => rsAbortRef.current?.abort()}
+          actions={
+            <>
+              {rs ? (
+                <button
+                  onClick={() => setRsOpen((v) => !v)}
+                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
+                >
+                  {rsOpen ? '收起' : '读全文'}
+                </button>
+              ) : null}
               <button
                 onClick={() => void saveResearch()}
                 disabled={rsBusy || !!rsSaved}
@@ -849,65 +976,116 @@ export default function TutorPage() {
               >
                 {rsSaved ? '已存进知识库' : rsBusy ? '保存中…' : '存进知识库'}
               </button>
-            ) : null}
-          </div>
-          {rsMsg ? <p className="text-[11px] text-neutral-500">{rsMsg}</p> : null}
-          {/* draft 先渲染出来（边生成边看）；来源清单、存档、评价这些
-              只有最终产物才准的东西，等 `rs` 到了再出现。 */}
-          {rs || rsDraft ? (
-            <Markdown sources={rs?.sources}>{reportMarkdown(rs ?? rsDraft!)}</Markdown>
-          ) : null}
-          {rs ? (
-            <>
-              <SourceList
-                sources={rs.sources}
-                used={rs.used}
-                className="border-sky-200/70 dark:border-sky-500/20"
-                summary={
-                  <>
-                    来源 {rs.sources.length} 条（你自己的材料{' '}
-                    {rs.sources.filter((s) => s.kind === 'kb').length} 条）
-                  </>
-                }
+            </>
+          }
+          footer={
+            rs ? (
+              <FeedbackButtons
+                kind="research"
+                promptSha={rs.prompt_sha}
+                modelId={rs.model_id}
+                artifactRef={rsSaved}
               />
-              {rsSaved ? (
-                <p className="mt-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
-                  已存到 {rsSaved}，已进索引——下次相关话题的取材会先捞到它
-                </p>
+            ) : undefined
+          }
+        >
+          {/* 跑完了就收成一行回执：正文只活在 /notes 详情页，「读全文」能展开回来。
+              draft 期间照旧边生成边看——那时候正文正是要看的。 */}
+          {rs && !rsOpen ? (
+            <ReceiptLine
+              title={rs.title || '研究'}
+              meta={`来源 ${rs.sources.length} 条 · 你的材料 ${
+                rs.sources.filter((s) => s.kind === 'kb').length
+              } 条`}
+              saved={rsSaved}
+            />
+          ) : rs || rsDraft ? (
+            <>
+              <Markdown sources={rs?.sources}>{reportMarkdown(rs ?? rsDraft!)}</Markdown>
+              {rs ? (
+                <>
+                  <SourceList
+                    sources={rs.sources}
+                    used={rs.used}
+                    className="border-sky-200/70 dark:border-sky-500/20"
+                    summary={
+                      <>
+                        来源 {rs.sources.length} 条（你自己的材料{' '}
+                        {rs.sources.filter((s) => s.kind === 'kb').length} 条）
+                      </>
+                    }
+                  />
+                  {rsSaved ? (
+                    <p className="mt-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                      已存到 {rsSaved}，已进索引——下次相关话题的取材会先捞到它
+                    </p>
+                  ) : null}
+                </>
               ) : null}
-              <div className="mt-2 border-t border-sky-200/70 pt-2 dark:border-sky-500/20">
-                <FeedbackButtons
-                  kind="research"
-                  promptSha={rs.prompt_sha}
-                  modelId={rs.model_id}
-                  artifactRef={rsSaved}
-                />
-              </div>
             </>
           ) : null}
-        </div>
+        </RunPanel>
       ) : null}
       {/* 方案卡：先摆「我理解你要决定的是什么」再出正文——读错题是这类功能
           第一位的失败模式，题面必须在成文之前就看得见。同样是这一场会话的
           动作，不落右栏、不计数。 */}
       {dc || dcFrame || dcDraft || dcBusy || dcMsg ? (
-        <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 dark:border-violet-500/30 dark:bg-violet-500/10">
-          <div className="flex items-center justify-between gap-2 pb-1">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-violet-700 dark:text-violet-300">
-              🤔 方案
-            </p>
-            {dc ? (
-              <button
-                onClick={() => void saveDecide()}
-                disabled={dcBusy || !!dcSaved}
-                className="rounded-full border border-violet-300 px-2 py-0.5 text-[10px] text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/20"
-              >
-                {dcSaved ? '已存进知识库' : dcBusy ? '保存中…' : '存进知识库'}
-              </button>
-            ) : null}
-          </div>
-
-          {dcFrame ? (
+        <RunPanel
+          phase={dc ? 'done' : dcDraft ? 'streaming' : dcBusy ? 'progress' : 'error'}
+          tone="violet"
+          icon="🤔"
+          title="方案"
+          status={dc || dcDraft ? undefined : dcMsg || undefined}
+          error={!dc && !dcDraft && !dcBusy && dcMsg ? dcMsg : undefined}
+          onCancel={() => dcAbortRef.current?.abort()}
+          actions={
+            <>
+              {dc ? (
+                <button
+                  onClick={() => setDcOpen((v) => !v)}
+                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
+                >
+                  {dcOpen ? '收起' : '读全文'}
+                </button>
+              ) : null}
+              {dc ? (
+                <button
+                  onClick={() => void saveDecide()}
+                  disabled={dcBusy || !!dcSaved}
+                  className="rounded-full border border-violet-300 px-2 py-0.5 text-[10px] text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/20"
+                >
+                  {dcSaved ? '已存进知识库' : dcBusy ? '保存中…' : '存进知识库'}
+                </button>
+              ) : null}
+            </>
+          }
+          footer={
+            dc ? (
+              <FeedbackButtons
+                kind="decide"
+                promptSha={dc.prompt_sha}
+                modelId={dc.model_id}
+                artifactRef={dcSaved}
+              />
+            ) : undefined
+          }
+        >
+          {dc && !dcOpen ? (
+            <>
+              {dcFrame ? (
+                <p className="mb-1.5 text-[11px] text-neutral-500">要决定的是：{dcFrame.decision}</p>
+              ) : null}
+              <ReceiptLine
+                title={dc.title || '方案'}
+                meta={`来源 ${dc.sources.length} 条 · 你的材料 ${
+                  dc.sources.filter((s) => s.kind === 'kb').length
+                } 条 · 记忆 ${dc.sources.filter((s) => s.kind === 'memory').length} 条`}
+                saved={dcSaved}
+              />
+            </>
+          ) : (
+            <>
+              {dcFrame ? (
             <div className="mb-2 rounded-lg border border-violet-200/70 bg-white/70 p-2.5 dark:border-violet-500/20 dark:bg-neutral-900/40">
               <p className="text-[11px] text-neutral-500">我理解你要决定的是</p>
               <p className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
@@ -933,8 +1111,6 @@ export default function TutorPage() {
             </div>
           ) : null}
 
-          {dcMsg ? <p className="text-[11px] text-neutral-500">{dcMsg}</p> : null}
-
           {dc || dcDraft ? (
             <Markdown sources={dc?.sources}>{reportMarkdown(dc ?? dcDraft!)}</Markdown>
           ) : null}
@@ -957,39 +1133,72 @@ export default function TutorPage() {
                   已存到 {dcSaved}，已进索引——下次相关话题的取材会先捞到它
                 </p>
               ) : null}
-              <div className="mt-2 border-t border-violet-200/70 pt-2 dark:border-violet-500/20">
-                <FeedbackButtons
-                  kind="decide"
-                  promptSha={dc.prompt_sha}
-                  modelId={dc.model_id}
-                  artifactRef={dcSaved}
-                />
-              </div>
             </>
           ) : null}
-        </div>
+            </>
+          )}
+        </RunPanel>
       ) : null}
       {/* 对质卡：先摆「这次比的是什么」，再出正文。零冲突时它直接给一句实话
           （标题就写着「没有对不上的」），那是正常结果不是失败。同一场会话的
           动作，不落右栏、不计数。 */}
       {cf || cfSubject || cfDraft || cfBusy || cfMsg ? (
-        <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-4 dark:border-teal-500/30 dark:bg-teal-500/10">
-          <div className="flex items-center justify-between gap-2 pb-1">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-teal-700 dark:text-teal-300">
-              ⚔️ 对质
-            </p>
-            {cf ? (
-              <button
-                onClick={() => void saveConflict()}
-                disabled={cfBusy || !!cfSaved}
-                className="rounded-full border border-teal-300 px-2 py-0.5 text-[10px] text-teal-700 transition-colors hover:bg-teal-100 disabled:opacity-40 dark:border-teal-500/40 dark:text-teal-300 dark:hover:bg-teal-500/20"
-              >
-                {cfSaved ? '已存进知识库' : cfBusy ? '保存中…' : '存进知识库'}
-              </button>
-            ) : null}
-          </div>
-
-          {cfSubject ? (
+        <RunPanel
+          phase={cf ? 'done' : cfDraft ? 'streaming' : cfBusy ? 'progress' : 'error'}
+          tone="teal"
+          icon="⚔️"
+          title="对质"
+          status={cf || cfDraft ? undefined : cfMsg || undefined}
+          error={!cf && !cfDraft && !cfBusy && cfMsg ? cfMsg : undefined}
+          onCancel={() => cfAbortRef.current?.abort()}
+          actions={
+            <>
+              {cf ? (
+                <button
+                  onClick={() => setCfOpen((v) => !v)}
+                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
+                >
+                  {cfOpen ? '收起' : '读全文'}
+                </button>
+              ) : null}
+              {cf ? (
+                <button
+                  onClick={() => void saveConflict()}
+                  disabled={cfBusy || !!cfSaved}
+                  className="rounded-full border border-teal-300 px-2 py-0.5 text-[10px] text-teal-700 transition-colors hover:bg-teal-100 disabled:opacity-40 dark:border-teal-500/40 dark:text-teal-300 dark:hover:bg-teal-500/20"
+                >
+                  {cfSaved ? '已存进知识库' : cfBusy ? '保存中…' : '存进知识库'}
+                </button>
+              ) : null}
+            </>
+          }
+          footer={
+            cf ? (
+              <FeedbackButtons
+                kind="conflict"
+                promptSha={cf.prompt_sha}
+                modelId={cf.model_id}
+                artifactRef={cfSaved}
+              />
+            ) : undefined
+          }
+        >
+          {cf && !cfOpen ? (
+            <>
+              {cfSubject ? (
+                <p className="mb-1.5 text-[11px] text-neutral-500">比的是：{cfSubject}</p>
+              ) : null}
+              <ReceiptLine
+                title={cf.title || '对质'}
+                meta={`来源 ${cf.sources.length} 条 · 你的材料 ${
+                  cf.sources.filter((s) => s.kind === 'kb').length
+                } 条 · 记忆 ${cf.sources.filter((s) => s.kind === 'memory').length} 条`}
+                saved={cfSaved}
+              />
+            </>
+          ) : (
+            <>
+              {cfSubject ? (
             <div className="mb-2 rounded-lg border border-teal-200/70 bg-white/70 p-2.5 dark:border-teal-500/20 dark:bg-neutral-900/40">
               <p className="text-[11px] text-neutral-500">这次比的是</p>
               <p className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
@@ -1010,8 +1219,6 @@ export default function TutorPage() {
               ) : null}
             </div>
           ) : null}
-
-          {cfMsg ? <p className="text-[11px] text-neutral-500">{cfMsg}</p> : null}
 
           {cf || cfDraft ? (
             <Markdown sources={cf?.sources}>{reportMarkdown(cf ?? cfDraft!)}</Markdown>
@@ -1035,17 +1242,11 @@ export default function TutorPage() {
                   已存到 {cfSaved}，已进索引——下次相关话题的取材会先捞到它
                 </p>
               ) : null}
-              <div className="mt-2 border-t border-teal-200/70 pt-2 dark:border-teal-500/20">
-                <FeedbackButtons
-                  kind="conflict"
-                  promptSha={cf.prompt_sha}
-                  modelId={cf.model_id}
-                  artifactRef={cfSaved}
-                />
-              </div>
             </>
           ) : null}
-        </div>
+            </>
+          )}
+        </RunPanel>
       ) : null}
 
       {/* 材料消化卡：一份材料 → 要搞懂的点 → 逐点去搞懂。「逐点」走的是普通教学会话，
@@ -1379,6 +1580,49 @@ export default function TutorPage() {
       learnMap.untouched.length
     : 0
 
+  // 会话历史列表：开场屏概览和会话右栏共用同一份（两处不会同时出现）。
+  // 工具面板的执行：面板里收话题，跑哪个工具由打开的那张卡决定
+  const runTool = () => {
+    const t = toolTopic.trim()
+    if (!t) return
+    setTopic(t)
+    if (toolOpen === 'research') void runResearch(t)
+    else if (toolOpen === 'decide') void runDecide(t)
+    else if (toolOpen === 'conflict') void runConflict(t)
+    setToolOpen('')
+  }
+
+  const historyList = (
+    <div>
+      {rows.length === 0 ? (
+        <p className="px-1 py-2 text-xs text-neutral-400">还没有记录</p>
+      ) : (
+        <div className="space-y-0.5">
+          {rows.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => void open(r.id)}
+              className={`w-full rounded-lg px-3 py-2 text-left transition-colors ${
+                r.id === sid
+                  ? 'bg-violet-100 dark:bg-violet-500/15'
+                  : 'hover:bg-neutral-100 dark:hover:bg-neutral-800/70'
+              }`}
+            >
+              <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">
+                {r.concept || r.topic}
+              </span>
+              <span className="block truncate text-[11px] text-neutral-400">
+                {r.verdict ? VERDICT_LABEL[r.verdict] : '没标'}
+                {r.recalled ? ' · 接上过' : ''}
+                {r.stuck ? ` · ${r.stuck}` : ''}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
   const conceptsPanel = (
     <>
       {learnMap && mapCount > 0 ? (
@@ -1406,10 +1650,39 @@ export default function TutorPage() {
               </button>
             </div>
           </div>
-          {mapGroup('已掌握', 'text-emerald-600 dark:text-emerald-400', learnMap.mastered)}
-          {mapGroup('在学', 'text-sky-600 dark:text-sky-400', learnMap.learning)}
-          {mapGroup('卡住', 'text-amber-600 dark:text-amber-400', learnMap.stuck)}
-          {learnMap.untouched.length > 0 ? (
+          {/* 档位标签：点一个只看那一档，再点一次回到全部——地图先是概览，
+              需要时才下钻 */}
+          <div className="flex flex-wrap gap-1.5 pb-2">
+            {([
+              ['mastered', '已掌握', learnMap.mastered.length, 'border-emerald-300 bg-emerald-50 text-emerald-700 ring-emerald-200 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30'],
+              ['learning', '在学', learnMap.learning.length, 'border-sky-300 bg-sky-50 text-sky-700 ring-sky-200 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/30'],
+              ['stuck', '卡住', learnMap.stuck.length, 'border-amber-300 bg-amber-50 text-amber-700 ring-amber-200 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'],
+              ['untouched', '未触及', learnMap.untouched.length, 'border-neutral-300 bg-neutral-100 text-neutral-600 ring-neutral-200 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-300 dark:ring-neutral-500/30'],
+            ] as const).map(([key, label, n, cls]) => (
+              <button
+                key={key}
+                onClick={() => setMapFilter(mapFilter === key ? null : key)}
+                title={mapFilter === key ? '再点一下回到全部' : `只看${label}`}
+                className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
+                  mapFilter === key
+                    ? `${cls} font-medium ring-2`
+                    : 'border-neutral-200 text-neutral-500 hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-500'
+                }`}
+              >
+                {label} {n}
+              </button>
+            ))}
+          </div>
+          {(mapFilter === null || mapFilter === 'mastered')
+            ? mapGroup('已掌握', 'text-emerald-600 dark:text-emerald-400', learnMap.mastered)
+            : null}
+          {(mapFilter === null || mapFilter === 'learning')
+            ? mapGroup('在学', 'text-sky-600 dark:text-sky-400', learnMap.learning)
+            : null}
+          {(mapFilter === null || mapFilter === 'stuck')
+            ? mapGroup('卡住', 'text-amber-600 dark:text-amber-400', learnMap.stuck)
+            : null}
+          {(mapFilter === null || mapFilter === 'untouched') && learnMap.untouched.length > 0 ? (
             <div className="pt-1.5">
               <p className="px-1 pb-0.5 text-[10px] font-medium text-neutral-500">
                 未触及 <span className="text-neutral-400">{learnMap.untouched.length}</span>
@@ -1499,30 +1772,7 @@ export default function TutorPage() {
         会话历史
       </p>
     ) : null}
-    {rows.length === 0 ? (
-      <p className="px-3 py-2 text-xs text-neutral-400">还没有记录</p>
-    ) : (
-      rows.map((r) => (
-        <button
-          key={r.id}
-          onClick={() => void open(r.id)}
-          className={`w-full rounded-lg px-3 py-2 text-left transition-colors ${
-            r.id === sid
-              ? 'bg-violet-100 dark:bg-violet-500/15'
-              : 'hover:bg-neutral-100 dark:hover:bg-neutral-800/70'
-          }`}
-        >
-          <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">
-            {r.concept || r.topic}
-          </span>
-          <span className="block truncate text-[11px] text-neutral-400">
-            {r.verdict ? VERDICT_LABEL[r.verdict] : '没标'}
-            {r.recalled ? ' · 接上过' : ''}
-            {r.stuck ? ` · ${r.stuck}` : ''}
-          </span>
-        </button>
-      ))
-    )}
+    {historyList}
   </div>
     </>
   )
@@ -1540,18 +1790,39 @@ export default function TutorPage() {
       <div className="flex min-w-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {sid === null ? (
-            <div className="flex flex-1 flex-col overflow-y-auto px-6 py-10">
-              {/* 第二列跟内容同宽（`auto`），**不是固定 18rem**：那几条动作按钮只有
-                  约 95px 宽，固定 288px 会在 1280 以上每一档都空出约 193px 的带子
-                  （实测），看着像页面没排满。`auto` 之后主内容铺满，空带消失。 */}
-              <div className="my-auto grid w-full gap-x-10 gap-y-6 xl:grid-cols-[minmax(0,1fr)_auto]">
-                <div>
+            <div className="flex-1 overflow-y-auto px-6 py-8">
+              {/* 开场屏 = 一屏式主页：学 / 练 / 记录 三个标签，一屏只做一类事 */}
+              <div className="mx-auto flex max-w-5xl flex-col gap-8">
+                <div className="mx-auto flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800/60">
+                  {(
+                    [
+                      ['learn', '学'],
+                      ['practice', '练'],
+                      ['record', '记录'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setTab(key)}
+                      className={`rounded-lg px-6 py-1.5 text-sm transition-colors ${
+                        tab === key
+                          ? 'bg-white font-medium text-neutral-800 shadow-sm dark:bg-neutral-900 dark:text-neutral-100'
+                          : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {tab === 'learn' ? (
+                <section className="mx-auto w-full max-w-2xl pt-2 text-center">
                 <h1 className="pb-1 text-2xl font-semibold tracking-tight">你想搞懂什么？</h1>
                 <p className="pb-4 text-sm text-neutral-500">
                   说一个具体的东西。它会先问你现在怎么理解，再讲。
                 </p>
                 {/* 模式切换：学（苏格拉底）还是讲（费曼）。是会话级选择，不是设置。 */}
-                <div className="mb-3 flex gap-2 text-xs">
+                <div className="mb-3 flex justify-center gap-2 text-xs">
                   <button
                     onClick={() => setMode('socratic')}
                     className={`rounded-full border px-3 py-1.5 transition-colors ${
@@ -1594,7 +1865,7 @@ export default function TutorPage() {
                     }}
                     autoFocus
                     placeholder="例如：asyncio 里 await 到底把控制权交给了谁"
-                    className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3.5 py-2.5 text-sm outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                    className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3.5 py-2.5 text-left text-sm outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
                   />
                   <button
                     onClick={() => void begin()}
@@ -1608,7 +1879,7 @@ export default function TutorPage() {
                 {/* 开场建议：你自己的记录放在手边（DeepTutor 参考项）。点了才开会话，
                     不是队列——没有计数、没有到期，想不理就不理。 */}
                 {starters.length > 0 ? (
-                  <div className="flex flex-wrap gap-2 pt-4">
+                  <div className="flex flex-wrap justify-center gap-2 pt-4">
                     {starters.map((s) => (
                       <button
                         key={s.kind + s.topic}
@@ -1625,52 +1896,515 @@ export default function TutorPage() {
                     ))}
                   </div>
                 ) : null}
-                </div>
-                {/* 右栏：另一条入口——研究 / 理清 / 对质 / 消化一份材料，都不用先开一场教学。
-                    有话题才亮（它们都是「围绕这个话题」跑的动作）。**xl 以下它堆到下面**，
-                    不隐藏——两栏挤在 1024 那个宽度上会把输入框压成 120px（实测）。 */}
-                <div>
+                </section>
+                ) : null}
+
+                {/* 继续上次：最近的会话一跳直达，不用去历史列表里翻 */}
+                {tab === 'learn' && rows.length > 0 ? (
+                  <div className="mx-auto flex w-full max-w-2xl items-center gap-3 rounded-2xl border border-neutral-200/80 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900/60">
+                    <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">
+                      继续上次
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-neutral-600 dark:text-neutral-300">
+                      {rows[0].concept || rows[0].topic}
+                      {rows[0].stuck ? ` · 卡在：${rows[0].stuck}` : ''}
+                    </span>
+                    <button
+                      onClick={() => void open(rows[0].id)}
+                      className="shrink-0 rounded-lg border border-violet-300 px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                    >
+                      接着学 →
+                    </button>
+                  </div>
+                ) : null}
+
+                {/* 练：一进来就是测验，不摆别的 */}
+                {tab === 'practice' ? (
+                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-200/80 bg-white px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/60">
+                    <p className="text-sm text-neutral-600 dark:text-neutral-300">
+                      出几道题考你，找出没懂的地方；没答上的就地开教学补课。
+                    </p>
+                    <Link
+                      to="/review"
+                      className="shrink-0 rounded-lg border border-violet-300 px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                    >
+                      出好的卡片去「今日」复习 →
+                    </Link>
+                  </div>
+                ) : null}
+
+                {/* 工具台：一张卡一个工具，点卡片展开它自己的输入面板——话题
+                    就地收，不用先去顶部输入框写一遍。跑完的成品卡出现在下面。
+                    卡片行只在「学」标签出现；「练」标签下这一节只剩测验面板。 */}
+                <section>
+                  {tab === 'learn' ? (
+                  <>
                   <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-                    或者直接
+                    或者直接用这些工具 · 不用先开一场教学
                   </p>
-                  <div className="flex flex-col items-start gap-2">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <button
-                      onClick={() => void runResearch()}
-                      disabled={!topic.trim() || rsBusy}
-                      title="围绕这个话题搜资料、读正文，写一篇带引用的讲解；成品可存进知识库"
-                      className="rounded-full border border-sky-300 px-3 py-1 text-xs text-sky-700 transition-colors hover:bg-sky-50 disabled:opacity-40 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-500/10"
+                      onClick={() => {
+                        setToolTopic(topic)
+                        setToolOpen(toolOpen === 'research' ? '' : 'research')
+                      }}
+                      className={`flex h-full flex-col gap-1 rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                        toolOpen === 'research'
+                          ? 'border-sky-400 ring-2 ring-sky-200 dark:ring-sky-500/30'
+                          : 'border-neutral-200 bg-white hover:border-sky-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-sky-500/40'
+                      }`}
                     >
-                      {rsBusy ? '研究中…' : '🔍 深入研究'}
+                      <span className="text-xl">🔍</span>
+                      <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                        深入研究{rsBusy ? '…' : ''}
+                      </span>
+                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                        围绕话题搜资料、读正文，写一篇带引用的讲解；成品可存进知识库。
+                      </span>
                     </button>
                     <button
-                      onClick={() => void runDecide()}
-                      disabled={!topic.trim() || dcBusy}
-                      title="把这个话题当成一次决策：先摆出「我理解你要决定的是什么」，再摆开选项、指出判据、给一个有条件的判断"
-                      className="rounded-full border border-violet-300 px-3 py-1 text-xs text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                      onClick={() => {
+                        setToolTopic(topic)
+                        setToolOpen(toolOpen === 'decide' ? '' : 'decide')
+                      }}
+                      className={`flex h-full flex-col gap-1 rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                        toolOpen === 'decide'
+                          ? 'border-violet-400 ring-2 ring-violet-200 dark:ring-violet-500/30'
+                          : 'border-neutral-200 bg-white hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-violet-500/40'
+                      }`}
                     >
-                      {dcBusy ? '理清中…' : '🤔 帮我理清'}
+                      <span className="text-xl">🤔</span>
+                      <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                        帮我理清{dcBusy ? '…' : ''}
+                      </span>
+                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                        把它当成一次决策：先复述题面，再摆开选项、指出判据，给有条件的判断。
+                      </span>
                     </button>
                     <button
-                      onClick={() => void runConflict()}
-                      disabled={!topic.trim() || cfBusy}
-                      title="把「你的说法」和外部来源摆在一起，看哪两处对不上"
-                      className="rounded-full border border-rose-300 px-3 py-1 text-xs text-rose-700 transition-colors hover:bg-rose-50 disabled:opacity-40 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                      onClick={() => {
+                        setToolTopic(topic)
+                        setToolOpen(toolOpen === 'conflict' ? '' : 'conflict')
+                      }}
+                      className={`flex h-full flex-col gap-1 rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                        toolOpen === 'conflict'
+                          ? 'border-rose-400 ring-2 ring-rose-200 dark:ring-rose-500/30'
+                          : 'border-neutral-200 bg-white hover:border-rose-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-rose-500/40'
+                      }`}
                     >
-                      {cfBusy ? '对质中…' : '⚔️ 对质'}
+                      <span className="text-xl">⚔️</span>
+                      <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                        对质{cfBusy ? '…' : ''}
+                      </span>
+                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                        把你的说法和外部来源摆在一起，逐处找对不上的地方。
+                      </span>
                     </button>
                     <button
                       onClick={() => setDgOpen(true)}
-                      title="拿一份教程 / 长文 / 仓库，拆成「要搞懂的点」，再逐点去搞懂——它不需要先有话题"
-                      className="rounded-full border border-teal-300 px-3 py-1 text-xs text-teal-700 transition-colors hover:bg-teal-50 dark:border-teal-700 dark:text-teal-300 dark:hover:bg-teal-500/10"
+                      className={`flex h-full flex-col gap-1 rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                        dgOpen
+                          ? 'border-teal-400 ring-2 ring-teal-200 dark:ring-teal-500/30'
+                          : 'border-neutral-200 bg-white hover:border-teal-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-teal-500/40'
+                      }`}
                     >
-                      🎒 消化一份材料
+                      <span className="text-xl">🎒</span>
+                      <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                        消化一份材料
+                      </span>
+                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                        拿一份教程 / 长文 / 仓库，拆成「要搞懂的点」，逐点开教、顺手出卡。
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setTab('practice')}
+                      className="flex h-full flex-col gap-1 rounded-2xl border border-neutral-200 bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-sm dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-orange-500/40"
+                    >
+                      <span className="text-xl">📝</span>
+                      <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                        模拟测验
+                      </span>
+                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                        拿一份材料出几道题考你，逐题自判；没答上的一键开教学补课。
+                      </span>
                     </button>
                   </div>
-                </div>
-                {hasCards ? (
-                  <div className="xl:col-span-2">
-                    <div className="flex flex-col gap-4">{reportCards}</div>
+                  </>
+                  ) : null}
+                  {/* 点开的工具面板：就地收话题、就地开跑 */}
+                  {toolOpen ? (
+                    <div
+                      className={`mt-3 rounded-2xl border p-4 ${
+                        toolOpen === 'research'
+                          ? 'border-sky-200 bg-sky-50/40 dark:border-sky-500/30 dark:bg-sky-500/10'
+                          : toolOpen === 'decide'
+                            ? 'border-violet-200 bg-violet-50/40 dark:border-violet-500/30 dark:bg-violet-500/10'
+                            : 'border-rose-200 bg-rose-50/40 dark:border-rose-500/30 dark:bg-rose-500/10'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between pb-2">
+                        <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                          {toolOpen === 'research'
+                            ? '🔍 研究什么？'
+                            : toolOpen === 'decide'
+                              ? '🤔 要理清什么？'
+                              : '⚔️ 拿什么去对质？'}
+                        </p>
+                        <button
+                          onClick={() => setToolOpen('')}
+                          className="text-[11px] text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+                        >
+                          收起
+                        </button>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          value={toolTopic}
+                          onChange={(e) => setToolTopic(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') runTool()
+                          }}
+                          autoFocus
+                          placeholder="说一个具体的东西…"
+                          className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                        />
+                        <button
+                          onClick={runTool}
+                          disabled={!toolTopic.trim()}
+                          className="shrink-0 rounded-xl bg-neutral-800 px-4 py-2 text-sm font-medium text-white transition-all hover:brightness-125 disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+                        >
+                          开跑
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* 模拟测验面板：选材料 → 出题 → 逐题作答自判 → 总结。
+                      没答上的题就地开一场教学，题面就是开场话题。 */}
+                  {tab === 'practice' ? (
+                    <div className="mt-3 rounded-2xl border border-orange-200 bg-orange-50/40 p-4 dark:border-orange-500/30 dark:bg-orange-500/10">
+                      <div className="flex items-center justify-between pb-2">
+                        <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                          📝 拿什么材料考你？
+                        </p>
+                        <button
+                          onClick={() => setTab('learn')}
+                          className="text-[11px] text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+                        >
+                          收起
+                        </button>
+                      </div>
+
+                      {!qz ? (
+                        <>
+                          <div className="mb-2 flex gap-1 text-xs">
+                            {(['file', 'text'] as const).map((m) => (
+                              <button
+                                key={m}
+                                onClick={() => setQzMode(m)}
+                                className={`rounded-full border px-2.5 py-1 transition-colors ${
+                                  qzMode === m
+                                    ? 'border-orange-500 bg-orange-500/10 font-medium text-orange-700 dark:text-orange-300'
+                                    : 'border-neutral-300 text-neutral-500 hover:border-orange-300 dark:border-neutral-700'
+                                }`}
+                              >
+                                {m === 'file' ? '📄 选一份材料' : '✍️ 粘一段'}
+                              </button>
+                            ))}
+                          </div>
+                          {qzMode === 'file' ? (
+                            <div className="space-y-1">
+                              <input
+                                value={qzQuery}
+                                onChange={(e) => setQzQuery(e.target.value)}
+                                placeholder="筛选文件名…"
+                                className="w-full rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-orange-400 dark:border-neutral-700 dark:bg-neutral-900"
+                              />
+                              <select
+                                value={qzSource}
+                                onChange={(e) => setQzSource(e.target.value)}
+                                size={6}
+                                className="w-full rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm outline-none focus:border-orange-400 dark:border-neutral-700 dark:bg-neutral-900"
+                              >
+                                {(
+                                  [
+                                    ['vault 笔记', qzSources?.vault],
+                                    ['代码仓库', qzSources?.repos],
+                                    ['本地目录', qzSources?.dirs],
+                                  ] as const
+                                ).map(([label, items]) =>
+                                  items?.length ? (
+                                    <optgroup key={label} label={label}>
+                                      {items.map((p) => (
+                                        <option key={p} value={p}>
+                                          {p}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  ) : null
+                                )}
+                              </select>
+                            </div>
+                          ) : (
+                            <textarea
+                              value={qzText}
+                              onChange={(e) => setQzText(e.target.value)}
+                              rows={5}
+                              placeholder="把要考的材料粘进来…"
+                              className="w-full rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-orange-400 dark:border-neutral-700 dark:bg-neutral-900"
+                            />
+                          )}
+                          <div className="mt-2 flex items-center gap-2">
+                            <button
+                              onClick={() => void runQuiz()}
+                              disabled={qzBusy || (qzMode === 'text' ? !qzText.trim() : !qzSource)}
+                              className="rounded-lg bg-gradient-to-r from-orange-500 to-amber-500 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+                            >
+                              {qzBusy ? '出题中…' : '出 5 道题考我'}
+                            </button>
+                            {qzMsg ? (
+                              <p className="text-[11px] text-rose-600 dark:text-rose-400">{qzMsg}</p>
+                            ) : null}
+                          </div>
+                        </>
+                      ) : null}
+
+                      {/* 逐题作答：先自己想（可写下来），看答案，再自判 */}
+                      {qz && qz.idx < qz.cards.length ? (
+                        <div className="rounded-xl border border-orange-200/70 bg-white/80 p-4 dark:border-orange-500/20 dark:bg-neutral-900/50">
+                          <p className="pb-1 text-[11px] text-neutral-400">
+                            第 {qz.idx + 1} / {qz.cards.length} 题 · 已答上{' '}
+                            {qz.marks.filter((m) => m === 'hit').length} · 没答上{' '}
+                            {qz.marks.filter((m) => m === 'miss').length}
+                          </p>
+                          <p className="pb-3 text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                            {qz.cards[qz.idx].front}
+                          </p>
+                          {!qz.revealed ? (
+                            <>
+                              <textarea
+                                value={qz.answer}
+                                onChange={(e) =>
+                                  setQz((c) => (c ? { ...c, answer: e.target.value } : c))
+                                }
+                                rows={2}
+                                placeholder="先把你记得的答案写下来（也可以空着，直接在心里想）"
+                                className="w-full resize-none rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-orange-400 dark:border-neutral-700 dark:bg-neutral-900"
+                              />
+                              <div className="pt-2">
+                                <button
+                                  onClick={() => setQz({ ...qz, revealed: true })}
+                                  className="rounded-lg bg-neutral-800 px-3 py-1.5 text-xs font-medium text-white transition-all hover:brightness-125 dark:bg-neutral-100 dark:text-neutral-900"
+                                >
+                                  看答案
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="rounded-lg bg-neutral-100 p-3 text-sm leading-relaxed text-neutral-700 dark:bg-neutral-800/70 dark:text-neutral-200">
+                                {qz.cards[qz.idx].back}
+                              </div>
+                              {qz.cards[qz.idx].hint ? (
+                                <p className="pt-1.5 text-[11px] text-neutral-400">
+                                  提示：{qz.cards[qz.idx].hint}
+                                </p>
+                              ) : null}
+                              <div className="flex gap-2 pt-3">
+                                <button
+                                  onClick={() => markQuiz('hit')}
+                                  className="rounded-lg border border-emerald-300 px-3 py-1.5 text-xs text-emerald-700 transition-colors hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+                                >
+                                  ✓ 答上了
+                                </button>
+                                <button
+                                  onClick={() => markQuiz('miss')}
+                                  className="rounded-lg border border-rose-300 px-3 py-1.5 text-xs text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                                >
+                                  ✗ 没答上
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+
+                      {/* 总结：全判完才出现。没答上的题就地开教学，题面当开场话题 */}
+                      {qz && qz.marks.every((m) => m !== null) ? (
+                        <div className="rounded-xl border border-orange-200/70 bg-white/80 p-4 dark:border-orange-500/20 dark:bg-neutral-900/50">
+                          <p className="pb-2 text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                            测验完成：{qz.marks.filter((m) => m === 'hit').length} / {qz.cards.length}{' '}
+                            答上了
+                          </p>
+                          {qz.marks.some((m) => m === 'miss') ? (
+                            <div className="space-y-1.5">
+                              <p className="text-[11px] text-neutral-400">
+                                这几道没答上——点一题，专门开一场教学把它搞懂：
+                              </p>
+                              {qz.cards.map((c, i) =>
+                                qz.marks[i] === 'miss' ? (
+                                  <button
+                                    key={i}
+                                    onClick={() => {
+                                      setTab('learn')
+                                      void beginWith(c.front)
+                                    }}
+                                    className="block w-full rounded-lg px-2 py-1.5 text-left text-sm text-neutral-700 transition-colors hover:bg-orange-100/70 hover:text-orange-800 dark:text-neutral-200 dark:hover:bg-orange-500/10 dark:hover:text-orange-300"
+                                  >
+                                    ↳ {c.front}
+                                  </button>
+                                ) : null
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                              全部答上了——这份材料你是真懂了。
+                            </p>
+                          )}
+                          <button
+                            onClick={() => setQz(null)}
+                            className="pt-2 text-[11px] text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+                          >
+                            再测一份
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </section>
+                {tab === 'learn' && hasCards ? (
+                  <div className="flex flex-col gap-4">{reportCards}</div>
+                ) : null}
+
+                {tab === 'record' ? (
+                <>
+                {/* 学习概览：数据块、概念地图、最近搞懂、卡点清单、会话历史——
+                    都收在「记录」标签下，一屏看完自己学到哪了。 */}
+                {stats && stats.sessions + stats.concepts > 0 ? (
+                  <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {([
+                      ['近 14 天', `${stats.sessions} 场`, '教学会话'],
+                      ['学过的概念', `${stats.concepts} 个`, '说过「搞懂了」或「半懂」的'],
+                      ['说通了', `${stats.got} 次`, '最近一次自评是搞懂'],
+                      [
+                        '从半懂到懂',
+                        `${mastery?.events.filter((e) => e.from_half).length ?? 0} 个`,
+                        '以前半懂、后来真说通了',
+                      ],
+                    ] as const).map(([label, value, hint]) => (
+                      <div
+                        key={label}
+                        className="rounded-2xl border border-neutral-200/80 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900/60"
+                      >
+                        <p className="text-[11px] text-neutral-400">{label}</p>
+                        <p className="pb-0.5 text-xl font-semibold text-neutral-800 dark:text-neutral-100">
+                          {value}
+                        </p>
+                        <p className="text-[10px] leading-relaxed text-neutral-400">{hint}</p>
+                      </div>
+                    ))}
+                  </section>
+                ) : null}
+
+                <section className="grid items-start gap-6 lg:grid-cols-2">
+                  <div className="rounded-2xl border border-neutral-200/80 p-4 dark:border-neutral-800">
+                    {conceptsPanel}
+                    {!learnMap || mapCount === 0 ? (
+                      <p className="px-1 py-2 text-xs leading-relaxed text-neutral-400">
+                        还没有学习记录。在上面开一场，或者消化一份材料，这里会长出你的概念地图。
+                      </p>
+                    ) : null}
                   </div>
+                  <div className="flex flex-col gap-6">
+                    {/* 最近搞懂：学会一个东西的「时刻」。从半懂到懂的格外标出来——
+                        那是这份记录里最值钱的线索 */}
+                    <div className="rounded-2xl border border-neutral-200/80 p-4 dark:border-neutral-800">
+                      <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                        最近搞懂
+                      </p>
+                      {mastery && mastery.events.length > 0 ? (
+                        <ul className="space-y-1.5">
+                          {mastery.events.slice(0, 6).map((e) => (
+                            <li key={e.concept + e.at} className="flex items-baseline gap-2">
+                              <span className="shrink-0 text-emerald-500">✦</span>
+                              <span className="min-w-0 flex-1 truncate text-sm text-neutral-700 dark:text-neutral-200">
+                                {e.concept}
+                              </span>
+                              {e.from_half ? (
+                                <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300">
+                                  从半懂到懂
+                                </span>
+                              ) : null}
+                              <span className="shrink-0 text-[10px] text-neutral-400">
+                                {(e.at || '').slice(5, 10)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="px-1 py-1 text-xs leading-relaxed text-neutral-400">
+                          还没有「说通了」的记录。学完标一次「搞懂了」，这里会记下那个时刻。
+                        </p>
+                      )}
+                    </div>
+                    {/* 待解的卡点：全库的卡点集中在这里，逐条可以关掉；做成播客、
+                        开圆桌的入口在左边地图的标题行 */}
+                    <div className="rounded-2xl border border-neutral-200/80 p-4 dark:border-neutral-800">
+                      <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                        待解的卡点 {stuckRows.filter((s) => !s.resolved_at).length > 0 ? stuckRows.filter((s) => !s.resolved_at).length : ''}
+                      </p>
+                      {stuckRows.some((s) => !s.resolved_at) ? (
+                        <ul className="space-y-2">
+                          {stuckRows
+                            .filter((s) => !s.resolved_at)
+                            .slice(0, 8)
+                            .map((s) => (
+                              <li key={s.id} className="group/st flex items-start gap-2">
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">
+                                    {s.concept}
+                                  </span>
+                                  <span className="block text-[11px] leading-relaxed text-neutral-400">
+                                    ↳ {s.stuck}
+                                  </span>
+                                </span>
+                                <button
+                                  onClick={() => void resolveStuck(s.id, true)}
+                                  title="这条不用再管了"
+                                  className="shrink-0 text-xs text-neutral-300 opacity-0 transition-opacity hover:text-emerald-600 focus:opacity-100 group-hover/st:opacity-100 dark:text-neutral-600 dark:hover:text-emerald-300"
+                                >
+                                  ✓
+                                </button>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <p className="px-1 py-1 text-xs leading-relaxed text-neutral-400">
+                          没有挂着的卡点。学的时候说「这里没懂」，它会记在这里，等哪天回头解决。
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </section>
+
+                {/* 学过的：统计一句话 + 完整会话历史，通栏铺开 */}
+                <section className="rounded-2xl border border-neutral-200/80 p-4 dark:border-neutral-800">
+                  <div className="flex items-baseline justify-between pb-2">
+                    <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                      学过的
+                    </p>
+                    {stats && stats.sessions > 0 ? (
+                      <p className="text-[11px] text-neutral-400">
+                        近 {stats.days} 天 {stats.sessions} 次，{stats.got} 次说通了
+                        {stats.got_with_recall > 0
+                          ? `，其中 ${stats.got_with_recall} 次接上了以前卡的点`
+                          : ''}
+                      </p>
+                    ) : null}
+                  </div>
+                  {historyList}
+                </section>
+                </>
                 ) : null}
               </div>
             </div>
@@ -1803,6 +2537,23 @@ export default function TutorPage() {
                       </span>
                     ) : null}
                   </div>
+                  {/* 讲法快捷指令：一听没跟上时最常见的四句，一键发出。
+                      最后「考我一题」是反转——让它出题，不是继续听讲。 */}
+                  <div className="flex flex-wrap items-center gap-1.5 pb-1.5">
+                    {QUICK_ASKS.map(([label, text]) => (
+                      <button
+                        key={label}
+                        onClick={() => {
+                          if (sid !== null && !busy) void send(sid, text)
+                        }}
+                        disabled={busy || turns.length === 0}
+                        title={text}
+                        className="rounded-full border border-neutral-200 px-2.5 py-1 text-[11px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   <div className="flex items-end gap-2">
                     <textarea
                       value={draft}
@@ -1831,10 +2582,13 @@ export default function TutorPage() {
           )}
         </div>
 
-        {/* 右栏是历史，不是待办：只写已经发生过的事，没有到期、没有未完成计数。 */}
-        <aside className="hidden w-64 shrink-0 flex-col border-l border-neutral-200/80 lg:flex dark:border-neutral-800/80">
+        {/* 右栏是历史，不是待办：只写已经发生过的事，没有到期、没有未完成计数。
+            开场屏不再渲染它——概览已经铺进页面主体，窄条里什么都看不见。 */}
+        {sid !== null ? (
+          <aside className="hidden w-64 shrink-0 flex-col border-l border-neutral-200/80 lg:flex dark:border-neutral-800/80">
             {railPanel}
           </aside>
+        ) : null}
       </div>
     </>
   )

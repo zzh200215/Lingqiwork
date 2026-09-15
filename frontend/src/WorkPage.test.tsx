@@ -21,6 +21,7 @@ vi.mock('./api', () => ({
     workMeetings: vi.fn(),
     audioUrl: (p: string) => `/api/work/audio?path=${encodeURIComponent(p)}`,
     installMeetingPreset: vi.fn(),
+    installWorkPreset: vi.fn(),
     deliverGenres: vi.fn(),
     deliverSave: vi.fn(),
     listTasks: vi.fn(),
@@ -32,6 +33,14 @@ vi.mock('./api', () => ({
   },
 }))
 vi.mock('./stream', () => ({ streamDeliver: vi.fn() }))
+// 跟进标签整页就是 ThreadsPage（自己的测试文件钉它自己的行为），这里只验证标签切换
+vi.mock('./ThreadsPage', () => ({
+  default: ({ chromeless }: { chromeless?: boolean }) => (
+    <div data-testid="threads-stub" data-chromeless={chromeless ? '1' : '0'}>
+      事
+    </div>
+  ),
+}))
 import { api } from './api'
 import { streamDeliver } from './stream'
 
@@ -141,9 +150,9 @@ const GATED = task(3, '人工审', {
   last_status: 'ok',
 })
 
-function renderPage() {
+function renderPage(opts: { tab?: 'engine' | 'follow' } = {}) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[opts.tab ? `/work?tab=${opts.tab}` : '/work']}>
       <WorkPage />
     </MemoryRouter>
   )
@@ -182,11 +191,26 @@ describe('WorkPage · 产出', () => {
     renderPage()
     expect(await screen.findByText('还没有产出。')).toBeTruthy()
   })
+
+  it('改写成：拿这件产出当钉住材料，开交付流换体裁重写（J4）', async () => {
+    renderPage()
+    await screen.findByText('asyncio 事件循环')
+
+    // 悬停才出现的动作——直接点它
+    fireEvent.click(screen.getAllByText('改写成')[0])
+
+    // 交付流摊开，题目与钉住材料都带上了这件产出
+    expect(await screen.findByText('周报')).toBeTruthy()
+    const input = screen.getByPlaceholderText('写什么？（例：这周的 RAG 调研）') as HTMLInputElement
+    expect(input.value).toContain('asyncio 事件循环')
+    // 钉住的 chip 里就是这件产出（标题在产出行与 chip 各出现一次）
+    expect(screen.getAllByText('asyncio 事件循环').length).toBeGreaterThanOrEqual(2)
+  })
 })
 
 describe('WorkPage · 工作流', () => {
   it('定义、上次跑到哪、链下游、失败原因同屏', async () => {
-    renderPage()
+    renderPage({ tab: 'engine' })
     expect(await screen.findByText('每日抓取')).toBeTruthy()
     expect(screen.getByText(/0 8 \* \* \*/)).toBeTruthy()
     expect(screen.getByText(/→ 总结成稿/)).toBeTruthy() // 任务链看得见
@@ -195,7 +219,7 @@ describe('WorkPage · 工作流', () => {
   })
 
   it('展开一条看运行记录，接地分与判分理由都在', async () => {
-    renderPage()
+    renderPage({ tab: 'engine' })
     fireEvent.click(await screen.findByText('每日抓取'))
     expect(await screen.findByText('接地 4/5')).toBeTruthy()
     expect(screen.getByText('接地 4/5').getAttribute('title')).toContain('材料里找到依据')
@@ -203,21 +227,21 @@ describe('WorkPage · 工作流', () => {
 
   it('重跑调 runTask', async () => {
     vi.mocked(api.runTask).mockResolvedValue({ status: 'ok' } as TaskRunResult)
-    renderPage()
+    renderPage({ tab: 'engine' })
     fireEvent.click((await screen.findAllByText('重跑'))[0])
     await waitFor(() => expect(api.runTask).toHaveBeenCalledWith(1))
   })
 
   it('没有工作流时指路设置页', async () => {
     vi.mocked(api.listTasks).mockResolvedValue([])
-    renderPage()
+    renderPage({ tab: 'engine' })
     expect(await screen.findByText('还没有工作流。')).toBeTruthy()
   })
 
   it('人工卡点：停在待审的那一步，该做的是放行——不是重跑', async () => {
     vi.mocked(api.listTasks).mockResolvedValue([...TASKS, GATED])
     vi.mocked(api.approveRun).mockResolvedValue({ ok: true, approved: true, next_task_id: 2 })
-    renderPage()
+    renderPage({ tab: 'engine' })
 
     expect(await screen.findByText('等你点头')).toBeTruthy()
     fireEvent.click(screen.getByText('通过'))
@@ -227,10 +251,38 @@ describe('WorkPage · 工作流', () => {
   it('人工卡点：驳回调 rejectRun', async () => {
     vi.mocked(api.listTasks).mockResolvedValue([...TASKS, GATED])
     vi.mocked(api.rejectRun).mockResolvedValue({ ok: true, approved: false, next_task_id: null })
-    renderPage()
+    renderPage({ tab: 'engine' })
 
     fireEvent.click(await screen.findByText('驳回'))
     await waitFor(() => expect(api.rejectRun).toHaveBeenCalledWith(9))
+  })
+})
+
+describe('WorkPage · 处理一项工作', () => {
+  it('起一个题目：装好工作流、用题目跑第一步（topic 走运行期覆盖，不改模板）', async () => {
+    vi.mocked(api.installWorkPreset).mockResolvedValue({
+      created: 3,
+      tasks: [task(7, '工作·调研', { action: 'research', require_approval: true })],
+    })
+    vi.mocked(api.runTask).mockResolvedValue({ status: 'ok' } as TaskRunResult)
+    renderPage({ tab: 'engine' })
+
+    fireEvent.click(await screen.findByText('起一个题目'))
+    fireEvent.change(screen.getByPlaceholderText('一句话题目（例：要不要上向量库选型）'), {
+      target: { value: '要不要上向量库' },
+    })
+    fireEvent.click(screen.getByText('开始'))
+
+    await waitFor(() => expect(api.installWorkPreset).toHaveBeenCalled())
+    await waitFor(() => expect(api.runTask).toHaveBeenCalledWith(7, '要不要上向量库'))
+  })
+
+  it('空题目不起链，只给一句提醒', async () => {
+    renderPage({ tab: 'engine' })
+    fireEvent.click(await screen.findByText('起一个题目'))
+    fireEvent.click(screen.getByText('开始'))
+    expect(await screen.findByText('先写一个题目。')).toBeTruthy()
+    expect(api.installWorkPreset).not.toHaveBeenCalled()
   })
 })
 
@@ -250,7 +302,7 @@ describe('WorkPage · 会议', () => {
 
   it('一场一行：标题、日期、原声回听、产物都在', async () => {
     vi.mocked(api.workMeetings).mockResolvedValue({ meetings: [MEETING] })
-    const { container } = renderPage()
+    const { container } = renderPage({ tab: 'engine' })
 
     expect(await screen.findByText('第 37 周周会')).toBeTruthy()
     expect(screen.getByText('09-10')).toBeTruthy()
@@ -262,7 +314,7 @@ describe('WorkPage · 会议', () => {
   })
 
   it('没有会议时不占地方', async () => {
-    renderPage()
+    renderPage({ tab: 'engine' })
     await screen.findByText('还没有工作流。')
     expect(screen.queryByText('会议')).toBeNull()
   })
@@ -270,7 +322,7 @@ describe('WorkPage · 会议', () => {
   it('工作流空态能一键装一条会议流程', async () => {
     vi.mocked(api.listTasks).mockResolvedValue([])
     vi.mocked(api.installMeetingPreset).mockResolvedValue({ created: 4, tasks: [] })
-    renderPage()
+    renderPage({ tab: 'engine' })
 
     fireEvent.click(await screen.findByText('装一条会议流程'))
     await waitFor(() => expect(api.installMeetingPreset).toHaveBeenCalled())
@@ -377,5 +429,36 @@ describe('WorkPage · 交付', () => {
         ['notes/loop.md']
       )
     )
+  })
+})
+
+describe('WorkPage · 标签', () => {
+  it('默认停在「产出」：清单看得见，「引擎」的内容不抢屏', async () => {
+    renderPage()
+    expect(await screen.findByText('asyncio 事件循环')).toBeTruthy()
+    expect(screen.queryByText('每日抓取')).toBeNull()
+  })
+
+  it('「跟进」标签渲染「事」，产出清单退场', async () => {
+    renderPage({ tab: 'follow' })
+    expect(await screen.findByTestId('threads-stub')).toBeTruthy()
+    expect(screen.queryByText('asyncio 事件循环')).toBeNull()
+  })
+
+  it('跟进标签里的「事」是无头渲染——页头只有「工作」一个', async () => {
+    renderPage({ tab: 'follow' })
+    expect(screen.getByTestId('threads-stub').getAttribute('data-chromeless')).toBe('1')
+  })
+
+  it('工作流深链 ?task=7 没写 tab，落在「引擎」才对得上', async () => {
+    // jsdom 没有 scrollIntoView；深链定位到元素就会调它
+    Element.prototype.scrollIntoView = () => {}
+    render(
+      <MemoryRouter initialEntries={['/work?task=1']}>
+        <WorkPage />
+      </MemoryRouter>
+    )
+    expect(await screen.findByText('每日抓取')).toBeTruthy()
+    expect(screen.queryByText('asyncio 事件循环')).toBeNull()
   })
 })

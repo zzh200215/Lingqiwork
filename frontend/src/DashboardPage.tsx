@@ -16,6 +16,7 @@ import {
   type TutorStats,
 } from './api'
 import { streamRecap, type RecapReport, type RecapSaved, type ReportDraft } from './stream'
+import { useVoiceInput } from './voice'
 
 // 仪表盘 — 零柒视角
 // 顶部 banner 用零柒 sprite + LLM 生成的今日一句话；
@@ -130,8 +131,6 @@ export default function DashboardPage() {
   // 语音日记：麦克风→转写→可编辑→落盘 vault/journal（复用聊天页的录制链路）
   const [journalView, setJournalView] = useState<JournalRecent | null>(null)
   const [journalText, setJournalText] = useState('')
-  const [recording, setRecording] = useState(false)
-  const [transcribing, setTranscribing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [journalMsg, setJournalMsg] = useState('')
 
@@ -187,8 +186,12 @@ export default function DashboardPage() {
     setRcMsg('')
     setRcBusy(false)
   }, [])
-  const recorderRef = useRef<MediaRecorder | null>(null)
-  const micChunksRef = useRef<Blob[]>([])
+  // 录音 → 转写：实现搬去了 `voice.ts`，三处共用。拆出两个名字是为了 JSX 不用改。
+  const voice = useVoiceInput(
+    (t) => setJournalText((prev) => (prev ? `${prev} ${t}` : t)),
+    setJournalMsg
+  )
+  const { recording, transcribing } = voice
 
   const refreshJournal = useCallback(() => {
     api.journalRecent().then(setJournalView).catch(() => {})
@@ -205,41 +208,7 @@ export default function DashboardPage() {
   }, [refreshBriefing, refreshJournal])
 
   function toggleJournalMic() {
-    if (recording) {
-      recorderRef.current?.stop()
-      return
-    }
-    if (transcribing) return
-    setJournalMsg('')
-    navigator.mediaDevices
-      .getUserMedia({ audio: true })
-      .then((stream) => {
-        const rec = new MediaRecorder(stream)
-        micChunksRef.current = []
-        rec.ondataavailable = (e) => {
-          if (e.data.size > 0) micChunksRef.current.push(e.data)
-        }
-        rec.onstop = async () => {
-          stream.getTracks().forEach((t) => t.stop())
-          setRecording(false)
-          const blob = new Blob(micChunksRef.current, { type: rec.mimeType || 'audio/webm' })
-          if (blob.size < 800) return // accidental tap — nothing audible
-          setTranscribing(true)
-          try {
-            const r = await api.transcribeAudio(blob)
-            if (r.text) setJournalText((prev) => (prev ? `${prev} ${r.text}` : r.text))
-            else setJournalMsg('没有识别到语音内容')
-          } catch (e) {
-            setJournalMsg(`语音识别失败：${String(e)}`)
-          } finally {
-            setTranscribing(false)
-          }
-        }
-        rec.start()
-        recorderRef.current = rec
-        setRecording(true)
-      })
-      .catch(() => setJournalMsg('无法访问麦克风 — 请检查系统/浏览器权限'))
+    voice.toggle()
   }
 
   async function saveJournal() {

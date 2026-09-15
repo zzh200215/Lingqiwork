@@ -1,11 +1,11 @@
-// 成长页：等级卡 + 四个来源 + 最近搞懂 + 坚持 + 最近交出去。
+// 成长页：等级卡 + 五个来源 + 里程碑 + 最近搞懂 + 坚持 + 最近交出去。
 // 数据全是派生量，所以这里全用固定数据喂它，不碰网络。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import GrowthPage from './GrowthPage'
-import type { HabitToday, PetGrowth, TutorMastery, WorkOutput } from './api'
+import type { HabitToday, PetGrowth, PetRoom, TutorMastery, WorkOutput } from './api'
 
 vi.mock('./api', () => ({
   api: {
@@ -14,9 +14,52 @@ vi.mock('./api', () => ({
     habitsToday: vi.fn(),
     workOutputs: vi.fn(),
     petPlugins: vi.fn(),
+    petRoom: vi.fn(),
   },
 }))
 import { api } from './api'
+
+/** 里程碑：与「小屋」是同一份 `things`，这里只挑两件来钉时间线的顺序与日期。 */
+const MILESTONE: PetRoom = {
+  things: [
+    {
+      id: 'work:5',
+      kind: 'prop',
+      module: 'work',
+      module_label: '工作',
+      icon: '📦',
+      label: '一摞成果',
+      detail: '第 5 份成品',
+      at: '2026-09-14T09:00:00',
+      at_ts: 1,
+      count: 5,
+    },
+    {
+      id: 'teach:1',
+      kind: 'badge',
+      module: 'teach',
+      module_label: '教它',
+      icon: '🎓',
+      label: '第一次把它讲通',
+      detail: '第 1 个讲通的概念',
+      at: '2026-09-08T09:00:00',
+      at_ts: 0,
+      count: 1,
+    },
+  ],
+  carried: null,
+  shelf: [],
+  today: { meals: [], date: '2026-09-14' },
+  empty: false,
+}
+
+const NO_ROOM: PetRoom = {
+  things: [],
+  carried: null,
+  shelf: [],
+  today: { meals: [], date: '2026-09-14' },
+  empty: true,
+}
 
 const GROWTH: PetGrowth = {
   level: 2,
@@ -96,6 +139,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.mocked(api.petGrowth).mockResolvedValue(GROWTH)
+  vi.mocked(api.petRoom).mockResolvedValue(NO_ROOM)
   vi.mocked(api.tutorMastery).mockResolvedValue(MASTERY)
   vi.mocked(api.habitsToday).mockResolvedValue(HABITS)
   vi.mocked(api.workOutputs).mockResolvedValue({ outputs: OUTPUTS })
@@ -129,6 +173,25 @@ describe('GrowthPage', () => {
     expect(await screen.findByText('asyncio 事件循环')).toBeTruthy()
     expect(screen.getByText('从半懂到懂')).toBeTruthy()
     expect(screen.getByText('JS 闭包')).toBeTruthy()
+  })
+
+  it('里程碑：不是聊天流，是跨过门槛的那些时刻（新→旧）', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue(MILESTONE)
+    const { container } = renderPage()
+    expect(await screen.findByText('一摞成果')).toBeTruthy()
+    expect(screen.getByText('第 5 份成品')).toBeTruthy()
+    expect(screen.getByText('第一次把它讲通')).toBeTruthy()
+    expect(screen.getByText('2026-09-14')).toBeTruthy()
+    const ids = [...container.querySelectorAll('[data-milestone]')].map((el) =>
+      el.getAttribute('data-milestone')
+    )
+    expect(ids).toEqual(['work:5', 'teach:1'])
+  })
+
+  it('一件里程碑都没有时，这一段不出现（不摆空档）', async () => {
+    const { container } = renderPage()
+    await screen.findByText('最近搞懂')
+    expect(container.querySelector('[data-milestones]')).toBeNull()
   })
 
   it('坚持：有连续才写连续，累计天数一直在——不写「连续 0 天」', async () => {

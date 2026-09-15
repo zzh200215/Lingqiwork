@@ -58,3 +58,45 @@ describe('legacyTarget', () => {
     expect(legacyTarget('/nope', '?x=1', '')).toBeNull()
   })
 })
+
+describe('P2 导航收缩', () => {
+  it('/assets 是五区导航里的「资产」', () => {
+    expect(parseRoute('/assets')).toBe('assets')
+    expect(parseRoute('/assets.html')).toBe('assets')
+  })
+
+  it('/threads 整页搬进工作 · 跟进，redirect 带上 query', () => {
+    expect(legacyTarget('/threads', '', '')).toEqual({
+      pathname: '/work',
+      search: '?tab=follow',
+      hash: '',
+    })
+    // 从「一件事」深链过来的 ?thread=3 不能丢
+    expect(legacyTarget('/threads', '?thread=3', '')).toEqual({
+      pathname: '/work',
+      search: '?thread=3&tab=follow',
+      hash: '',
+    })
+    // 新家的参数说了算：旧链接自带的 tab 不会盖掉 follow
+    expect(legacyTarget('/threads', '?tab=output', '')).toEqual({
+      pathname: '/work',
+      search: '?tab=follow',
+      hash: '',
+    })
+  })
+
+  it('没搬家的路径不 redirect——页面还在原址，书签照用', () => {
+    expect(legacyTarget('/notes', '', '')).toBeNull()
+    expect(legacyTarget('/kb', '?clip=x', '')).toBeNull()
+    expect(legacyTarget('/dashboard', '', '')).toBeNull()
+  })
+
+  it('/growth 搬进陪伴页的成长标签', () => {
+    expect(parseRoute('/companion')).toBe('companion')
+    expect(legacyTarget('/growth', '', '')).toEqual({
+      pathname: '/companion',
+      search: '?tab=growth',
+      hash: '',
+    })
+  })
+})

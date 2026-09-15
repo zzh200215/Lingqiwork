@@ -1,16 +1,45 @@
 // @testing-library + vitest, jsdom environment (vite.config.ts). 前端此前零测试，
 // 教学页是产品独有价值所在的地方，所以第一批判的是它：卡点召回条、取材来源行、
 // 以及 SSE 流里 sources 事件的解析——这三个都是「页面能不能说实话」的关口。
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 
 import {
   MaterialLine,
   pointCardBody,
+  ReceiptLine,
   RecallChip,
   shortSource,
 } from './TutorPage'
 import { streamTutorSay, type TutorRecallHit } from './stream'
+
+describe('ReceiptLine', () => {
+  afterEach(cleanup)
+  // 学页三张成文卡跑完后的回执行：正文只活在 /notes 详情页，这一行负责指过去。
+  it('存了才给链接，且指到 /notes 详情页', () => {
+    render(
+      <MemoryRouter>
+        <ReceiptLine title="向量库选型" meta="来源 12 条" saved="research/2026-09-13-x.md" />
+      </MemoryRouter>
+    )
+    const link = screen.getByText('向量库选型').closest('a')
+    expect(link?.getAttribute('href')).toBe(
+      '/notes?path=' + encodeURIComponent('research/2026-09-13-x.md')
+    )
+    expect(screen.getByText(/已存入/)).toBeTruthy()
+  })
+
+  it('没存时不给链接 —— 产物还不存在，别指一个空地址', () => {
+    render(
+      <MemoryRouter>
+        <ReceiptLine title="向量库选型" meta="来源 12 条" saved="" />
+      </MemoryRouter>
+    )
+    expect(screen.getByText('向量库选型').closest('a')).toBeNull()
+    expect(screen.getByText('来源 12 条')).toBeTruthy()
+  })
+})
 
 describe('shortSource', () => {
   it('取路径尾部两段 —— chroma 的 title 只是文件名去后缀，认不出位置', () => {

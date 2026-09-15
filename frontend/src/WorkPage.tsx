@@ -1,16 +1,17 @@
-/** 工作 — 在你不在的时候跑的流程，和它们产出的东西。
+/** 工作 — 干活的一条线，三个标签：**产出**（写一份交付 + 六个引擎的成品清单）、
+ *  **引擎**（工作流 + 会议，定时任务从「设置」搬来当一等对象）、**跟进**（「事」，
+ *  材料与成品挂到同一件事上，`?tab=follow`）。
  *
- *  **工作流**：定时任务从「设置」里的配置表单搬到这里当一等对象——这条流程长什么样 /
- *  上次跑到哪 / 为什么失败，同屏可见。每条运行带接地分（§4-10）：它是无人值守时唯一
- *  会说话的东西，「跑成功但悄悄变差」没有别的信号。
+ *  **工作流**：这条流程长什么样 / 上次跑到哪 / 为什么失败，同屏可见。每条运行带
+ *  接地分（§4-10）：它是无人值守时唯一会说话的东西，「跑成功但悄悄变差」没有别的信号。
  *
  *  **产出**：六个引擎的成品落在 vault 的几个目录里（成文在 notes/，靠日期前缀分辨），
  *  这里把它们列出来、能筛、能点开。
  *
- *  **生成**：交付是唯一在 /work 上就地生成的——其余引擎仍从各自的入口跑，成品自动落到这里。
+ *  **生成**：交付是唯一在这里就地生成的——其余引擎仍从各自的入口跑，成品自动落到这里。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import {
   api,
@@ -22,10 +23,16 @@ import {
   type WorkOutput,
 } from './api'
 import AttachToThread from './AttachToThread'
+import EmptyHint from './EmptyHint'
 import FeedbackButtons from './FeedbackButtons'
 import { useDeepLink } from './deeplink'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
+import { KIND_BADGE } from './OutputCard'
+import OutputCard from './OutputCard'
+import PageShell from './PageShell'
+import StatRow from './StatRow'
 import { streamDeliver, type DeliverReport, type ReportDraft } from './stream'
+import ThreadsPage from './ThreadsPage'
 
 /** 筛选条的固定顺序——和产出的种类一一对应，不随数据变。 */
 const KINDS: { kind: WorkOutput['kind']; label: string }[] = [
@@ -38,16 +45,7 @@ const KINDS: { kind: WorkOutput['kind']; label: string }[] = [
   { kind: 'task', label: '工作流' },
 ]
 
-/** 每一种产出的颜色，和「学」页里那几个动作的配色对齐。 */
-const KIND_CLS: Record<WorkOutput['kind'], string> = {
-  research: 'border-sky-300 text-sky-700 dark:border-sky-700 dark:text-sky-300',
-  compose: 'border-neutral-300 text-neutral-600 dark:border-neutral-600 dark:text-neutral-300',
-  recap: 'border-violet-300 text-violet-700 dark:border-violet-700 dark:text-violet-300',
-  decide: 'border-violet-300 text-violet-700 dark:border-violet-700 dark:text-violet-300',
-  conflict: 'border-rose-300 text-rose-700 dark:border-rose-700 dark:text-rose-300',
-  deliver: 'border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-300',
-  task: 'border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300',
-}
+/** 每一种产出的颜色在 OutputCard 里统一定义（产出清单 / 资产页 / 学页回执共用）。 */
 
 const TRIGGER_LABEL: Record<string, string> = {
   cron: '定时',
@@ -62,39 +60,41 @@ function fmtWhen(iso: string | null): string {
 }
 
 /** 这次运行怎么样。`running` / 待审优先——它们还没结束，谈不上成败。 */
-function runTone(r: TaskRunItem): { cls: string; text: string } {
-  if (r.status === 'running') return { cls: 'text-amber-600 dark:text-amber-400', text: '运行中' }
-  if (r.status === 'awaiting_approval')
-    return { cls: 'text-amber-600 dark:text-amber-400', text: '等你点头' }
-  if (r.status === 'ok') return { cls: 'text-emerald-600 dark:text-emerald-400', text: '✓' }
-  if (r.status === 'rejected') return { cls: 'text-neutral-400', text: '已驳回' }
-  return { cls: 'text-rose-600 dark:text-rose-400', text: '✗' }
+function runTone(r: TaskRunItem): { tone: 'bad' | 'warn' | 'good' | 'info'; text: string } {
+  if (r.status === 'running') return { tone: 'warn', text: '运行中' }
+  if (r.status === 'awaiting_approval') return { tone: 'warn', text: '等你点头' }
+  if (r.status === 'ok') return { tone: 'good', text: '✓' }
+  if (r.status === 'rejected') return { tone: 'info', text: '已驳回' }
+  return { tone: 'bad', text: '✗' }
 }
 
 function RunRow({ run }: { run: TaskRunItem }) {
   const tone = runTone(run)
   return (
-    <li className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1 text-[11px]">
-      <span className={`shrink-0 font-medium ${tone.cls}`}>{tone.text}</span>
-      <span className="shrink-0 text-neutral-400">{fmtWhen(run.started_at)}</span>
-      <span className="shrink-0 text-neutral-400">{TRIGGER_LABEL[run.trigger] ?? run.trigger}</span>
-      {/* 接地分：够不着材料的那几次没有分，直说「未打分」而不是显示 0 */}
-      <span
-        className="shrink-0 text-neutral-400"
-        title={run.judge_reason || '这次没有可判的材料'}
-      >
-        {run.grounded == null ? '未打分' : `接地 ${run.grounded}/5`}
-      </span>
-      {run.tool_calls > 0 ? (
-        <span className="shrink-0 text-neutral-400">
-          {run.rounds} 轮 · {run.tool_calls} 次工具
-        </span>
-      ) : null}
-      {run.error ? (
-        <span className="min-w-0 basis-full truncate text-rose-600 dark:text-rose-400" title={run.error}>
-          {run.error}
-        </span>
-      ) : null}
+    <li className="py-1">
+      {/* 一次运行 = 一行事实。排布交给 StatRow，和今日概览同一套。 */}
+      <StatRow
+        items={[
+          { label: tone.text, tone: tone.tone },
+          { label: fmtWhen(run.started_at) },
+          { label: TRIGGER_LABEL[run.trigger] ?? run.trigger },
+          // 接地分：够不着材料的那几次没有分，直说「未打分」而不是显示 0
+          {
+            label: run.grounded == null ? '未打分' : `接地 ${run.grounded}/5`,
+            title: run.judge_reason || '这次没有可判的材料',
+          },
+          ...(run.tool_calls > 0
+            ? [{ label: `${run.rounds} 轮 · ${run.tool_calls} 次工具` }]
+            : []),
+        ]}
+        trailing={
+          run.error ? (
+            <span className="min-w-0 basis-full truncate text-rose-600 dark:text-rose-400" title={run.error}>
+              {run.error}
+            </span>
+          ) : undefined
+        }
+      />
     </li>
   )
 }
@@ -220,6 +220,26 @@ export default function WorkPage() {
   const [err, setErr] = useState('')
   const navigate = useNavigate()
 
+  // 标签挂在 ?tab= 上：/threads 的旧链接重定向过来带的就是 tab=follow；
+  // 工作流深链 ?task=7 没写 tab，直接落「引擎」才对得上。
+  const [params, setParams] = useSearchParams()
+  const tabParam = params.get('tab')
+  const tab: 'output' | 'engine' | 'follow' =
+    tabParam === 'engine' || tabParam === 'follow'
+      ? tabParam
+      : params.get('task')
+        ? 'engine'
+        : 'output'
+  const setTab = (t: 'output' | 'engine' | 'follow') =>
+    setParams(
+      (p) => {
+        const n = new URLSearchParams(p)
+        n.set('tab', t)
+        return n
+      },
+      { replace: true }
+    )
+
   // 工作流（§4-11）：定义、最近运行、失败原因同屏
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [openRuns, setOpenRuns] = useState<number | null>(null)
@@ -227,6 +247,11 @@ export default function WorkPage() {
   const [wfBusy, setWfBusy] = useState<number | null>(null)
   const [wfrBusy, setWfrBusy] = useState<number | null>(null) // 正在放行/驳回的那次运行
   const [presetBusy, setPresetBusy] = useState(false)
+  // 「处理一项工作」：题目 → 起链 → 三步各自停下等你点头（工作 preset）
+  const [workTopic, setWorkTopic] = useState('')
+  const [workOpen, setWorkOpen] = useState(false)
+  const [workBusy, setWorkBusy] = useState(false)
+  const [workMsg, setWorkMsg] = useState('')
 
   // 从「一件事」点一条工作流过来（`?task=7`）：滚到那条流程并亮一下
   useDeepLink('task', tasks.length > 0)
@@ -358,6 +383,35 @@ export default function WorkPage() {
     }
   }, [refreshTasks])
 
+  /** 处理一项工作：装好（幂等）→ 找到第一步 → 用题目起链。之后三步在你的「通过」下
+   *  逐步接手，产物自动落进产出清单。 */
+  const startWork = useCallback(async () => {
+    const t = workTopic.trim()
+    if (!t) {
+      setWorkMsg('先写一个题目。')
+      return
+    }
+    setWorkBusy(true)
+    setWorkMsg('')
+    try {
+      const r = await api.installWorkPreset()
+      const step1 = r.tasks.find((x) => x.name === '工作·调研')
+      if (!step1) {
+        setWorkMsg('装不出第一步，去「引擎」标签看看。')
+        return
+      }
+      await api.runTask(step1.id, t)
+      setWorkTopic('')
+      setWorkOpen(false)
+      setWorkMsg('调研跑起来了——跑完停下，去「引擎」标签通过。')
+      refreshTasks()
+    } catch (e) {
+      setWorkMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWorkBusy(false)
+    }
+  }, [workTopic, refreshTasks])
+
   /** 搜一条自己的材料钉进这次产出——检索命中的 `spec` 后端认（vault 路径 / repo: / dir:）。 */
   const searchPin = useCallback(async () => {
     const q = pinQuery.trim()
@@ -380,6 +434,20 @@ export default function WorkPage() {
     setPinOpen(false)
     setPinHits([])
     setPinQuery('')
+  }, [])
+
+  /** 改写成：拿一件产出当**钉住材料**，开交付流换个体裁重写（周报 / 短稿 / 一页纸提案）。
+   *  J4 的缺口——产出别只躺在清单里，要能变成「交得出去的那一版」。 */
+  const rewriteAs = useCallback((o: WorkOutput) => {
+    setTab('output')
+    setGenOpen(true)
+    setTopic(`把《${o.title}》改写成`)
+    setPinned([{ spec: o.path, title: o.title }])
+    setReport(null)
+    setDraft(null)
+    setSaved('')
+    setMsg('')
+    window.scrollTo({ top: 0 })
   }, [])
 
   const run = useCallback(async () => {
@@ -454,25 +522,49 @@ export default function WorkPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
-      <header className="flex items-start justify-between gap-3 pb-5">
-        <div>
-          <h1 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">工作</h1>
-          <p className="pt-1 text-sm text-neutral-500 dark:text-neutral-400">
-            在你不在的时候跑的流程，和它们产出的东西。
-          </p>
-        </div>
-        {catalogue ? (
+    <PageShell
+      title="工作"
+      description="写一份交付、跑后台流程、跟进一件事——干活这条线。"
+      maxWidth="4xl"
+      actions={
+        catalogue ? (
           <button
-            onClick={() => setGenOpen((v) => !v)}
+            onClick={() => {
+              if (tab !== 'output') setTab('output')
+              setGenOpen((v) => !v)
+            }}
             className="shrink-0 rounded-xl border border-teal-300 px-3 py-1.5 text-xs text-teal-700 transition-colors hover:bg-teal-50 dark:border-teal-700 dark:text-teal-300 dark:hover:bg-teal-500/10"
           >
-            {genOpen ? '收起' : '写一份交付'}
+            {genOpen && tab === 'output' ? '收起' : '写一份交付'}
           </button>
-        ) : null}
-      </header>
+        ) : null
+      }
+    >
+      {/* 三个标签：「产出」是归宿，「引擎」是后台，「跟进」是「这件事我到哪了」。
+          状态各自独立、切走再回来不丢——都在 URL 上，刷新也停在你离开的标签。 */}
+      <div className="mb-5 flex gap-1">
+        {(
+          [
+            ['output', '产出'],
+            ['engine', '引擎'],
+            ['follow', '跟进'],
+          ] as const
+        ).map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setTab(k)}
+            className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
+              tab === k
+                ? 'bg-neutral-200/80 font-medium text-neutral-800 dark:bg-neutral-700/70 dark:text-neutral-100'
+                : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800/70'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {genOpen && catalogue ? (
+      {tab === 'output' && genOpen && catalogue ? (
         <section className="mb-6 rounded-xl border border-teal-200 bg-teal-50/40 p-4 dark:border-teal-500/30 dark:bg-teal-500/10">
           <div className="flex flex-wrap items-center gap-1.5">
             {catalogue.genres.map((g) => (
@@ -481,7 +573,7 @@ export default function WorkPage() {
                 onClick={() => setGenre(g.id)}
                 className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
                   genre === g.id
-                    ? KIND_CLS.deliver
+                    ? KIND_BADGE.deliver
                     : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
                 }`}
               >
@@ -627,28 +719,77 @@ export default function WorkPage() {
         </section>
       ) : null}
 
+      {tab === 'engine' ? (
+      <>
+      {/* 处理一项工作：给一个题目，三步（调研 → 方案 → 汇报稿）各跑各的、各停下等点头。
+          这是「工作」作为一条线的正面入口——不必先去设置里拼任务。 */}
+      <section className="mb-6 rounded-xl border border-violet-200/70 bg-violet-50/40 p-4 dark:border-violet-500/30 dark:bg-violet-500/5">
+        <div className="flex items-baseline justify-between pb-2">
+          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+            🗂 处理一项工作
+          </h2>
+          <span className="text-xs text-neutral-400">题目 → 调研 → 方案 → 汇报稿，每步停下等你点头</span>
+        </div>
+        {workOpen ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={workTopic}
+              onChange={(e) => setWorkTopic(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void startWork()
+              }}
+              autoFocus
+              placeholder="一句话题目（例：要不要上向量库选型）"
+              className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+            />
+            <button
+              onClick={() => void startWork()}
+              disabled={workBusy}
+              className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-40"
+            >
+              {workBusy ? '起链…' : '开始'}
+            </button>
+            <button
+              onClick={() => {
+                setWorkOpen(false)
+                setWorkMsg('')
+              }}
+              className="rounded-lg border border-neutral-300 px-3 py-1.5 text-sm text-neutral-500 transition-colors hover:text-neutral-700 dark:border-neutral-700 dark:text-neutral-400"
+            >
+              收起
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setWorkOpen(true)}
+            className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-violet-500"
+          >
+            起一个题目
+          </button>
+        )}
+        {workMsg ? <p className="pt-2 text-xs text-neutral-500">{workMsg}</p> : null}
+      </section>
+
       <section className="mb-6">
         <div className="flex items-baseline justify-between pb-1">
           <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">工作流</h2>
           <span className="text-xs text-neutral-400">跑完带接地分 —— 「跑成功但变差」只有它看得见</span>
         </div>
         {tasks.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-neutral-300 px-5 py-6 text-center dark:border-neutral-700">
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">还没有工作流。</p>
-            <p className="pt-1.5 text-xs text-neutral-400">
-              在「设置 · 定时任务」里配一条，或者直接装一条现成的：
-            </p>
-            <button
-              onClick={() => void installPreset()}
-              disabled={presetBusy}
-              className="mt-2.5 rounded-xl border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
-            >
-              {presetBusy ? '正在装…' : '装一条会议流程'}
-            </button>
-            <p className="pt-2 text-[11px] text-neutral-400">
-              装好后，把会议录音丢进 vault/meetings/inbox/ 就会自己转写、出纪要与待办
-            </p>
-          </div>
+          <EmptyHint
+            pad="sm"
+            title="还没有工作流。"
+            hint="在「设置 · 定时任务」里配一条，或者直接装一条现成的（会议录音丢进 vault/meetings/inbox/ 就自己转写、出纪要与待办）。"
+            action={
+              <button
+                onClick={() => void installPreset()}
+                disabled={presetBusy}
+                className="rounded-xl border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+              >
+                {presetBusy ? '正在装…' : '装一条会议流程'}
+              </button>
+            }
+          />
         ) : (
           <ul className="divide-y divide-neutral-100 dark:divide-neutral-800/70">
             {tasks.map((t) => (
@@ -670,8 +811,10 @@ export default function WorkPage() {
           </ul>
         )}
       </section>
+      </>
+      ) : null}
 
-      {meetings.length > 0 ? (
+      {tab === 'engine' && meetings.length > 0 ? (
         <section className="mb-6">
           <div className="flex items-baseline justify-between pb-1">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">会议</h2>
@@ -712,12 +855,13 @@ export default function WorkPage() {
         </section>
       ) : null}
 
-      {err ? (
+      {tab === 'output' && err ? (
         <p className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
           产出清单拉不出来：{err}
         </p>
       ) : null}
 
+      {tab === 'output' ? (
       <section>
         <div className="flex items-baseline justify-between gap-3 pb-2">
           <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">产出</h2>
@@ -753,7 +897,7 @@ export default function WorkPage() {
                 onClick={() => setFilter(k.kind)}
                 className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
                   filter === k.kind
-                    ? KIND_CLS[k.kind]
+                    ? KIND_BADGE[k.kind]
                     : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
                 }`}
               >
@@ -764,42 +908,47 @@ export default function WorkPage() {
         ) : null}
 
         {outputs.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-neutral-300 px-5 py-10 text-center dark:border-neutral-700">
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">还没有产出。</p>
-            <p className="pt-2 text-xs leading-relaxed text-neutral-400">
-              在上面「写一份交付」，或去「学」「仪表盘」跑一轮；成品会自动落到这里。
-            </p>
-          </div>
+          <EmptyHint
+            pad="lg"
+            title="还没有产出。"
+            hint="在上面「写一份交付」，或去「学」「仪表盘」跑一轮；成品会自动落到这里。"
+          />
         ) : (
           <ul className="divide-y divide-neutral-100 dark:divide-neutral-800/70">
             {shown.map((o) => (
-              <li key={o.path} className="group flex items-center gap-3 py-2.5">
-                <span
-                  className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${KIND_CLS[o.kind]}`}
-                >
-                  {o.label}
-                </span>
-                <button
-                  onClick={() => openPath(o.path)}
-                  title={o.path}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">
-                    {o.title}
-                  </span>
-                  <span className="block truncate text-[11px] text-neutral-400">{o.path}</span>
-                </button>
-                <AttachToThread
-                  kind="output"
-                  ref={o.path}
-                  className="hidden shrink-0 group-hover:block"
+              <li key={o.path}>
+                <OutputCard
+                  kind={o.kind}
+                  label={o.label}
+                  title={o.title}
+                  meta={o.path}
+                  onOpen={() => openPath(o.path)}
+                  actions={
+                    <>
+                      <button
+                        onClick={() => rewriteAs(o)}
+                        title="拿它当材料，换个体裁重写（周报 / 短稿 / 一页纸提案）"
+                        className="hidden shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 group-hover:block dark:border-neutral-700 dark:text-neutral-400"
+                      >
+                        改写成
+                      </button>
+                      <AttachToThread
+                        kind="output"
+                        ref={o.path}
+                        className="hidden shrink-0 group-hover:block"
+                      />
+                      <span className="text-[11px] text-neutral-400">{o.date.slice(5)}</span>
+                    </>
+                  }
                 />
-                <span className="shrink-0 text-[11px] text-neutral-400">{o.date.slice(5)}</span>
               </li>
             ))}
           </ul>
         )}
       </section>
-    </div>
+      ) : null}
+
+      {tab === 'follow' ? <ThreadsPage chromeless /> : null}
+    </PageShell>
   )
 }

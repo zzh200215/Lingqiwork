@@ -31,28 +31,24 @@ function ThemeToggle() {
 
 function Logo() {
   return (
-    <div className="flex items-center gap-2">
+    <Link to="/" title="回对话" className="flex items-center gap-2">
       <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-base shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
         🧠
       </div>
       <span className="text-[15px] font-semibold tracking-tight">AI 工作台</span>
-    </div>
+    </Link>
   )
 }
 
-// 「学」「工作」挨着：两条线是主线。`/review`（今日：复习队列 + 习惯打卡）也进导航——
-// 页面一直在，只是从前只有一处 11px 的隐藏链接够得着，那才是缺陷。
-// 「成长」跟在三条线后面：它读的就是 学 / 工作 / 习惯 的积累，是它们的合并视图。
+// 导航五区（2026-09-13 收缩）：今天要过的、学、干活、攒下的、设置——
+// 一眼能数完，每区一件事。被收走的都还活着，只是不在导航里：
+// 对话 → 「＋ 新对话」/「最近对话」/点 logo；事 → 工作 · 跟进；成长 → 宠物「零柒」；
+// 仪表盘 / 笔记 / 知识库 → 资产页的入口卡。
 const NAV = [
-  { href: '/', label: '对话', icon: '💬', key: 'chat' },
+  { href: '/review', label: '今日', icon: '☀️', key: 'review' },
   { href: '/tutor', label: '学', icon: '🎓', key: 'tutor' },
   { href: '/work', label: '工作', icon: '🗂', key: 'work' },
-  { href: '/threads', label: '事', icon: '🧵', key: 'threads' },
-  { href: '/growth', label: '成长', icon: '🌱', key: 'growth' },
-  { href: '/review', label: '今日', icon: '☀️', key: 'review' },
-  { href: '/dashboard', label: '仪表盘', icon: '📊', key: 'dashboard' },
-  { href: '/notes', label: '笔记', icon: '📝', key: 'notes' },
-  { href: '/kb', label: '知识库', icon: '📚', key: 'kb' },
+  { href: '/assets', label: '资产', icon: '📦', key: 'assets' },
   { href: '/settings', label: '设置', icon: '⚙️', key: 'settings' },
 ] as const
 

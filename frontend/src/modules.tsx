@@ -10,6 +10,8 @@ import type { ReactNode } from 'react'
 import { Route } from 'react-router-dom'
 
 import App from './App'
+import AssetsPage from './AssetsPage'
+import CompanionPage from './CompanionPage'
 import DashboardPage from './DashboardPage'
 import GrowthPage from './GrowthPage'
 import KBPage from './KBPage'
@@ -32,6 +34,8 @@ const PAGES: Record<Module, ReactNode> = {
   kb: <KBPage />,
   settings: <SettingsPage />,
   review: <ReviewPage />,
+  assets: <AssetsPage />,
+  companion: <CompanionPage />,
 }
 
 /** 一条路由对应的一页内容（带 RouteShell 给的滚动容器）。 */

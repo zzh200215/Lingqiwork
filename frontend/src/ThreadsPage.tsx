@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
+import PageShell from './PageShell'
 import {
   api,
   type DeliverCatalogue,
@@ -44,7 +45,9 @@ function stepCount(t: ThreadRow, kinds: string[]): number {
   return kinds.reduce((n, k) => n + (t.counts[k as keyof typeof t.counts] ?? 0), 0)
 }
 
-export default function ThreadsPage() {
+/** `chromeless`：不带 PageShell 页头地渲染——整页搬进工作页「跟进」标签时用，
+    那里已经有「工作」的页头，再来一个「事」就是两层标题。 */
+export default function ThreadsPage({ chromeless }: { chromeless?: boolean }) {
   const [threads, setThreads] = useState<ThreadRow[]>([])
   const [steps, setSteps] = useState<ThreadStep[]>([])
   const [openId, setOpenId] = useState<number | null>(null)
@@ -230,16 +233,8 @@ export default function ThreadsPage() {
     }
   }
 
-  return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <header className="pb-5">
-        <h1 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">事</h1>
-        <p className="pt-1 text-sm text-neutral-500 dark:text-neutral-400">
-          把材料、笔记、卡片、卡点、成品、判断挂到同一件事上——"这件事我到哪了"才答得出来。
-          删掉一件事只少一层索引，东西一件都不动。
-        </p>
-      </header>
-
+  const body = (
+    <>
       {err ? (
         <p className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
           {err}
@@ -507,6 +502,17 @@ export default function ThreadsPage() {
           </ul>
         )}
       </section>
-    </div>
+    </>
+  )
+
+  if (chromeless) return <div className="space-y-4">{body}</div>
+  return (
+    <PageShell
+      title="事"
+      description="把材料、笔记、卡片、卡点、成品、判断挂到同一件事上——“这件事我到哪了”才答得出来。删掉一件事只少一层索引，东西一件都不动。"
+      maxWidth="5xl"
+    >
+      {body}
+    </PageShell>
   )
 }

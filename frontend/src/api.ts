@@ -1,5 +1,7 @@
 // API types + fetch helpers
 
+import type { ArtifactRef } from './stream'
+
 export interface ProviderConfig {
   id: number
   name: string
@@ -203,6 +205,9 @@ export interface Message {
   role: 'user' | 'assistant' | 'system'
   content: string
   sources?: unknown
+  /** 这一轮落盘的产出回执（`save_artifact` 的副产物）。正文在 vault 文件里，
+   *  刷新后就是靠它把「已存入产出」那行重建出来的。 */
+  artifacts?: ArtifactRef[] | null
   model_id?: string | null
   feedback?: 'up' | 'down' | null
   created_at: string
@@ -820,6 +825,16 @@ export interface TodayNext {
   action: { kind: 'settings' | 'thread' | 'none'; label: string; thread_id?: number }
 }
 
+/** 今日概览的一行：一个计数 + 一个直达落点。空档后端直接省略，不返回 0。
+ *  与 TodayNext 分开——那条是一句会主动开口的建议；这里只是「有几件、去哪」。 */
+export interface TodaySummaryRow {
+  key: 'tasks_failing' | 'untouched' | 'due_cards' | 'awaiting' | 'inflight'
+  label: string
+  count: number
+  href: string
+  tone: 'bad' | 'warn' | 'info'
+}
+
 /** 一条已生成的产出。`kind` 是哪个引擎写的，`path` 是 vault 相对路径（可直接交给
  *  笔记页打开——它和用户自己的笔记同在一片 vault 里）。 */
 export interface WorkOutput {
@@ -1192,7 +1207,7 @@ export interface EngineEvalRunResult {
 
 /** 成长的一个来源（「把东西搞懂」等）。全部是累计量，所以只增不减。 */
 export interface PetGrowthPart {
-  key: 'learning' | 'work' | 'habits' | 'review'
+  key: 'learning' | 'teach' | 'work' | 'habits' | 'review'
   label: string
   exp: number
 }
@@ -1245,6 +1260,82 @@ export interface PetPluginCommandResult {
   command: string
   panel: PetPluginPanel
   said: string | null
+}
+
+/** 零柒**此刻**的状态（P1 · 维度一）：摆什么姿势、说什么话、还剩多少精神。
+ *
+ *  与 `PetGrowth` 刻意分开：成长是**累计**（只增不减），状态是**当下**——
+ *  跨天自然归零、不记账、没有「还欠 N」。精力说的是「我有点蔫」，
+ *  不是「你欠了 3 小时专注」。 */
+export type PetStateMode =
+  | 'idle'
+  | 'focusing'
+  | 'working'
+  | 'learning'
+  | 'reviewing'
+  | 'celebrating'
+  | 'busy'
+  | 'idling'
+  | 'pupil'
+  | 'resting'
+  | 'tired'
+  | 'sleepy'
+
+export interface PetState {
+  mode: PetStateMode
+  /** 直接对应 `frontend/public/pet/<action>.webp` 那九个动画 */
+  action: string
+  /** 0–100，此刻的精神。不是要还的债。 */
+  energy: number
+  /** 零柒此刻的一句话；`idle` 时是空串（安静是默认） */
+  line: string
+  path: string
+}
+
+/** 小屋里的一件东西（P4）：某个真实累计量跨过一个门槛的结果。
+ *
+ *  **日期是跨过门槛的那一刻**（第 5 份成品落盘的时间），不是「最近一次」——
+ *  所以它稳定：明天再多交两份，这件东西还是那天到手的。
+ *
+ *  时间给两个字段是刻意的（后端注释里有完整来由）：`at` 是本地墙钟串给人看，
+ *  `at_ts` 是 epoch 用来排序和算「多久以前」——前端因此不必猜时区。 */
+export interface PetThing {
+  id: string
+  /** `badge` 第一次那枚 / `prop` 屋里的一件摆设 / `output` **刚叼回来的那份成品** */
+  kind: 'badge' | 'prop' | 'output'
+  module: string
+  module_label: string
+  icon: string
+  label: string
+  /** 一句事实：「第 5 份成品」 */
+  detail: string
+  at: string
+  at_ts: number
+  count: number
+}
+
+/** 今天喂了它什么：**每条线今天的真实成果**，一条一件。 */
+export interface PetMeal {
+  key: string
+  module: string
+  module_label: string
+  icon: string
+  label: string
+  count: number
+}
+
+/** 零柒的小屋：攒下的东西（道具 / 徽章）、架上的真产出、今天喂了什么。
+ *
+ *  `carried` 是**它身上挂着的那件**：屋里最新到手的一件，或一份刚交出去的成品——
+ *  门槛是稀疏的（第 1、5、25 份），而「交出一份成品 → 它叼回来」每一份都发生。
+ *
+ *  空屋子只是空的——**没有「还差 N 件」「它饿了」这种欠账口吻**。 */
+export interface PetRoom {
+  things: PetThing[]
+  carried: PetThing | null
+  shelf: WorkOutput[]
+  today: { meals: PetMeal[]; date: string }
+  empty: boolean
 }
 
 export const api = {  listProviders: () => request<ProviderConfig[]>('/api/settings/providers'),
@@ -1575,7 +1666,13 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   updateTask: (id: number, t: Partial<ScheduledTask>) =>
     request<ScheduledTask>(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(t) }),
   deleteTask: (id: number) => request<{ ok: boolean }>(`/api/tasks/${id}`, { method: 'DELETE' }),
-  runTask: (id: number) => request<TaskRunResult>(`/api/tasks/${id}/run`, { method: 'POST' }),
+  /** 手动跑一次任务。`topic` 是运行期题目覆盖——工作流第一步靠它接住你输入的题目，
+   *  不改掉 preset 模板（后端 RunIn）。不给就发空串，省掉无 body 的边界情况。 */
+  runTask: (id: number, topic = '') =>
+    request<TaskRunResult>(`/api/tasks/${id}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ topic }),
+    }),
   /** 人工卡点（§4-12）：放行——这一步的产出交给下游任务 */
   approveRun: (runId: number) =>
     request<{ ok: boolean; approved: boolean; next_task_id: number | null }>(
@@ -1787,10 +1884,40 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       body: JSON.stringify({ page }),
     }),
   todayNext: () => request<TodayNext>('/api/today/next'),
+  /** 今日概览五档：失败任务 / 未消化 / 到期卡 / 卡点 / 进行中产出。空档不返回。 */
+  todaySummary: () => request<{ rows: TodaySummaryRow[] }>('/api/today/summary'),
+
+  // ---------- 产出归档（人工出口） ----------
+  /** 可选体裁。真值在后端 `mcp._ARTIFACT_KINDS`（决定了落点目录），前端不硬编码。 */
+  outputKinds: () =>
+    request<{ kinds: { kind: string; label: string; dir: string }[] }>('/api/outputs/kinds'),
+  /** 把一条已有回答存成产出。返回回执，调用方把它写回那条消息。 */
+  saveOutputFromMessage: (conversationId: number, messageId: number, kind: string, title = '') =>
+    request<ArtifactRef>('/api/outputs/from-message', {
+      method: 'POST',
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        message_id: messageId,
+        kind,
+        title,
+      }),
+    }),
 
   // ---------- 零柒：成长 + 能力插件（Track B） ----------
   /** 成长：等级 / 称号 / 累计 EXP / 各来源。只正面呈现。 */
+  /** 零柒**此刻**的状态。`idleSec` / `path` 由前端算好传进去——服务端不存它们。 */
+  petState: (idleSec?: number, path?: string) => {
+    const q = new URLSearchParams()
+    if (idleSec != null && Number.isFinite(idleSec)) {
+      q.set('idle_sec', String(Math.max(0, Math.round(idleSec))))
+    }
+    if (path) q.set('path', path)
+    const s = q.toString()
+    return request<PetState>(`/api/pet/state${s ? `?${s}` : ''}`)
+  },
   petGrowth: () => request<PetGrowth>('/api/pet/growth'),
+  /** 小屋：它攒下的东西 + 今天喂了它什么 + 架上那几份产出。 */
+  petRoom: () => request<PetRoom>('/api/pet/room'),
   petPlugins: () => request<{ plugins: PetPlugin[] }>('/api/pet/plugins'),
   petPluginCommand: (name: string, command: string, args?: Record<string, unknown>) =>
     request<PetPluginCommandResult>(`/api/pet/plugins/${encodeURIComponent(name)}/command`, {
@@ -1815,6 +1942,11 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   /** 一键装好会议闭环（inbox + 四步链）。幂等——装过就原样返回。 */
   installMeetingPreset: () =>
     request<{ created: number; tasks: ScheduledTask[] }>('/api/tasks/preset/meeting', {
+      method: 'POST',
+    }),
+  /** 一键装好工作流：三步链（调研 → 方案 → 汇报稿），每步一个人工卡点。幂等。 */
+  installWorkPreset: () =>
+    request<{ created: number; tasks: ScheduledTask[] }>('/api/tasks/preset/work', {
       method: 'POST',
     }),
 

@@ -14,12 +14,27 @@ export interface ToolTrace {
   arguments: Record<string, unknown>
 }
 
+/** 一条产出回执：工具刚落盘了一份成品（目前只有 `save_artifact` 会发）。
+ *  给的是**能点开的路径**和体裁标签——正文在 vault 文件里，不在对话流里。 */
+export interface ArtifactRef {
+  kind: string
+  label: string
+  title: string
+  path: string
+  href: string
+  chunks: number
+  /** 这次落盘干了什么：存为 / 更新（覆盖本轮的上一版）/ 另存（同名已有，另开一个）/
+   *  未变（和已存的一样，没重复写）。老回执没有这个字段，按「存为」显示。 */
+  action?: string
+}
+
 export interface StreamCallbacks {
   onDelta: (text: string, uid?: string) => void
   onError: (message: string) => void
   onDone: () => void
   onSources?: (sources: SourceRef[]) => void
   onTool?: (tc: ToolTrace) => void
+  onToolResult?: (name: string, meta: Record<string, unknown>, uid?: string) => void
   onFollowups?: (questions: string[]) => void
   onModelDone?: (uid: string) => void
   onMemorized?: (facts: string[]) => void
@@ -79,6 +94,8 @@ export async function streamChat(
       if (event === 'delta') cb.onDelta(data.text as string, data.uid as string | undefined)
       else if (event === 'sources') cb.onSources?.(data.sources as SourceRef[])
       else if (event === 'tool_call') cb.onTool?.({ name: data.name as string, arguments: data.arguments as Record<string, unknown> })
+      else if (event === 'tool_result')
+        cb.onToolResult?.(data.name as string, (data.meta ?? {}) as Record<string, unknown>, data.uid as string | undefined)
       else if (event === 'followups') cb.onFollowups?.(data.questions as string[])
       else if (event === 'answer_done') cb.onModelDone?.(data.uid as string)
       else if (event === 'memorized') cb.onMemorized?.(data.facts as string[])

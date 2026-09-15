@@ -3,7 +3,7 @@
 // 分叉一旦坏了，全部流式功能（聊天/教学/播客/卡片）一起哑，却很难从页面看出来。
 import { describe, expect, it, vi } from 'vitest'
 
-import { sseFrames, streamCardsGenerate, streamCompose, streamDecide } from './stream'
+import { sseFrames, streamCardsGenerate, streamChat, streamCompose, streamDecide } from './stream'
 
 function resOf(chunks: string[]): Response {
   const body = new ReadableStream<Uint8Array>({
@@ -192,6 +192,72 @@ describe('streamCardsGenerate', () => {
     try {
       await streamCardsGenerate({ text: '一段材料', count: 5 }, () => {})
       expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).not.toHaveProperty('focus')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+// 产出回执：`save_artifact` 跑完后端补发一条 `tool_result`，前端靠它渲染
+// 「已存入产出」的链接。这条事件哑了，界面就只剩模型嘴里那句「已存好」——点不开。
+describe('streamChat 的 tool_result', () => {
+  it('把 name/meta 派给 onToolResult，正文不进回调', async () => {
+    const frames =
+      'event: delta\ndata: {"text":"存好了。"}\n\n' +
+      'event: tool_result\ndata: {"name":"save_artifact","meta":{"artifact":{"kind":"deliver","label":"交付","title":"周报","path":"deliver/x.md","href":"/notes?path=deliver%2Fx.md","chunks":2}}}\n\n' +
+      'event: done\ndata: {}\n\n'
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([frames])))
+    try {
+      const seen: [string, Record<string, unknown>, string | undefined][] = []
+      const deltas: string[] = []
+      await streamChat(
+        1,
+        '写一份周报',
+        false,
+        {
+          onDelta: (t) => deltas.push(t),
+          onError: () => {},
+          onDone: () => {},
+          onToolResult: (name, meta, uid) => seen.push([name, meta, uid]),
+        },
+        new AbortController().signal
+      )
+      expect(deltas).toEqual(['存好了。'])
+      expect(seen).toHaveLength(1)
+      expect(seen[0][0]).toBe('save_artifact')
+      expect((seen[0][1].artifact as { href: string }).href).toBe('/notes?path=deliver%2Fx.md')
+      expect(seen[0][2]).toBeUndefined() // 单路聊天没有 uid
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('对比模式的 tool_result 带上 uid —— A/B 两路的回执不能串味', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([
+      'event: tool_result\ndata: {"name":"save_artifact","meta":{"artifact":{"href":"/a"}},"uid":"b"}\n\n',
+      'event: done\ndata: {}\n\n',
+    ])))
+    try {
+      const uids: (string | undefined)[] = []
+      await streamChat(1, 'x', false, {
+        onDelta: () => {},
+        onError: () => {},
+        onDone: () => {},
+        onToolResult: (_n, _m, uid) => uids.push(uid),
+      }, new AbortController().signal)
+      expect(uids).toEqual(['b'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('没接 onToolResult 时不炸 —— 老调用点不用改', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([
+      'event: tool_result\ndata: {"name":"save_artifact","meta":{}}\n\n',
+      'event: done\ndata: {}\n\n',
+    ])))
+    try {
+      await streamChat(1, 'x', false, { onDelta: () => {}, onError: () => {}, onDone: () => {} }, new AbortController().signal)
     } finally {
       vi.unstubAllGlobals()
     }
