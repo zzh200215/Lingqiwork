@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { api, type AgentPreset, type ArenaResult, type BackupList, type CostSummary, type EngineEvalLatest, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
+import TurnLedger from './TurnLedger'
 
 /** 四个成文引擎的展示顺序（与 core/engine_eval.ENGINES 一致）。 */
 const ENGINE_ORDER = ['research', 'compose', 'recap', 'decide', 'conflict'] as const
@@ -1038,6 +1039,7 @@ export default function SettingsPage() {
             {SETTING_SECTIONS.map((s) => (
               <button
                 key={s.key}
+                data-settings-tab={s.key}
                 onClick={() => setSection(s.key)}
                 className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                   section === s.key
@@ -2721,6 +2723,11 @@ export default function SettingsPage() {
             </ul>
           ) : null}
         </div>
+
+        {/* 最近回合（W5）：聊天那条路上每一轮的轮数/工具/耗时/token/落盘。
+            放在满意率与自动标尺下面，因为它们是同一个问题的三个面：
+            人点的、机器判的、以及**这一轮到底发生了什么**。 */}
+        <TurnLedger />
       </section>
 
       {tutorProfile && (tutorProfile.known.length > 0 || tutorProfile.half.length > 0 || tutorProfile.preferences.length > 0) ? (

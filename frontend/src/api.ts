@@ -1290,8 +1290,45 @@ export interface QualityGroup {
   rate: number
 }
 
-export interface QualitySummary {
-  days: number
+/** 一次聊天回合的记录（W5）：为什么慢、为什么贵、为什么没落盘。
+ *
+ *  **诊断账本，不是考核仪表**：不设目标、不催、不做排行榜（沿用 `quality.py` 的红线）。
+ *  `tool_calls` 只有名称/大小/毫秒/成功与否 —— 正文该在 vault 里，账本不抄一份。
+ *  `flags` 由后端判定（`core/turn_trace.py` 的 `_matches`），界面只负责显示：
+ *  同一个判断的第二份实现，分叉的那天这个数就没人敢信了。 */
+export interface TurnTrace {
+  id: number
+  at: string
+  conversation_id: number | null
+  message_id: number | null
+  model_id: string
+  prompt_sha: string
+  /** 确定性路由（W3）：还没接路由时是 '' */
+  route_level: string
+  route_kind: string
+  rounds: number
+  tool_calls: { name: string; args_chars: number; result_chars: number; ms: number; ok: boolean }[]
+  tokens_in: number
+  tokens_out: number
+  artifacts: { kind?: string; path?: string; title?: string }[]
+  /** 回复正文的长度。**只有数字**：正文自己活在 messages 里 */
+  answer_chars: number
+  claim_checked: boolean
+  claim_truthful: boolean
+  retried: number
+  seconds: number
+  error: string
+  /** 这一轮命中的毛病（就是筛选项那几个 key），由后端算 */
+  flags: string[]
+}
+
+export interface TurnFilter {
+  key: string
+  label: string
+  hint: string
+}
+
+export interface QualitySummary {  days: number
   total: number
   good: number
   bad: number
@@ -1850,6 +1887,12 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     }),
 
   qualitySummary: (days = 90) => request<QualitySummary>(`/api/quality/summary?days=${days}`),
+
+  /** 最近若干聊天回合（W5）。`only` = 只看某一类毛病（keys 见返回里的 filters）。 */
+  turns: (limit = 30, only = '') =>
+    request<{ traces: TurnTrace[]; filters: TurnFilter[]; only: string }>(
+      `/api/turns?limit=${limit}${only ? `&only=${encodeURIComponent(only)}` : ''}`
+    ),
 
   /** 成文引擎的自动标尺：每个引擎最近一次的得分 + golden set 覆盖 */
   engineEvalLatest: () => request<EngineEvalLatest>('/api/evals/engines/latest'),
