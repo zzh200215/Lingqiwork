@@ -657,6 +657,52 @@ class PromptEvalRun(Base):
     detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐用例：断言、回复、耗时
 
 
+class TurnTrace(Base):
+    """一次聊天回合的**记录**（W5）：为什么慢、为什么贵、为什么没落盘。
+
+    **为什么要有它。** 缺口二：界面上看得到调了哪些工具，但**什么都不落盘**。本轮
+    （upgrade-plan）的每一个结论都是临时脚本量出来的，量完就散 —— 光是为了量一件事就临时
+    搭了 `measure.py` + 一个 Playwright 脚本，这本身就是证据。这张表把那些数留下来。
+
+    **它是什么、不是什么。** 这是**诊断**账本，不是考核仪表：不设目标、不催、不做排行榜
+    （沿用 `quality.py` 的红线）。所以列里只有事实：跑了几轮、调了什么工具、各花多久、
+    多少 token、声称存了有没有真存、有没有重试。
+
+    `tool_calls_json` 只记**名称 / 参数与结果的字节数 / 毫秒 / 成功与否**，不记正文 ——
+    正文该在 vault 里，抄一份进库是同一篇东西存两处。
+
+    `claim_checked` 与 `claim_truthful` 分开：前者=这一轮的话被校验过，后者=校验的结论。
+    没校验和校验通过是两件事，合成一列就会把「没查」读成「查了且没问题」。
+    """
+
+    __tablename__ = "turn_traces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    conversation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_id: Mapped[str] = mapped_column(String(120), default="")
+    # 这一轮用的是哪一版输出规矩（与 `ArtifactFeedback` 同一个 sha 算法）——
+    # 于是「回合行为」和「人点的满意率」落在同一把 key 上（upgrade-plan §2.1 的缝一）。
+    prompt_sha: Mapped[str] = mapped_column(String(12), default="")
+    # 确定性路由（W3）落在这里：没接路由时 level=""、kind=""（= 还没分过）
+    route_level: Mapped[str] = mapped_column(String(20), default="")
+    route_kind: Mapped[str] = mapped_column(String(30), default="")
+    rounds: Mapped[int] = mapped_column(Integer, default=0)
+    tool_calls_json: Mapped[str] = mapped_column(Text, default="[]")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    artifacts_json: Mapped[str] = mapped_column(Text, default="[]")
+    # 这一轮回复正文的长度。**只记数字，不记正文**：正文自己活在 `messages` 里，
+    # 而「长正文却没落盘」（W2a 的那条判据）只需要长度这一个数。
+    answer_chars: Mapped[int] = mapped_column(Integer, default=0)
+    claim_checked: Mapped[bool] = mapped_column(Boolean, default=False)
+    claim_truthful: Mapped[bool] = mapped_column(Boolean, default=True)
+    retried: Mapped[int] = mapped_column(Integer, default=0)
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    error: Mapped[str] = mapped_column(Text, default="")
+
+
 class SchemaMigration(Base):
     """已应用的迁移（W6）。一行一版，**只增不删**。
 

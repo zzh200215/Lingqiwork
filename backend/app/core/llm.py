@@ -10,6 +10,7 @@ openrouter — same client, different base_url.
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
@@ -254,6 +255,7 @@ async def run_agentic_chat(
     usage: dict | None = None,
     parallel_tools: bool = True,
     emit_tool_result: Callable[[str, dict, dict], None] | None = None,
+    trace: dict | None = None,
 ) -> str:
     """Chat with optional tool calling. Returns the final assistant text.
 
@@ -270,12 +272,19 @@ async def run_agentic_chat(
     saved artifact landed on). The model-facing text stays `run_tool`'s job;
     this is for the UI, so it must stay small and JSON-safe.
 
+    `trace`（W5），给了就填**这一轮的工具循环**：`rounds` / `tool_calls`（名称、参数
+    字节数、结果字节数、毫秒、成功与否）。它是「这一轮为什么慢/贵/没落盘」唯一的原始
+    记录 —— 以前这些数只在界面事件里活一次，落不了盘，下次想问就得重写脚本。
+
     If the model refuses `tools` (e.g. an Ollama model without tool support),
     the first round is retried once without tools so chat still works.
     """
     msgs = [dict(m) for m in messages]
     use_tools = bool(tools)
     tool_param = tools if use_tools else None
+    if trace is not None:
+        trace.setdefault("tool_calls", [])
+        trace["rounds"] = 0
 
     # 跟踪本轮是否已经吐过字：降级重试只在「第一轮、且一个字没吐」时允许。
     # 已开始输出再报错（网络中断等）不能当成「不支持工具」从零重试——会重复输出。
@@ -288,6 +297,8 @@ async def run_agentic_chat(
         emit_text(t)
 
     for round_no in range(1, max_rounds + 1):
+        if trace is not None:
+            trace["rounds"] = round_no
         if on_round:
             on_round(round_no)
         round_usage: dict = {}
@@ -322,9 +333,12 @@ async def run_agentic_chat(
             emit_tool(tc.name, tc.arguments)
 
         async def _run_one(tc: ToolCall) -> tuple[ToolCall, str]:
+            t0 = time.monotonic()
+            ok = True
             try:
                 result = await run_tool(tc.name, tc.arguments)
             except Exception as e:  # noqa: BLE001 - 单个工具失败不拖垮整轮
+                ok = False
                 result = f"[tool error] {type(e).__name__}: {e}"
             # 工具想额外告诉界面的事（如产出落盘路径）在此取走。取在 await 之后、
             # 同一个任务里——并行 gather 时每个 _run_one 有自己的上下文，互不串味。
@@ -338,6 +352,18 @@ async def run_agentic_chat(
             result = str(result)
             if len(result) > 8000:
                 result = result[:8000] + "\n...[工具输出过长已截断]"
+            if trace is not None:
+                # 参数/结果只记**字节数**，不记正文：trace 是诊断账本，不是内容仓库
+                # （正文该在 vault 里；抄一份进库等于同一篇东西存两处，还会把库撑大）。
+                trace["tool_calls"].append(
+                    {
+                        "name": tc.name,
+                        "args_chars": len(json.dumps(tc.arguments, ensure_ascii=False, default=str)),
+                        "result_chars": len(result),
+                        "ms": int((time.monotonic() - t0) * 1000),
+                        "ok": ok,
+                    }
+                )
             return (tc, result)
 
         # 模型一次返回多个 tool_calls 时，语义就是「可并行」，独立工具同时跑省时；

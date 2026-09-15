@@ -294,6 +294,17 @@ async def _generate(req: ChatRequest):
             if agent.model_id:  # agent preset may pin a model
                 model_id = agent.model_id
 
+        # 回合账本（W5）从**这里**开始计时 —— 不是从最后记录的那一刻。少了这一次
+        # `begin`，`_record_turn` 只能自己造一份草稿，于是耗时永远是 0（第一次验收
+        # 就是这么量出一个 0 秒的回合的）。它绝不能挡住聊天，所以整段 best-effort。
+        try:
+            from app.core import turn_trace
+
+            draft = turn_trace.begin(conv.id, model_id)
+        except Exception:  # noqa: BLE001 - 账本坏了照样聊
+            log.warning("turn trace begin failed", exc_info=True)
+            draft = None
+
         try:
             resolved = await resolve_model(model_id)
         except HTTPException as e:
@@ -485,6 +496,8 @@ async def _generate(req: ChatRequest):
     # 消息里：正文那头可能是空的（正文在 vault 文件里），只落正文等于把这一轮唯一
     # 有信息量的东西丢掉，刷新后回执就没了。
     saved_by_uid: dict[str | None, list[dict]] = {}
+    # 工具循环的账（W5）：两路各一份草稿，由 `run_agentic_chat` 填轮数与工具明细
+    turn_traces: dict[str | None, dict] = {}
 
     async def run_one(r: ResolvedModel, uid: str | None):
         # 这一轮的同体裁落盘记录交给 mcp：同一个体裁第二次存 = 模型在改自己刚写的那份，
@@ -495,6 +508,8 @@ async def _generate(req: ChatRequest):
         begin_turn()
         streamed_parts: list[str] = []
         final = ""
+        # 工具循环的账（W5）：轮数、每个工具的耗时与大小。对比模式两路各一份。
+        turn_traces[uid] = {}
 
         def on_delta(t: str) -> None:
             q.put_nowait(("delta", t, uid))
@@ -528,6 +543,7 @@ async def _generate(req: ChatRequest):
             on_tool,
             usage=usage,
             emit_tool_result=on_tool_result,
+            trace=turn_traces[uid],
         )
         # 正文那头怎么定：
         # - 模型最后说了话（`final` 非空）→ 用它。
@@ -614,29 +630,43 @@ async def _generate(req: ChatRequest):
                 u = usages.get(uid) or {}
                 content = _without_placeholder(res.strip())
                 artifacts = saved_by_uid.get(uid) or []
-                if claims_a_save_without_one(content, artifacts):
+                truthful = not claims_a_save_without_one(content, artifacts)
+                if not truthful:
                     log.warning(
                         "uid=%s 声称已存入产出，但这一轮没有落盘（conv=%s）", uid, conv.id
                     )
                 # 判据是「有没有东西可说」而不是「正文非空」：只调工具、正文空着的
                 # 那一轮也有产出要记，否则刷新后这一轮整个消失。
+                msg_id = None
                 if content or artifacts:
-                    await _save_assistant_message(
+                    msg_id = await _save_assistant_message(
                         conv.id, content, mid, sources,
                         tokens_in=u.get("input"), tokens_out=u.get("output"),
                         artifacts=artifacts,
                     )
+                await _record_turn(
+                    conv.id, msg_id, mid, turn_traces.get(uid) or {},
+                    content=content, artifacts=artifacts, usage=u, truthful=truthful,
+                    draft=draft,
+                )
         else:
             content = _without_placeholder(final_text or "")
             artifacts = saved_by_uid.get(None) or []
-            if claims_a_save_without_one(content, artifacts):
+            truthful = not claims_a_save_without_one(content, artifacts)
+            if not truthful:
                 log.warning("声称已存入产出，但这一轮没有落盘（conv=%s）", conv.id)
+            msg_id = None
             if content or artifacts:
-                await _save_assistant_message(
+                msg_id = await _save_assistant_message(
                     conv.id, content, model_id, sources,
                     tokens_in=final_usage.get("input"), tokens_out=final_usage.get("output"),
                     artifacts=artifacts,
                 )
+            await _record_turn(
+                conv.id, msg_id, model_id, turn_traces.get(None) or {},
+                content=content, artifacts=artifacts, usage=final_usage, truthful=truthful,
+                draft=draft,
+            )
         yield _sse("done", {})
         # automemory: let the model decide whether this exchange was worth
         # remembering (Khoj automemory style). Best-effort, after done so the
@@ -752,6 +782,62 @@ async def _save_assistant_message(
             .values(updated_at=datetime.now(timezone.utc))
         )
         await db.commit()
+
+
+async def _record_turn(
+    conversation_id: int,
+    message_id: int | None,
+    model_id: str,
+    trace: dict,
+    *,
+    content: str,
+    artifacts: list[dict],
+    usage: dict,
+    truthful: bool,
+    draft: dict | None,
+) -> None:
+    """落一行回合账（W5）。**best-effort**：记账失败不该影响已经答完的那一轮。
+
+    `truthful` 由调用方算好传进来 —— 校验只有 `claims_a_save_without_one` 那一处，
+    这里是记录，不是第二个判断。`draft` 是本回合开头的草稿（带着开始时刻）；
+    对比模式两路共用它，所以每次落库都传**副本**（`finish` 会把 contextvar 清掉）。
+    """
+    try:
+        from app.core import turn_trace
+
+        base = dict(draft) if draft else {
+            "conversation_id": conversation_id,
+            "model_id": model_id,
+            "prompt_sha": turn_trace.prompt_sha(),
+        }
+        base.update(
+            {
+                "conversation_id": conversation_id,
+                "model_id": model_id,
+                "rounds": int(trace.get("rounds") or 0),
+                "tool_calls": trace.get("tool_calls") or [],
+                "artifacts": artifacts or [],
+                "answer_chars": len(content or ""),
+                "claim_checked": True,
+                "claim_truthful": bool(truthful),
+            }
+        )
+        row = await turn_trace.finish(base, usage=usage)
+        if row is None or not message_id:
+            return
+        # 把这一行和落库的那条 message 对上（点开某一轮时要用）。按 id 定位刚写的那一行，
+        # 不用 created_at 之类的软条件 —— 那会在并发下改错行。
+        from sqlalchemy import update as _update
+
+        from app.models import TurnTrace
+
+        async with SessionLocal() as db:
+            await db.execute(
+                _update(TurnTrace).where(TurnTrace.id == row["id"]).values(message_id=message_id)
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001 - 账本坏了不能连累这一轮
+        log.warning("turn trace record failed", exc_info=True)
 
 
 @router.post("")

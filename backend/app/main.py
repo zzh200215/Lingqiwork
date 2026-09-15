@@ -61,6 +61,7 @@ from app.routers import (
     tts,
     today,
     tutor,
+    turns,
     usage,
     work,
 )
@@ -215,6 +216,7 @@ app.include_router(habits.router)
 app.include_router(health_router.router)
 app.include_router(today.router)
 app.include_router(tutor.router)
+app.include_router(turns.router)
 app.include_router(usage.router)
 app.include_router(work.router)
 app.include_router(outputs.router)
