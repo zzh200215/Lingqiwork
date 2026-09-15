@@ -884,6 +884,110 @@ async def test_meeting_preset_installs_four_linked_steps_and_is_idempotent(monke
     assert again["created"] == 0 and len(again["tasks"]) == 4
 
 
+# ---------- 工作 preset（工作线的三步工作流） ----------
+
+
+async def test_work_preset_installs_three_linked_gated_steps_and_is_idempotent(monkeypatch):
+    monkeypatch.setattr(core, "VAULT_DIR", _TMP / "vault")
+    monkeypatch.setattr(core, "reschedule", lambda: None)
+
+    from app.routers import tasks as tasks_router
+
+    monkeypatch.setattr(tasks_router, "VAULT_DIR", _TMP / "vault")
+
+    async with SessionLocal() as db:
+        out = await tasks_router.install_work_preset(db)
+    assert out["created"] == 3
+    assert [t["name"] for t in out["tasks"]] == ["工作·调研", "工作·方案", "工作·汇报稿"]
+    # 三步都不靠自动触发：chain 既不注册 cron 也不注册 watch，纯手动点火起链
+    assert [t["trigger_kind"] for t in out["tasks"]] == ["chain", "chain", "chain"]
+    assert [t["action"] for t in out["tasks"]] == ["research", "prompt", "prompt"]
+    assert [t["landing_dir"] for t in out["tasks"]] == ["", "decisions", "deliver"]
+    assert all(t["require_approval"] for t in out["tasks"])  # 每步跑完停下等人点头
+    assert out["tasks"][0]["chain_next_id"] == out["tasks"][1]["id"]
+    assert out["tasks"][1]["chain_next_id"] == out["tasks"][2]["id"]
+
+    async with SessionLocal() as db:
+        again = await tasks_router.install_work_preset(db)
+    assert again["created"] == 0 and len(again["tasks"]) == 3
+
+
+async def test_work_step_one_is_inert_to_both_trigger_engines():
+    """第一步没有自己的触发源——不被 cron 注册，也不被 watch 拾取。"""
+    async with SessionLocal() as db:
+        from app.routers import tasks as tasks_router
+
+        out = await tasks_router.install_work_preset(db)
+    step1_id = out["tasks"][0]["id"]
+    assert core.next_run(step1_id) is None  # 没上调度
+
+
+async def test_topic_override_reaches_the_engine_and_leaves_the_template(monkeypatch):
+    """运行期题目覆盖：到得了引擎，且**不动**行里的模板（preset 幂等因此不破）。"""
+    monkeypatch.setattr(core, "reschedule", lambda: None)
+    from app.routers import tasks as tasks_router
+
+    async with SessionLocal() as db:
+        out = await tasks_router.install_work_preset(db)
+    step1_id = out["tasks"][0]["id"]
+    template = out["tasks"][0]["prompt"]
+
+    seen: list[str] = []
+
+    async def fake_engine(t: dict, engine: str) -> dict:
+        seen.append(t.get("prompt") or "")
+        return {"answer": "ok", "sources": [], "model_id": "engine:research", "saved": {"filename": "research/x.md"}}
+
+    monkeypatch.setattr(core, "_execute", fake_engine)
+    await core.run_task(step1_id, manual=True, topic="季度规划")
+
+    assert seen == ["季度规划"]
+    async with SessionLocal() as db:
+        row = await db.get(ScheduledTask, step1_id)
+    assert row.prompt == template  # 模板原封不动
+
+
+async def test_run_now_accepts_a_topic_body_or_none(monkeypatch):
+    monkeypatch.setattr(core, "reschedule", lambda: None)
+    from app.routers import tasks as tasks_router
+
+    async with SessionLocal() as db:
+        out = await tasks_router.install_work_preset(db)
+    step1_id = out["tasks"][0]["id"]
+
+    captured: list[str] = []
+
+    async def fake_run_task(task_id, **kw):
+        captured.append(kw.get("topic", ""))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(core, "run_task", fake_run_task)
+    async with SessionLocal() as db:
+        assert (await tasks_router.run_now(step1_id, tasks_router.RunIn(topic="X"), db))["status"] == "ok"
+        assert (await tasks_router.run_now(step1_id, None, db))["status"] == "ok"
+    assert captured == ["X", ""]  # 不给 body 时 topic 为空，不炸
+
+
+async def test_chain_step_landing_dir_overrides_inherited_run_dir(monkeypatch):
+    """下游自带另一个基地时不继承上游落点——否则汇报稿会跟着方案落进 decisions/。"""
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+    monkeypatch.setattr(core, "VAULT_DIR", _TMP / "vault")
+
+    a = await _add_task("起点", landing_dir="")
+    b = await _add_task("方案", landing_dir="decisions", save_to_vault=True)
+    c = await _add_task("汇报", landing_dir="deliver", save_to_vault=True)
+    await _chain(a, b)
+    await _chain(b, c)
+
+    assert (await core.run_task(a, manual=True))["status"] == "ok"
+    await asyncio.gather(*list(core._BG_TASKS))
+
+    vault = _TMP / "vault"
+    assert len(list((vault / "decisions").glob("*.md"))) == 1
+    assert len(list((vault / "deliver").glob("*.md"))) == 1
+    assert not (vault / "deliver").samefile(vault / "decisions")
+
+
 # ---------- 产出引擎上调度（§15） ----------
 
 

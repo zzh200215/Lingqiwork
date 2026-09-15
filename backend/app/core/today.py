@@ -67,3 +67,44 @@ def next_suggestion(facts: dict) -> dict:
         "tone": "idle",
         "action": {"kind": "none", "label": ""},
     }
+
+
+# 五档概览：固定优先级，空档不出现。**与 next_suggestion 完全分开**——那条文案由测试用
+# 封存词表守着（`tests/test_today.py:24`，不许出现 卡/到期/复习/习惯/打勾），这里是计数
+# 与落点，不是那一句会主动开口的建议。所以标签里的「到期卡」「卡点」只活在这个独立常量里。
+SUMMARY_ROWS: tuple[tuple[str, str, str], ...] = (
+    ("tasks_failing", "失败任务", "bad"),
+    ("untouched", "未消化", "warn"),
+    ("due_cards", "到期卡", "info"),
+    ("awaiting", "卡点", "warn"),
+    ("inflight", "进行中产出", "info"),
+)
+
+# 每一档没有特别落点时的默认去处（路由器可以按 id/source 覆盖，见 facts 的 `*_href`）。
+SUMMARY_HREF_DEFAULT: dict[str, str] = {
+    "tasks_failing": "/settings",
+    "untouched": "/tutor",
+    "due_cards": "/review",
+    "awaiting": "/work?tab=engine",
+    "inflight": "/work?tab=engine",
+}
+
+
+def summary(facts: dict) -> list[dict]:
+    """五档概览 -> [{key, label, count, href, tone}]。固定优先级、空档省略。Pure.
+
+    facts: {key: count}，可附 `{key}_href` 字符串覆盖默认落点。负值 / 非数字一律当 0
+    （垃圾输入不该让概览崩）——和 next_suggestion 一样，一个计数不该 500。
+    """
+    facts = facts if isinstance(facts, dict) else {}
+    rows: list[dict] = []
+    for key, label, tone in SUMMARY_ROWS:
+        try:
+            n = int(str(facts.get(key, 0)).strip() or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n <= 0:
+            continue  # 空档省略：没东西就不出现，克制是默认
+        href = facts.get(f"{key}_href") or SUMMARY_HREF_DEFAULT[key]
+        rows.append({"key": key, "label": label, "count": n, "href": href, "tone": tone})
+    return rows

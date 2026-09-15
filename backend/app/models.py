@@ -60,6 +60,10 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(20))  # user / assistant / system
     content: Mapped[str] = mapped_column(Text, default="")
     sources_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # RAG refs, JSON
+    # 这一轮落盘的产出（`save_artifact` 的副产物），JSON 数组。
+    # 存它是因为回执是这一轮**唯一有信息量**的东西：正文可能在 vault 文件里、
+    # 回复正文那头是空的，只把正文落库等于把有价值的丢掉、把空壳留下。
+    artifacts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     feedback: Mapped[str | None] = mapped_column(String(4), nullable=True)  # 'up' | 'down'
     tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, ".")
 
-from app.core.today import next_suggestion  # noqa: E402
+from app.core.today import next_suggestion, summary  # noqa: E402
 
 # 封存词表：任何一个出现在建议文案里，就说明待办从后门回来了
 _DEBT_WORDS = ("卡", "到期", "复习", "习惯", "打勾")
@@ -139,3 +139,76 @@ def test_fallback_does_not_depend_on_a_try_block_import():
     from app.routers import today as router_mod
 
     assert router_mod.today_core.next_suggestion({})["tone"] == "idle"
+
+
+# ---------- 五档概览（/api/today/summary） ----------
+#
+# 和上面那条建议是**两回事**：那条是一句会主动开口的文案，由封存词表守着；这里是计数
+# 与落点。所以下面这组测试不碰 _DEBT_WORDS——但最后一条要反过来，钉住「加了概览没有
+# 让那条建议长回债」。
+
+
+def test_summary_rows_come_in_fixed_priority_order():
+    rows = summary(
+        {"tasks_failing": 1, "untouched": 2, "due_cards": 3, "awaiting": 4, "inflight": 5}
+    )
+    assert [r["key"] for r in rows] == [
+        "tasks_failing",
+        "untouched",
+        "due_cards",
+        "awaiting",
+        "inflight",
+    ]
+    assert [r["count"] for r in rows] == [1, 2, 3, 4, 5]
+
+
+def test_summary_omits_empty_rows_instead_of_showing_zeros():
+    rows = summary({"due_cards": 2})
+    assert len(rows) == 1 and rows[0]["key"] == "due_cards" and rows[0]["count"] == 2
+    assert summary({}) == []
+    assert summary({"tasks_failing": 0, "unread": 0}) == []
+
+
+def test_summary_row_shape_is_exactly_key_label_count_href_tone():
+    rows = summary({"awaiting": 1})
+    assert set(rows[0]) == {"key", "label", "count", "href", "tone"}
+    assert rows[0]["label"] == "卡点" and rows[0]["tone"] in ("bad", "warn", "info")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [None, "x", 42, {"due_cards": "一"}, {"due_cards": -5}, {"awaiting": [1, 2]}],
+)
+def test_summary_junk_facts_never_raise(bad):
+    rows = summary(bad)
+    assert isinstance(rows, list)
+
+
+def test_summary_href_override_is_used_and_defaults_otherwise():
+    with_override = summary({"awaiting": 1, "awaiting_href": "/work?task=7"})
+    assert with_override[0]["href"] == "/work?task=7"
+    assert summary({"awaiting": 1})[0]["href"] == "/work?tab=engine"
+
+
+def test_summary_hrefs_point_at_known_routes():
+    rows = summary(
+        {"tasks_failing": 1, "untouched": 1, "due_cards": 1, "awaiting": 1, "inflight": 1}
+    )
+    for r in rows:
+        assert r["href"].startswith(("/work", "/review", "/tutor", "/settings")), r
+
+
+def test_adding_summary_did_not_reopen_the_debt_words():
+    """概览的标签里有「到期卡」「卡点」，但它们只能活在独立常量里——
+    `next_suggestion` 的文案仍被同一套封存词表守着。"""
+    for facts in (
+        {},
+        {"default_model_broken": True},
+        {"jobs_failing": 2},
+        {"threads": [{"id": 1, "name": "X", "summary": "搞懂 2"}]},
+        {"due_cards": 5, "awaiting": 3},
+    ):
+        text = next_suggestion(facts)["text"]
+        assert not [w for w in _DEBT_WORDS if w in text], text
+        assert not _STREAK.search(text), text
+        assert next_suggestion(facts)["action"]["kind"] in ("settings", "none", "thread")

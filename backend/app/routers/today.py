@@ -48,3 +48,133 @@ async def today_next():
             "threads": threads,
         }
     )
+
+
+@router.get("/summary")
+async def today_summary() -> dict:
+    """五档概览：失败任务 / 未消化 / 到期卡 / 卡点 / 进行中产出。
+
+    best-effort：每一档各自 try/except，坏一个不挡其余（照 health.report 的形状）。
+    和 `/next` 完全两回事——那条是**一句会主动开口的建议**，由封存词表守着；这里只是计数
+    与落点，所以「到期卡」「卡点」这些词只活在事实组装里，不在 `next_suggestion` 的文案里。
+
+    事实（degrees of honesty）：失败任务/到期卡/卡点有真实数据源；未消化与进行中产出
+    **没有状态字段**，用现成近似——躺着的录音 + 没开教的学习点，在跑的引擎 + 在跑的运行。
+    """
+    facts: dict = {}
+
+    # 1) 失败任务：后台作业（scheduler）+ 用户定时任务（last_status=error）
+    jobs = 0
+    try:
+        from app.routers.health import self_check
+
+        jobs = len((await self_check()).get("jobs_failing") or [])
+    except Exception:  # noqa: BLE001
+        log.warning("summary: background job check failed", exc_info=True)
+    failing_ids: list[int] = []
+    try:
+        from sqlalchemy import select
+
+        from app.db import SessionLocal
+        from app.models import ScheduledTask
+
+        async with SessionLocal() as db:
+            failing_ids = list(
+                (
+                    await db.execute(
+                        select(ScheduledTask.id).where(
+                            ScheduledTask.enabled.is_(True),
+                            ScheduledTask.last_status == "error",
+                        )
+                    )
+                ).scalars().all()
+            )
+    except Exception:  # noqa: BLE001
+        log.warning("summary: failing task read failed", exc_info=True)
+    if jobs + len(failing_ids):
+        facts["tasks_failing"] = jobs + len(failing_ids)
+        facts["tasks_failing_href"] = (
+            f"/work?task={failing_ids[0]}"
+            if len(failing_ids) == 1
+            else "/work?tab=engine"
+            if failing_ids
+            else "/settings"
+        )
+
+    # 2) 未消化 = 还没处理的会议录音 + 还没开成教学的学习点（近似，不是「欠着」）
+    inbox = 0
+    try:
+        from app.config import VAULT_DIR
+
+        inbox = sum(1 for p in (VAULT_DIR / "meetings" / "inbox").glob("*") if p.is_file())
+    except Exception:  # noqa: BLE001
+        log.warning("summary: inbox scan failed", exc_info=True)
+    points = 0
+    try:
+        from app.core import tutor
+
+        points = await tutor.untouched_count()
+    except Exception:  # noqa: BLE001
+        log.warning("summary: untouched count failed", exc_info=True)
+    if inbox + points:
+        facts["untouched"] = inbox + points
+        facts["untouched_href"] = "/work?tab=engine" if inbox else "/tutor"
+
+    # 3) 到期卡
+    try:
+        from app.core import cards
+
+        facts["due_cards"] = (await cards.stats())["due_now"]
+    except Exception:  # noqa: BLE001
+        log.warning("summary: card stats failed", exc_info=True)
+
+    # 4) 卡点 = 停在人工卡点、等人点头的那几步
+    try:
+        from sqlalchemy import func, select
+
+        from app.db import SessionLocal
+        from app.models import TaskRun
+        from app.core import tasks as tasks_core
+
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TaskRun.task_id, func.count(TaskRun.id))
+                    .where(TaskRun.status == tasks_core._GATE_STATUS)
+                    .group_by(TaskRun.task_id)
+                )
+            ).all()
+        n = sum(c for _, c in rows)
+        if n:
+            facts["awaiting"] = n
+            facts["awaiting_href"] = f"/work?task={rows[0][0]}" if n == 1 else "/work?tab=engine"
+    except Exception:  # noqa: BLE001
+        log.warning("summary: gate count failed", exc_info=True)
+
+    # 5) 进行中产出 = 交互式引擎持有的 slot + 任务式引擎仍在 running 的运行
+    live = 0
+    try:
+        from app.core import inflight
+
+        live = len(inflight.running())
+    except Exception:  # noqa: BLE001
+        log.warning("summary: inflight read failed", exc_info=True)
+    running = 0
+    try:
+        from sqlalchemy import func, select
+
+        from app.db import SessionLocal
+        from app.models import TaskRun
+
+        async with SessionLocal() as db:
+            running = (
+                await db.execute(
+                    select(func.count(TaskRun.id)).where(TaskRun.status == "running")
+                )
+            ).scalar() or 0
+    except Exception:  # noqa: BLE001
+        log.warning("summary: running task count failed", exc_info=True)
+    if live + running:
+        facts["inflight"] = live + running
+
+    return {"rows": today_core.summary(facts)}

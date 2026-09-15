@@ -554,6 +554,32 @@ async def _untouched_points(limit: int = UNTOUCHED_CAP) -> list[dict]:
     ]
 
 
+async def untouched_count() -> int:
+    """还没开成教学的 digest 点数（真计数，不是清单长度）。
+
+    `_untouched_points()` 按 `UNTOUCHED_CAP=50` 截断，拿它 len() 会永远停在 50——
+    今日概览要的是「有几件还堆着」，得直接 count。best-effort：坏了返回 0，别挡概览。
+    """
+    from sqlalchemy import func, select
+
+    from app.db import SessionLocal
+    from app.models import DigestPoint
+
+    try:
+        async with SessionLocal() as db:
+            n = (
+                await db.execute(
+                    select(func.count(DigestPoint.id)).where(
+                        DigestPoint.taught_session_id.is_(None)
+                    )
+                )
+            ).scalar()
+    except Exception:  # noqa: BLE001 - 派生计数，坏了不该挡今日页
+        log.warning("tutor untouched count failed", exc_info=True)
+        return 0
+    return int(n or 0)
+
+
 NEIGHBOR_LIMIT = 6  # 一屏列得下的邻居数
 
 
@@ -1512,12 +1538,15 @@ async def _nearby_material(concept: str, exclude: set[str] | None = None) -> lis
     return out
 
 
-async def _note_first_mastery(concept: str) -> None:
+async def _note_first_mastery(concept: str, mode: str = "socratic") -> None:
     """第一次说通一个概念时，让零柒记一句（成长陪伴的原料）。
 
     规则刻意比「已掌握」（连着两次说通）浅一档：从「半懂 / 没碰过」到**第一次说通**
     才是那个有情绪的时刻；第二次说通是巩固，不必重复庆祝。同一概念只会触发一次，
     因为判据是「这个概念的 got 场次 ≤ 1」。零柒那边是 best-effort，坏了也不挡教学。
+
+    `mode` 只影响**那句话的主语**：费曼模式是「你讲给它听」，说通的是你的讲解，
+    不是你的理解——同一个概念、两条路，台词不该一样。
     """
     try:
         from sqlalchemy import func, select
@@ -1536,7 +1565,7 @@ async def _note_first_mastery(concept: str) -> None:
         if int(n) <= 1:
             from app.core import pet
 
-            pet.emit("mastered", name=concept)
+            pet.emit("mastered", name=concept, detail="taught" if mode == "feynman" else "")
     except Exception:  # noqa: BLE001 - 一句台词而已，绝不能挡住自评落库
         log.debug("tutor first-mastery note failed", exc_info=True)
 
@@ -1585,7 +1614,7 @@ async def end(session_id: int, verdict: str) -> dict:
             if verdict == "got":
                 # 「结束回写」：说通了这个概念，它到此为止的卡点一并关掉
                 await _resolve_concept_stucks(concept, session_id)
-                await _note_first_mastery(concept)
+                await _note_first_mastery(concept, mode)
             nearby = await _nearby_material(concept, _SESSION_SOURCES.pop(session_id, None))
     _SESSION_SOURCES.pop(session_id, None)  # useless / 没提取出概念也要清掉残留
     return {

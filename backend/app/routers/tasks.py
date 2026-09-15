@@ -347,11 +347,22 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
     return {"ok": True}
 
 
+class RunIn(BaseModel):
+    """手动起一次运行时的可选参数。`topic` 覆盖行里的 prompt——工作流第一步靠它
+    接住你当场输入的题目，而不改掉 preset 模板。"""
+
+    topic: str = ""
+
+
 @router.post("/{task_id}/run")
-async def run_now(task_id: int, db: AsyncSession = Depends(get_db)):
+async def run_now(
+    task_id: int, body: RunIn | None = None, db: AsyncSession = Depends(get_db)
+):
     if not await db.get(ScheduledTask, task_id):
         raise HTTPException(404, "task not found")
-    return await core.run_task(task_id, manual=True, trigger="manual")
+    return await core.run_task(
+        task_id, manual=True, trigger="manual", topic=(body.topic if body else "")
+    )
 
 
 async def _review(run_id: int, approve: bool) -> dict:
@@ -430,6 +441,73 @@ async def install_meeting_preset(db: AsyncSession = Depends(get_db)):
             mode="simple",
             trigger_kind="watch" if i == 0 else "chain",
             watch_path=f"{MEETING_DIR}/inbox" if i == 0 else "",
+        )
+        db.add(step)
+        made.append(step)
+    await db.flush()  # 先拿到 id 才串得起链
+    for cur, nxt in zip(made, made[1:]):
+        cur.chain_next_id = nxt.id
+    await db.commit()
+    for step in made:
+        await db.refresh(step)
+    core.reschedule()
+    return {"created": len(made), "tasks": [_out(s) for s in made]}
+
+
+# 工作流三步（docs/work-module.md v2）：题目 → 调研 → 方案 → 汇报稿。第一个名字即身份。
+# 首步用引擎（research 自落 research/），后两步用 prompt 吃上游交接**并**落进自己的基地——
+# `_run_engine` 不吃上游（只看 prompt 当话题），而 prompt 路径会把上游产出当系统消息注入，
+# 所以「方案」读得到「调研」、「汇报稿」读得到「方案」。每步 require_approval：跑完停下等你点头。
+_WORK_STEPS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "工作·调研",
+        "research",
+        "（题目在起链时给：运行期用 topic 参数覆盖，这条只是模板占位。）",
+        "",
+    ),
+    (
+        "工作·方案",
+        "prompt",
+        "下面是这次调研的产出。基于它写一份可执行的方案：目标 / 关键选择 / 步骤 / 风险。"
+        "只用调研里给出的材料，没提到的不要编。",
+        "decisions",
+    ),
+    (
+        "工作·汇报稿",
+        "prompt",
+        "下面是这份方案。把它写成一页汇报稿：结论先行，3-5 段，说清做什么、为什么、下一步。"
+        "口气平实，不要客套开头与落款。",
+        "deliver",
+    ),
+)
+_WORK_NAMES = {name for name, *_ in _WORK_STEPS}
+
+
+@router.post("/preset/work")
+async def install_work_preset(db: AsyncSession = Depends(get_db)):
+    """一键装好工作流：三步链（调研 → 方案 → 汇报稿），每步一个人工卡点。**幂等**。
+
+    装好后在「处理一项工作」里输入题目起链；每步跑完停下等你通过 / 驳回。
+    """
+    first = _WORK_STEPS[0][0]
+    rows = (await db.execute(select(ScheduledTask).order_by(ScheduledTask.id))).scalars().all()
+    if any(t.name == first for t in rows):
+        return {"created": 0, "tasks": [_out(t) for t in rows if t.name in _WORK_NAMES]}
+
+    made: list[ScheduledTask] = []
+    for name, action, prompt, landing in _WORK_STEPS:
+        step = ScheduledTask(
+            name=name,
+            prompt=prompt,
+            cron="0 9 * * *",  # 占位：chain 不注册调度，纯手动点火
+            action=action,
+            landing_dir=landing,
+            save_to_vault=True,
+            tools_enabled=False,
+            mode="simple",
+            require_approval=True,  # 每步跑完停下等人点头
+            trigger_kind="chain",  # 三步都是 chain：既不注册 cron 也不注册 watch
+            watch_path="",
         )
         db.add(step)
         made.append(step)

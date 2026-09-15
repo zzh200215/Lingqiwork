@@ -29,6 +29,11 @@ MOOD_SCALE = 5  # 心情 1–5（😞 到 😄）
 MOOD_KEEP = 90  # 只留最近 90 天，storage_json 不至于天长地久地涨
 
 # 内置插件的**声明**（唯一真值）。装好的一行 = 这份声明 + 它自己的存储。
+#
+# `tools` 是 P3 加的：插件自己声明「模型可以怎么调我」。放在声明里而不是提示词里，
+# 是因为工具名与参数形状是**代码**的事——`tool_specs()` 直接从这份声明现算；
+# 库里那份 `spec_json` 是安装当时的快照，老行不会因为它而失效（真从库里读，
+# 线上已装的三个插件就一个工具都长不出来）。
 BUILTINS: dict[str, dict] = {
     "water": {
         "label": "喝水提醒",
@@ -37,6 +42,13 @@ BUILTINS: dict[str, dict] = {
         "schedule": {"hours": [10, 15, 20]},
         "panel": {"kind": "counter", "unit": "杯", "target": WATER_TARGET},
         "commands": ["drink"],
+        "tools": {
+            "drink": {
+                "name": "pet_water_drink",
+                "description": "记一杯水。用户说「我喝了一杯」「喝口水」这类话时调用。",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        },
     },
     "focus": {
         "label": "专注计时",
@@ -45,6 +57,29 @@ BUILTINS: dict[str, dict] = {
         "schedule": {"kind": "once"},
         "panel": {"kind": "timer", "default_minutes": 25},
         "commands": ["start", "stop"],
+        "tools": {
+            "start": {
+                "name": "pet_focus_start",
+                "description": (
+                    "开始一段专注计时。用户说「开始专注」「我要专心 25 分钟」"
+                    "「番茄钟」这类话时调用。到点了零柒会提醒他抬头歇一下。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "minutes": {
+                            "type": "integer",
+                            "description": "专注多少分钟。用户没明说就用 25。范围 1 到 240。",
+                        }
+                    },
+                },
+            },
+            "stop": {
+                "name": "pet_focus_stop",
+                "description": "结束当前正在进行的专注计时。用户说「不专注了」「停一下」时调用。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
     },
     "mood": {
         "label": "心情打卡",
@@ -53,7 +88,29 @@ BUILTINS: dict[str, dict] = {
         "schedule": {"hours": [21]},  # 晚上问一句——白天别打扰
         "panel": {"kind": "mood", "scale": MOOD_SCALE},
         "commands": ["set", "clear"],
+        "tools": {
+            "set": {
+                "name": "pet_mood_set",
+                "description": (
+                    "记下今天的心情：1 分最差，5 分最好。用户说今天心情如何时调用，"
+                    "把他说的话换算成 1-5 分。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "integer", "description": "1 到 5。"}},
+                    "required": ["value"],
+                },
+            }
+        },
     },
+}
+
+# 工具名 → (插件, 命令)。**从声明现算**，不另存一份真值：加一个插件只改声明一处，
+# 工具、面板、命令、计划全跟着长出来。
+TOOL_INDEX: dict[str, tuple[str, str]] = {
+    t["name"]: (plugin, cmd)
+    for plugin, spec in BUILTINS.items()
+    for cmd, t in (spec.get("tools") or {}).items()
 }
 
 JOB_PREFIX = "pet_plugin_"
@@ -309,6 +366,100 @@ async def command(name: str, cmd: str, args: dict | None = None) -> dict:
     return {"ok": True, "name": name, "command": cmd, "panel": panel, "said": said}
 
 
+# ---------- P3：插件能力 → 模型工具 ----------
+
+
+async def tool_specs(allow: set[str] | None = None) -> list[dict]:
+    """**装好且开着**的插件能提供的工具（OpenAI 风格 function specs）。
+
+    只列启用中的插件：关掉一个插件，它的工具就该一起消失——否则模型会去调一个
+    已经不存在的能力（与 `chat.py` 里「工具关掉时不能注入 `_OUTPUT_RULE`」同一个道理）。
+
+    `allow` 是白名单（`prefs.pet_tools`）；`None` = 全给。
+    """
+    await ensure()
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import PetPlugin
+
+    async with SessionLocal() as db:
+        rows = (await db.execute(select(PetPlugin.name, PetPlugin.enabled))).all()
+    on = {name for name, enabled in rows if enabled}
+
+    out: list[dict] = []
+    for plugin, spec in BUILTINS.items():
+        if plugin not in on:
+            continue
+        for _cmd, t in (spec.get("tools") or {}).items():
+            if allow is not None and t["name"] not in allow:
+                continue
+            out.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parameters": t.get("parameters")
+                        or {"type": "object", "properties": {}},
+                    },
+                }
+            )
+    return out
+
+
+def describe(plugin: str, panel: dict) -> str:
+    """给**模型**看的事实陈述。
+
+    刻意是一句客观事实而不是零柒的台词：模型要拿它去组织自己的那句话，
+    替它写好台词等于把它的嘴堵上。
+    """
+    kind = (panel or {}).get("kind")
+    if kind == "timer":
+        if panel.get("running"):
+            return f"专注计时已开始，剩约 {max(1, round(int(panel.get('remaining') or 0) / 60))} 分钟。"
+        return "专注计时已结束。"
+    if kind == "counter":
+        unit = panel.get("unit") or ""
+        return f"今天第 {int(panel.get('value') or 0)}/{int(panel.get('target') or 0)} {unit}。"
+    if kind == "mood":
+        return f"今天的心情记下了：{int(panel.get('value') or 0)}/{int(panel.get('scale') or 5)}。"
+    return f"{plugin} 已更新。"
+
+
+async def call_tool(tool_name: str, args: dict) -> tuple[str, dict | None]:
+    """跑一个**模型发起**的插件工具。返回 `(给模型看的事实, 给界面看的副产物)`。
+
+    与 `/plugins/{name}/command` 共用同一条 `command()`：配额、隐私闸门、面板刷新、
+    一次性作业重排全都只走一遍。**模型能做的和你在面板里点一下能做的完全等价**——
+    两套语义迟早会分叉。
+
+    失败不往外抛：工具报错该由模型读到、然后用自己的话告诉用户，而不是把整轮对话
+    打断（与 `mcp.call_tool` 的约定一致）。
+    """
+    hit = TOOL_INDEX.get(tool_name)
+    if hit is None:
+        return f"[tool error] 未知的宠物工具 {tool_name!r}", None
+    plugin, cmd = hit
+    try:
+        res = await command(plugin, cmd, args or {})
+    except LookupError:
+        return f"[tool error] 插件 {plugin} 没装或没开", None
+    except ValueError as e:
+        return f"[tool error] {e}", None
+    panel = res.get("panel") or {}
+    meta = {
+        "pet": {
+            "tool": tool_name,
+            "plugin": plugin,
+            "command": cmd,
+            "panel": panel,
+            "said": res.get("said"),
+        }
+    }
+    return describe(plugin, panel), meta
+
+
 async def _say_inline(db, row, text: str, today: str) -> str | None:
     """命令里顺口说的一句（例如「够了」）。受配额约束，走 emit 的隐私闸门。"""
     from app.core import pet
@@ -347,7 +498,10 @@ async def _emit_for(name: str, text: str) -> bool:
         quota = _loads(row.quota_json, {})
         if cap and int(quota.get(today, 0)) >= cap:
             return False
-        pet.emit("plugin", text=text)
+        # `detail` 带插件名：三条线的插件事件同属 `kind="plugin"`，不带上是谁发的，
+        # 事后就**分不出**哪条是专注（P4 的小屋要靠它数「专注过几次」）。
+        # 不去猜文本——那正是这个仓库反复拒绝的做法。
+        pet.emit("plugin", text=text, detail=name)
         quota[today] = int(quota.get(today, 0)) + 1
         row.quota_json = json.dumps(quota, ensure_ascii=False)
         await db.commit()

@@ -9,6 +9,7 @@ Client disconnect stops the upstream request.
 import asyncio
 import base64
 import json
+import logging
 import mimetypes
 import re
 from dataclasses import dataclass
@@ -21,14 +22,37 @@ from sqlalchemy import select
 
 from app.core import indexer
 from app.core.llm import ProviderInfo, run_agentic_chat
-from app.core.mcp import mcp_manager
+from app.core.mcp import begin_turn, mcp_manager
 from app.core.prefs import load_config
 from app.db import SessionLocal
 from app.models import Conversation, Message, ProviderConfig
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
+log = logging.getLogger(__name__)
+
 HISTORY_LIMIT = 40  # messages sent as context
+
+# 主聊天路径唯一的**内建**系统规矩。
+#
+# 此前这条路径一条系统提示词都没有（`core/prompts.py` 里只有零柒/笔记/导师的人设），
+# 于是「成篇的成品要进 vault」只写在 `save_artifact` 的**工具描述**里——而工具描述
+# 对模型是建议，不是约束。实测（sensenova-6.8-flash-lite，自然说法
+# 「帮我写一份本周周报，300 字左右。」）：规矩只在工具描述里时 **0/10** 会调它；
+# 同一句话提到 system 层后 **6/10**。模型不是不会调工具（原始流里 finish_reason
+# 就是 tool_calls，kb_search / vault_list_files 照调），它只是把「写份周报」当成
+# 一次**回答**，而不是一次**落盘**——所以规矩得说在它决定怎么回答的那一层。
+#
+# 剩下那 4/10 由界面上的「存进产出」兜底（`routers/outputs.py`）。
+# 登记在 `core/prompts.py::_SPECS`，别让这条规矩变成没人审得到的散句。
+_OUTPUT_RULE = (
+    "你是本地工作台的助手。写周报、调研、方案、复盘、交付稿这类**成篇的成品**时，"
+    "不要把它写进回复里——调用 save_artifact 存进 vault 的产出区，正文放在 content "
+    "参数里，回复只留一句「已存入产出」。用户不会明说「用工具存」，这一步要你自己判断。"
+    "「已存入产出」这句话**只有在这一轮真的调用成功之后才成立**：没调用就一个字也别写，"
+    "更不能一边说「已存入产出」一边把正文贴进回复——那样用户会以为东西在产出区，"
+    "实际只躺在对话里。要改上一轮的成品，同样要重新调用一次。"
+)
 
 
 class ChatRequest(BaseModel):
@@ -158,6 +182,96 @@ def _load_context_files(paths: list[str]) -> list[tuple[str, str]]:
     return out
 
 
+# 模型把整篇正文塞进工具参数时，回复正文那头可能只剩一个「无话可说」的占位串
+# （实测见过字面量 `(empty)`）。它不是模型说的话，落进历史只是一条噪音，下一轮
+# 还会被当成「它真这么说过」再喂回去。
+#
+# 只在**整条内容就是这一个占位串**时才丢弃——只要模型多说了半个字，一律原样保留。
+# 这条是刻意收窄的：宁可漏掉一个没认出来的占位，也不能因为匹配太宽而吃掉一句真话。
+_PLACEHOLDER_ONLY = {
+    "empty", "(empty)", "[empty]", "（empty）",
+    "no content", "(no content)", "(no reply)", "(nothing)",
+    "blank", "(blank)", "(none)", "n/a",
+    "空", "（空）", "(空)", "(无内容)", "（无内容）", "(无回复)",
+}
+
+
+def _without_placeholder(content: str) -> str:
+    """整条内容只是一个空占位串时返回 ""，否则原样返回。"""
+    text = (content or "").strip()
+    if not text:
+        return text
+    return "" if text.lower() in _PLACEHOLDER_ONLY else text
+
+
+# 模型有时会在回复里写「已存入产出」，但那一轮**根本没调 save_artifact**（实测 22 轮里
+# 2 轮）。它不是被什么提示教的——量过：`_replay_message` 那条还原行一次都没出现在它
+# 眼前。它是**在模仿自己上一轮的开场白**：上一轮开头就是「已存入产出：…」，于是下一轮
+# 照着同一个句式说，却没做那件事。
+#
+# 这种话比「不存」更伤：用户以为东西已经在产出区，其实 vault 里还是上一轮的旧版本，
+# 新写的这版只活在对话里。所以两件事一起做——把话说清楚（规矩里加一条），
+# 以及**永远不要再让它静默**（这里记一条日志，界面那边给一条提示）。
+_SAVE_CLAIM_MARKERS = (
+    "已存入产出",
+    "已存为",
+    "已另存为",
+)
+
+
+def _save_claim_markers() -> tuple[str, ...]:
+    """工具成功时回的是「已更新交付「X」→ 路径」，模型会照抄这个句式——
+    所以「已更新{体裁}」也算声称。体裁标签从 `mcp._ARTIFACT_KINDS` 取，别抄第二份。"""
+    from app.core import mcp
+
+    return (
+        *_SAVE_CLAIM_MARKERS,
+        *(f"已更新{label}" for _, label in mcp._ARTIFACT_KINDS.values()),
+    )
+
+
+def claims_a_save_without_one(content: str, artifacts: list | None) -> bool:
+    """这一轮的回复里声称存了产出，但实际一次都没落盘。
+
+    只在**真的没有产出**时才成立：有回执就说明真存了，哪怕正文里那句话是模型多说的。
+    这里刻意宁可少报也不误报——它只用来记日志和给提示，不拦内容、不改落库。
+    """
+    if artifacts:
+        return False
+    text = (content or "").strip()
+    return any(marker in text for marker in _save_claim_markers())
+
+
+def _artifact_titles(m: Message) -> list[str]:
+    """一条落库消息里那几份产出的标题。老行是 NULL、坏 JSON 一律当没有。"""
+    raw = getattr(m, "artifacts_json", None)
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    return [str(a["title"]) for a in items if isinstance(a, dict) and a.get("title")]
+
+
+def _replay_message(m: Message) -> dict:
+    """把落库的一行还原成喂给模型的一轮。
+
+    存产出的那一轮正文可以是空的——正文在 vault 文件里，不在对话里。空 content
+    有些 provider 不收；而且模型不知道自己已经存过了，下一轮会把同一份再存一遍
+    （P1 的重复写就是这么做出来的）。给它一行「本轮已存入产出：X」，既避开空串，
+    也把「这件事已经做完了」讲清楚。
+    """
+    content = m.content
+    if m.role == "assistant" and not (content or "").strip():
+        titles = _artifact_titles(m)
+        if titles:
+            content = f"（本轮已存入产出：{'、'.join(titles)}）"
+    return {"role": m.role, "content": content}
+
+
 async def _generate(req: ChatRequest):
     async with SessionLocal() as db:
         conv = await db.get(Conversation, req.conversation_id)
@@ -228,9 +342,7 @@ async def _generate(req: ChatRequest):
                 history.pop()
         await db.commit()
 
-    llm_messages = [
-        {"role": m.role, "content": m.content} for m in history
-    ]
+    llm_messages = [_replay_message(m) for m in history]
 
     # context compaction: if history is huge, summarize the oldest half
     summary_block: str | None = None
@@ -256,7 +368,12 @@ async def _generate(req: ChatRequest):
 
     # user's global system prompt (settings page), if configured
     prefs = load_config()
+    tools_on = agent.tools_enabled if agent is not None else True
     system_blocks: list[str] = []
+    # 规矩排在一切之前：它是这一轮「怎么回答」的基准，不该被人设/记忆挤到后面去。
+    # 工具关掉时不能说——那会指使模型去调一个它根本没有的工具。
+    if tools_on:
+        system_blocks.append(_OUTPUT_RULE)
     if summary_block:
         system_blocks.append(
             "以下是本次对话较早部分的摘要（原文已省略以节省上下文）：\n\n" + summary_block
@@ -352,7 +469,6 @@ async def _generate(req: ChatRequest):
 
     # ---- tool loop: runner task pushes events into a queue, we pump SSR ----
     q: asyncio.Queue = asyncio.Queue()
-    tools_on = agent.tools_enabled if agent is not None else True
     tool_specs = mcp_manager.tool_specs(include_memory=memory_on) if tools_on else []
 
     compare_resolved: ResolvedModel | None = None
@@ -365,8 +481,18 @@ async def _generate(req: ChatRequest):
             return
 
     partial_parts: list[str] = []  # 出错时保留已流出的文本，供错误分支落库
+    # 这一轮落盘的产出，按 uid 分开装（对比模式两路各一份）。落库时必须把它写进
+    # 消息里：正文那头可能是空的（正文在 vault 文件里），只落正文等于把这一轮唯一
+    # 有信息量的东西丢掉，刷新后回执就没了。
+    saved_by_uid: dict[str | None, list[dict]] = {}
 
     async def run_one(r: ResolvedModel, uid: str | None):
+        # 这一轮的同体裁落盘记录交给 mcp：同一个体裁第二次存 = 模型在改自己刚写的那份，
+        # 覆盖同一个文件而不是新开一个（否则一版一个文件，产出清单和零柒成长值都按份数涨）。
+        # 必须**按 uid 各开一份**：对比模式两路是并发的两个任务，共用一个 dict 会让
+        # B 模型的产出盖掉 A 模型刚写的那个文件。并发在这行 set 的上下文是各自的任务，
+        # 不会互相串。
+        begin_turn()
         streamed_parts: list[str] = []
         final = ""
 
@@ -378,6 +504,19 @@ async def _generate(req: ChatRequest):
         def on_tool(name: str, arguments: dict) -> None:
             q.put_nowait(("tool", name, arguments))
 
+        def on_tool_result(name: str, arguments: dict, meta: dict) -> None:
+            # 工具的副产物（产出落盘路径…）→ 界面。正文不在这条路上：模型仍会把
+            # 「已存为…」那句话写在回复里，这里给的是能点开的**链接**。
+            art = (meta or {}).get("artifact")
+            if isinstance(art, dict):
+                bucket = saved_by_uid.setdefault(uid, [])
+                # 按 path 去重、留最后一条。同一个文件被存了两版时，界面上不能出现
+                # 两条指向同一处的回执——用户点开都是一样的内容，多出来的那条是谎话。
+                path = art.get("path")
+                bucket[:] = [a for a in bucket if a.get("path") != path]
+                bucket.append(art)
+            q.put_nowait(("tool_result", {"name": name, "meta": meta}, uid))
+
         usage: dict = {}
         final = await run_agentic_chat(
             ProviderInfo(kind=r.provider.kind, base_url=r.provider.base_url, api_key=r.provider.api_key),
@@ -388,8 +527,20 @@ async def _generate(req: ChatRequest):
             on_delta,
             on_tool,
             usage=usage,
+            emit_tool_result=on_tool_result,
         )
-        return ((final or "").strip() or "".join(streamed_parts).strip(), usage)
+        # 正文那头怎么定：
+        # - 模型最后说了话（`final` 非空）→ 用它。
+        # - 一个字没说，但**这一轮落了产出** → 就用空的。正文在 vault 文件里，
+        #   回执那行才是这一轮的正身（`_replay_message` 会把它还原成一句话）。
+        #   绝不能用 `streamed_parts` 回填：那是工具轮之前的 pre-text，`llm.py` 已经
+        #   明确把它丢掉了，这里再捞回来等于把整篇长文又塞进对话——P1 要消的就是它，
+        #   而且它是**同一篇正文的第二份拷贝**（文件里一份、历史里一份）。
+        # - 一个字没说、也没落产出 → 保留流出的文本，否则报错前吐的那半句会丢。
+        text = (final or "").strip()
+        if not text and not saved_by_uid.get(uid):
+            text = "".join(streamed_parts).strip()
+        return (text, usage)
 
     async def runner():
         try:
@@ -423,6 +574,11 @@ async def _generate(req: ChatRequest):
                 yield _sse("delta", {"text": a} if b is None else {"text": a, "uid": b})
             elif kind == "tool":
                 yield _sse("tool_call", {"name": a, "arguments": b})
+            elif kind == "tool_result":
+                payload = dict(a)
+                if b is not None:
+                    payload["uid"] = b
+                yield _sse("tool_result", payload)
             elif kind == "done_one":
                 uid, res = a, b
                 if isinstance(res, BaseException):
@@ -456,17 +612,30 @@ async def _generate(req: ChatRequest):
             for uid, res in answers.items():
                 mid = model_id if uid == "a" else req.compare_model
                 u = usages.get(uid) or {}
-                if res.strip():
+                content = _without_placeholder(res.strip())
+                artifacts = saved_by_uid.get(uid) or []
+                if claims_a_save_without_one(content, artifacts):
+                    log.warning(
+                        "uid=%s 声称已存入产出，但这一轮没有落盘（conv=%s）", uid, conv.id
+                    )
+                # 判据是「有没有东西可说」而不是「正文非空」：只调工具、正文空着的
+                # 那一轮也有产出要记，否则刷新后这一轮整个消失。
+                if content or artifacts:
                     await _save_assistant_message(
-                        conv.id, res.strip(), mid, sources,
+                        conv.id, content, mid, sources,
                         tokens_in=u.get("input"), tokens_out=u.get("output"),
+                        artifacts=artifacts,
                     )
         else:
-            content = (final_text or "").strip()
-            if content:
+            content = _without_placeholder(final_text or "")
+            artifacts = saved_by_uid.get(None) or []
+            if claims_a_save_without_one(content, artifacts):
+                log.warning("声称已存入产出，但这一轮没有落盘（conv=%s）", conv.id)
+            if content or artifacts:
                 await _save_assistant_message(
                     conv.id, content, model_id, sources,
                     tokens_in=final_usage.get("input"), tokens_out=final_usage.get("output"),
+                    artifacts=artifacts,
                 )
         yield _sse("done", {})
         # automemory: let the model decide whether this exchange was worth
@@ -509,10 +678,12 @@ async def _generate(req: ChatRequest):
             except Exception:  # noqa: BLE001 - suggestions must never break chat
                 pass
     else:
-        # provider/tool error — keep whatever text streamed before it failed
-        partial = (answers.get("a") or "".join(partial_parts) or "").strip()
-        if partial:
-            await _save_assistant_message(conv.id, partial, model_id, sources)
+        # provider/tool error — keep whatever text streamed before it failed.
+        # 已经落盘的产出也算数：文件真在 vault 里，界面得能指回去。
+        partial = _without_placeholder(answers.get("a") or "".join(partial_parts) or "")
+        artifacts = saved_by_uid.get(None) or saved_by_uid.get("a") or []
+        if partial or artifacts:
+            await _save_assistant_message(conv.id, partial, model_id, sources, artifacts=artifacts)
 
 
 class Followups(BaseModel):
@@ -557,6 +728,7 @@ async def _save_assistant_message(
     sources: list[dict] | None = None,
     tokens_in: int | None = None,
     tokens_out: int | None = None,
+    artifacts: list[dict] | None = None,
 ):
     async with SessionLocal() as db:
         db.add(
@@ -565,6 +737,7 @@ async def _save_assistant_message(
                 role="assistant",
                 content=content,
                 sources_json=json.dumps(sources, ensure_ascii=False) if sources else None,
+                artifacts_json=json.dumps(artifacts, ensure_ascii=False) if artifacts else None,
                 model_id=model_id,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,

@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
+from app.core.mcp import take_tool_meta
+
 log = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
@@ -251,6 +253,7 @@ async def run_agentic_chat(
     on_round: Callable[[int], None] | None = None,
     usage: dict | None = None,
     parallel_tools: bool = True,
+    emit_tool_result: Callable[[str, dict, dict], None] | None = None,
 ) -> str:
     """Chat with optional tool calling. Returns the final assistant text.
 
@@ -260,6 +263,12 @@ async def run_agentic_chat(
     `on_round(n)` fires at the start of each model round (1-based), so callers
     can budget or log multi-step agent runs. `usage`, when given a dict,
     accumulates {"input", "output"} token counts across all rounds.
+
+    `emit_tool_result(name, args, meta)` fires after a tool runs, carrying a
+    **structured** return (whatever the handler stashed under `_meta`) — the
+    chat stream's only way to learn a tool's side effect (e.g. the vault path a
+    saved artifact landed on). The model-facing text stays `run_tool`'s job;
+    this is for the UI, so it must stay small and JSON-safe.
 
     If the model refuses `tools` (e.g. an Ollama model without tool support),
     the first round is retried once without tools so chat still works.
@@ -317,6 +326,15 @@ async def run_agentic_chat(
                 result = await run_tool(tc.name, tc.arguments)
             except Exception as e:  # noqa: BLE001 - 单个工具失败不拖垮整轮
                 result = f"[tool error] {type(e).__name__}: {e}"
+            # 工具想额外告诉界面的事（如产出落盘路径）在此取走。取在 await 之后、
+            # 同一个任务里——并行 gather 时每个 _run_one 有自己的上下文，互不串味。
+            if emit_tool_result is not None:
+                meta = take_tool_meta()
+                if meta:
+                    try:
+                        emit_tool_result(tc.name, tc.arguments, meta)
+                    except Exception:  # noqa: BLE001 - 通知界面失败不该毁掉工具结果
+                        log.debug("emit_tool_result failed", exc_info=True)
             result = str(result)
             if len(result) > 8000:
                 result = result[:8000] + "\n...[工具输出过长已截断]"

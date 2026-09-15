@@ -15,7 +15,7 @@ never awaits. A failed emit must never break the triggering job.
 """
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from app.config import VAULT_DIR, settings
 from app.core import notify
@@ -136,7 +136,13 @@ def compose(kind: str, name: str = "", detail: str = "", count: int = 0) -> str:
         tail = f"：{name}" if name else ""
         return f"卡都清完了。还剩 {count} 个习惯没打勾{tail}。"
     if kind == "mastered":
-        tail = f"，这次是连着第二次说通" if detail == "twice" else ""
+        # 费曼模式说通的那一下，主语不是「你搞懂了」而是「你把它讲明白了」——
+        # 同一个概念、两条不同的路，值得说不同的话。
+        if detail == "taught":
+            return f"你把「{name}」给我讲明白了。我记住了。"
+        # 不是 f-string：这里没有占位符，pyflakes 会报「f-string is missing
+        # placeholders」，CI 的 lint 那一步就红在这一行上。
+        tail = "，这次是连着第二次说通" if detail == "twice" else ""
         return f"你把「{name}」搞懂了{tail}。"
     if kind == "greeting":
         part = "早上" if now.hour < 11 else ("下午" if now.hour < 18 else "晚上")
@@ -222,9 +228,45 @@ def feed(limit: int = 30, since_id: int = 0) -> list[dict]:
     ]
 
 
+# ---------- 本地日 → UTC 区间 ----------
+#
+# `models.utcnow()` 往 `task_runs.started_at` / `messages.created_at` 这些列里写的是
+# **UTC**（`models.iso_utc` 那段注释就是为这 8 小时差立的），而「今天」永远是**本地**的
+# 概念。两者不能拿同一个日期串去比。
+#
+# 这里就是那个换算的唯一出处：`pet.status()` 与 `pet_state` 都用它。**别再写
+# `LIKE '<本地日期>%'`** —— 在 UTC+8 下那等于把本地 00:00–08:00 的活动算到前一天，
+# 再把第二天 00:00–08:00 的算进今天，整体错位一个时区偏移。
+
+
+def local_day_utc_bounds(now: datetime | None = None) -> tuple[str, str]:
+    """本地「今天」对应的 UTC 区间，格式与 SQLAlchemy 写进 SQLite 的一致。
+
+    返回 `[今天 00:00 本地, 明天 00:00 本地)` 两端换算成 **naive UTC** 的 ISO 字符串
+    （`YYYY-MM-DD HH:MM:SS.ffffff`）。这种定长格式的**字典序就是时间序**，所以直接
+    拿去和 `CAST(col AS TEXT)` 做 `>= ? AND < ?` 即可——不用 `datetime()` 包一层，
+    也就不必赌存储格式。
+
+    `now` 传 aware 的 datetime 就按它自己的时区算（测试用这个把语义钉死）；传 naive
+    或不传，按系统本地时区解释（与 `datetime.now()` 一致）。
+
+    注意：`astimezone()` 给出的是**当下这一刻的固定偏移**，不含夏令时表。对中国这种
+    没有夏令时的时区是精确的；有夏令时的时区在切换那天会差一小时——真到那天再换成
+    `zoneinfo`，这里先不为一个用不上的复杂度埋单。
+    """
+    now = now or datetime.now()
+    if now.tzinfo is None:
+        now = now.astimezone()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def _fmt(d: datetime) -> str:
+        return d.astimezone(timezone.utc).replace(tzinfo=None).isoformat(sep=" ", timespec="microseconds")
+
+    return _fmt(midnight), _fmt(midnight + timedelta(days=1))
+
+
 def status() -> dict:
     """Honest mood: computed from real data, never faked. All best-effort."""
-    today = datetime.now().strftime("%Y-%m-%d")
     out: dict = {
         "tasks_done": 0,
         "tasks_failed": 0,
@@ -233,6 +275,8 @@ def status() -> dict:
         "time_of_day": "morning" if datetime.now().hour < 11 else ("afternoon" if datetime.now().hour < 18 else "evening"),
         "pet_enabled": _pet_enabled(),
     }
+    # 本地「今天」不是本地日期串，而是一段 UTC 区间——见 local_day_utc_bounds 的注释。
+    day_start, day_end = local_day_utc_bounds()
     try:
         import sqlite3
 
@@ -240,8 +284,9 @@ def status() -> dict:
         try:
             for st, n in conn.execute(
                 "SELECT status, COUNT(*) FROM task_runs "
-                "WHERE CAST(started_at AS TEXT) LIKE ? GROUP BY status",
-                (f"{today}%",),
+                "WHERE CAST(started_at AS TEXT) >= ? AND CAST(started_at AS TEXT) < ? "
+                "GROUP BY status",
+                (day_start, day_end),
             ):
                 if st == "ok":
                     out["tasks_done"] = int(n)
@@ -249,8 +294,9 @@ def status() -> dict:
                     out["tasks_failed"] = int(n)
             row = conn.execute(
                 "SELECT COALESCE(SUM(tokens_in),0)+COALESCE(SUM(tokens_out),0) "
-                "FROM messages WHERE CAST(created_at AS TEXT) LIKE ?",
-                (f"{today}%",),
+                "FROM messages "
+                "WHERE CAST(created_at AS TEXT) >= ? AND CAST(created_at AS TEXT) < ?",
+                (day_start, day_end),
             ).fetchone()
             out["tokens_today"] = int(row[0] or 0)
         finally:
@@ -280,8 +326,11 @@ def status() -> dict:
 #    没有任何一处会因为「今天没做」而回落。没有扣分、没有掉级、没有还欠。
 # 3. **只正面呈现** —— 界面上只有等级 / 称号 / 累计 EXP / 各来源明细。
 #
-# 来源四条线：学习（A3 的掌握事件）、工作（跑成的工作流 + 交付的成品）、
-# 习惯（打卡天数）、复习（答题次数）。
+# 来源五条线：学习（A3 的掌握事件）、**教零柒（费曼模式说通了）**、工作（跑成的
+# 工作流 + 交付的成品）、习惯（打卡天数）、复习（答题次数）。
+#
+# `LEVEL_STEPS` **不动**：新来源让 EXP 涨得更快，等级只会往上走；反过来若把门槛
+# 调高，已经到过的等级就会回落——那违反「只增不减」。
 LEVEL_STEPS = (0, 120, 320, 640, 1100, 1700, 2500, 3500, 4800, 6400)
 LEVEL_TITLES = ("初识", "同行", "顺手", "老练", "笃定", "通透", "自在", "成形", "长明", "归一")
 
@@ -292,6 +341,10 @@ EXP_RUN_OK = 12  # 一次跑成的工作流
 EXP_OUTPUT = 20  # 一份交出去的成品
 EXP_HABIT_DAY = 4  # 一个习惯打卡日
 EXP_REVIEW = 1  # 一次复习
+# 「把零柒教会」是这套系统里最重的单次动作：讲明白比听明白难，所以它给得比
+# `EXP_MASTERED` 还多。半懂也给，只是少一档——讲了一半也是真干了的活，不该归零。
+EXP_TAUGHT_PET = 40
+EXP_TAUGHT_HALF = 12
 _OUTPUT_DIRS = ("research", "decisions", "conflicts", "recap", "deliver")
 
 # 「已掌握」的 SQL 版：与 `tutor._mastered` 同一条规则——最近一次自评说通了、且不止一场。
@@ -303,6 +356,22 @@ _MASTERED_SQL = (
     " FROM tutor_sessions t WHERE t.concept != '' AND t.verdict IN ('got','half')"
     " GROUP BY t.concept) WHERE n >= 2 AND last_verdict = 'got'"
 )
+
+# 「把零柒教会」= 费曼模式（你讲、它追问）。**判据就是 `mode` 本身**，不新增列：
+# 费曼模式的语义本来就是「你当老师，它当那个没搞懂的学生」，而那个学生就是零柒。
+# `end()` 里你按的那一下自评，就是对你讲解质量的评估——它已经是真值，再存一个
+# 「教宠物专用」的字段就是同一件事存两份，迟早不同步。
+#
+# 代价是：`/tutor` 页里开的费曼会话同样算数（它们本来就是同一件事，只是入口不同）。
+# 真要区分「教零柒」和「教一个无名学生」，那时再加列也不迟。
+#
+# 谓词单独拎出来当常量：P4 的「小屋」要数**什么时候**教会的（`pet_room` 拿它去查
+# `ended_at`），数次数与数时刻必须是同一条规则——两份 SQL 迟早各改一半。
+TAUGHT_MODE = "mode = 'feynman'"
+TAUGHT_GOT = f"{TAUGHT_MODE} AND verdict = 'got'"
+TAUGHT_HALF = f"{TAUGHT_MODE} AND verdict = 'half'"
+_TAUGHT_SQL = f"SELECT COUNT(*) FROM tutor_sessions WHERE {TAUGHT_GOT}"
+_TAUGHT_HALF_SQL = f"SELECT COUNT(*) FROM tutor_sessions WHERE {TAUGHT_HALF}"
 
 
 def _count(conn, sql: str) -> int:
@@ -325,6 +394,18 @@ def _count_outputs() -> int:
         return 0
 
 
+def is_output_path(rel: str) -> bool:
+    """一个 vault 相对路径算不算一份**成品**——这里唯一出处。
+
+    定义就是 `_OUTPUT_DIRS`（四个引擎 + 交付）。它同时被成长值、「今天喂了它什么」、
+    小屋的架子用着。**别在别处再写一份**：P4 的验收里就撞上过一次——`work.list_outputs`
+    比这个宽（它连 `tasks/` 的工作流产物与 `notes/` 的成文都列），拿它当屋里的架子，
+    会出现「架上 4 份、成长说交出 2 份」这种自相矛盾。工作页答的是另一个问题
+    （「系统生成了哪些文件」），两个口径不必相同，但**同一句话里只能有一个**。
+    """
+    return rel.split("/", 1)[0] in _OUTPUT_DIRS
+
+
 def growth() -> dict:
     """零柒的成长：**从「你走到哪了」算**，不是「系统今天干了什么」。
 
@@ -332,7 +413,15 @@ def growth() -> dict:
     一天；这里数的是**你**的积累：学会的概念、跑成的事、交出去的成品、坚持的天数。
     全部是累计量，所以只增不减；`parts` 只列非零的来源，界面上也就没有空档可「还欠」。
     """
-    counts = {"mastered": 0, "sessions": 0, "runs_ok": 0, "habit_days": 0, "reviews": 0}
+    counts = {
+        "mastered": 0,
+        "sessions": 0,
+        "taught": 0,
+        "taught_half": 0,
+        "runs_ok": 0,
+        "habit_days": 0,
+        "reviews": 0,
+    }
     try:
         import sqlite3
 
@@ -340,6 +429,8 @@ def growth() -> dict:
         try:
             counts["mastered"] = _count(conn, _MASTERED_SQL)
             counts["sessions"] = _count(conn, "SELECT COUNT(*) FROM tutor_sessions")
+            counts["taught"] = _count(conn, _TAUGHT_SQL)
+            counts["taught_half"] = _count(conn, _TAUGHT_HALF_SQL)
             counts["runs_ok"] = _count(conn, "SELECT COUNT(*) FROM task_runs WHERE status='ok'")
             counts["habit_days"] = _count(conn, "SELECT COUNT(*) FROM habit_logs")
             counts["reviews"] = _count(conn, "SELECT COUNT(*) FROM card_reviews")
@@ -356,6 +447,14 @@ def growth() -> dict:
             "key": "learning",
             "label": "把东西搞懂",
             "exp": counts["mastered"] * EXP_MASTERED + counts["sessions"] * EXP_SESSION,
+        },
+        {
+            # 「你搞懂了」和「你把它讲明白了」是两件事，所以分成两个来源。
+            # 一场费曼说通会同时进 learning（算一场教学，+5）和这里（+40）——
+            # 那不是重复计数，是两件事都真的发生了。
+            "key": "teach",
+            "label": "把零柒教会",
+            "exp": counts["taught"] * EXP_TAUGHT_PET + counts["taught_half"] * EXP_TAUGHT_HALF,
         },
         {
             "key": "work",

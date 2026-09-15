@@ -41,7 +41,13 @@ class Prompt:
 _SPECS: list[tuple[str, str, str, str]] = [
     # ---- 教学引擎（核心资产）----
     ("app.core.tutor", "SOCRATIC_PROMPT", "苏格拉底式教学：先探理解、再讲、必出问题", "prompt"),
-    ("app.core.tutor", "FEYNMAN_PROMPT", "费曼反转教学：用户讲，模型当「聪明但没搞懂的学生 + 考官」", "prompt"),
+    (
+        "app.core.tutor",
+        "FEYNMAN_PROMPT",
+        "费曼反转教学：用户讲，模型当「聪明但没搞懂的学生 + 考官」"
+        "（陪伴页「教它」里这个学生就是零柒；身份在界面与状态机里，提示词内容没动）",
+        "prompt",
+    ),
     ("app.core.tutor", "FUTURE_PROMPT", "「未来的你」：以一年后的自己口吻与用户对话，讲经历不给建议", "prompt"),
     ("app.core.tutor", "_EXTRACT_PROMPT", "教学会话收尾时提取 概念/自评/卡点（concept 必须带领域词）", "system"),
     ("app.core.tutor", "_SUMMARY_SYSTEM", "教学会话中段压缩摘要（≤300 字，保概念/讲通点/卡点）", "system"),
@@ -75,6 +81,12 @@ _SPECS: list[tuple[str, str, str, str]] = [
     ("app.core.podcast", "_SCRIPT_SYSTEM", "播客编剧：笔记材料 → 双人对话脚本 JSON", "system"),
     # ---- 常驻助手「零柒」----
     ("app.core.pet", "CHAT_SYSTEM", "零柒人设：本地工作台常驻小助手，极简克制偶冷幽默", "persona"),
+    (
+        "app.routers.pet",
+        "_PET_TOOL_RULE",
+        "零柒的工具规矩（P3）：该调就调、别替用户决定、别复述工具输出、报错照实说",
+        "instruction",
+    ),
     # ---- 仪表盘 / 笔记 ----
     ("app.routers.dashboard", "_BRIEFING_SYSTEM", "今日一句话简报（零柒口吻，TTL 缓存 + 模板兜底）", "persona"),
     ("app.routers.notes", "_WRITER_PERSONA", "笔记 AI 写作助手人设", "persona"),
@@ -82,6 +94,13 @@ _SPECS: list[tuple[str, str, str, str]] = [
     ("app.routers.notes", "_BRIEFING_SYSTEM", "笔记简报（零柒口吻，写作视角一句话）", "persona"),
     # ---- 结构化输出层 ----
     ("app.core.llm", "_JSON_HINT", "L1 原生 JSON 模式的追加提示（openai 兼容要求 prompt 含 JSON 字样）", "system"),
+    # ---- 主聊天 ----
+    (
+        "app.routers.chat",
+        "_OUTPUT_RULE",
+        "成篇的成品要调 save_artifact 存进产出区，别糊在回复里（提到 system 层后遵从率 0/10 → 6/10）",
+        "system",
+    ),
 ]
 
 # 内联 prompt：没有稳定符号名，无法 getattr 引用，故只登记「位置 + 用途」，

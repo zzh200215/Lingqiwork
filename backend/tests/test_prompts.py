@@ -33,17 +33,19 @@ _FINGERPRINTS = [
     ("app.core.collab", "_REVISION_INSTRUCTION", "54f0055ac7e4"),
     ("app.core.podcast", "_SCRIPT_SYSTEM", "ad4adc32e4e8"),
     ("app.core.pet", "CHAT_SYSTEM", "ad628c50a9e4"),
+    ("app.routers.pet", "_PET_TOOL_RULE", "8602fcdecb73"),
     ("app.routers.dashboard", "_BRIEFING_SYSTEM", "b450db794e95"),
     ("app.routers.notes", "_WRITER_PERSONA", "db55b995544d"),
     ("app.routers.notes", "_DEFAULT_REWRITE_INSTRUCTION", "ccb0a4ac2faf"),
     ("app.routers.notes", "_BRIEFING_SYSTEM", "d310e05b8727"),
     ("app.core.llm", "_JSON_HINT", "18f4e689b461"),
+    ("app.routers.chat", "_OUTPUT_RULE", "d583da7e7f2f"),
 ]
 
 
 def test_inventory_count():
     items = inventory()
-    assert len(items) == 30
+    assert len(items) == 32
     assert len(items) == len(_FINGERPRINTS)
 
 
@@ -95,9 +97,11 @@ def test_inline_notes_registered():
 
 def test_summary_shape():
     s = summary()
-    assert s["count"] == 30
+    assert s["count"] == 32
     assert s["inline"] == 8
     assert s["missing"] == []
+    assert s["by_module"]["app.routers.chat"] == 1
+    assert s["by_module"]["app.routers.pet"] == 1
     assert s["by_module"]["app.core.tutor"] == 5
     assert s["by_module"]["app.core.research"] == 2
     assert s["by_module"]["app.core.compose"] == 1

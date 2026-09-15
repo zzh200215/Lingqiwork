@@ -275,8 +275,14 @@ async def run_task(
     chain_path: frozenset[int] = frozenset(),
     watch_files: list[str] | None = None,
     run_dir: str = "",
+    topic: str = "",
 ) -> dict:
-    """Execute one task now. Never raises: failures land in last_status/task_runs."""
+    """Execute one task now. Never raises: failures land in last_status/task_runs.
+
+    `topic`（可选）：这一次运行用的题目，覆盖行里的 `prompt`。工作流第一步是「引擎 + 你当场
+    输入的题目」——把题目写进行里会永久改掉 preset 模板、破坏幂等，所以走**运行期覆盖**，
+    单次生效、用完即弃（和 `watch_files` / `run_dir` 同类）。
+    """
     async with SessionLocal() as db:
         task = await db.get(ScheduledTask, task_id)
         if not task:
@@ -301,6 +307,9 @@ async def run_task(
             "action": task.action or "prompt",
             "landing_dir": task.landing_dir or "",
         }
+        # 运行期题目覆盖（工作流第一步「你当场输入的题目」）。行里的 prompt 是模板，不动。
+        if (topic or "").strip():
+            snapshot["prompt"] = topic.strip()[:2000]
         if trigger == "chain" and upstream_task_id:
             up = await db.get(ScheduledTask, upstream_task_id)
             if up:
@@ -509,11 +518,24 @@ async def _fire_chain(
                     log.info("chain: downstream task %s missing/disabled, skipped", nxt_id)
                     return
                 downstream_name = nxt.name
+                # 链条默认继承上游落点（「同一场会议」四步写进同一个文件夹）。但下游
+                # 自己指定了**另一个基地**时（工作流三步分别落 decisions/ 与 deliver/），
+                # 它要自己的目录——否则非空的继承值会短路 `_resolve_run_dir`，汇报稿
+                # 会跟着方案落进 decisions/。同基（含子目录）仍继承。
+                try:
+                    own = normalize_watch_path(nxt.landing_dir or "")
+                except ValueError:
+                    own = ""
+                inherit = (
+                    run_dir
+                    if (not own or run_dir == own or run_dir.startswith(own + "/"))
+                    else ""
+                )
             _write_handoff(snapshot["name"], downstream_name, answer)
             await run_task(
                 nxt_id, trigger="chain", upstream_task_id=task_id,
                 chain_depth=chain_depth + 1, chain_path=chain_path | {task_id},
-                run_dir=run_dir,
+                run_dir=inherit,
             )
         except Exception:  # noqa: BLE001 - the pipeline must not crash the caller
             log.exception("chain handoff to task %s failed", nxt_id)

@@ -43,6 +43,7 @@ from app.routers import (
     kb,
     kg,
     notes,
+    outputs,
     pet,
     podcast,
     prompts,
@@ -99,6 +100,8 @@ async def _migrate() -> None:
         # V6.2 observability: per-message / per-run token usage
         ("messages", "tokens_in", "ALTER TABLE messages ADD COLUMN tokens_in INTEGER"),
         ("messages", "tokens_out", "ALTER TABLE messages ADD COLUMN tokens_out INTEGER"),
+        # 产出回执落库（P1）：正文可能空着，回执不能丢
+        ("messages", "artifacts_json", "ALTER TABLE messages ADD COLUMN artifacts_json TEXT"),
         ("task_runs", "tokens_in", "ALTER TABLE task_runs ADD COLUMN tokens_in INTEGER"),
         ("task_runs", "tokens_out", "ALTER TABLE task_runs ADD COLUMN tokens_out INTEGER"),
         # 工作流运行的尺子（§4-10）：接地分 0-5 + 一句话理由
@@ -247,6 +250,7 @@ app.include_router(today.router)
 app.include_router(tutor.router)
 app.include_router(usage.router)
 app.include_router(work.router)
+app.include_router(outputs.router)
 app.include_router(threads.router)
 
 # MCP server（streamable HTTP，只读工具）挂在 /mcp；session manager 由 lifespan 启动。

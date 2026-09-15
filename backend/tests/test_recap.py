@@ -215,15 +215,26 @@ def test_save_writes_dated_file_in_recap_dir(indexed):
 
 
 def test_save_same_day_overwrites(indexed):
-    """一天一份：重跑刷新，不会堆成两份（同 digest 的做法）。"""
+    """一天一份：重跑刷新，不会堆成两份（同 digest 的做法）。
+
+    断言的是「第二次没多出文件」，不是「目录里只有 1 个文件」——产出目录是
+    conftest 那个**全 session 共用**的 sandbox，别的测试文件也在往里写（实测
+    `test_artifacts.py` 会在这里留下 `recap/…` 产出）。数全局文件数等于把别人的
+    残留算到自己头上，这条测试于是会随收集顺序飘。
+    """
     rep = recap.Report(title="最近", sections=[recap.Section(heading="H", body="B [1]")], used=[1])
     srcs = [{"n": 1, "kind": "teach", "title": "t", "ref": "", "text": "x"}]
 
     first = asyncio.run(recap.save(rep, srcs))
+    after_first = set(recap.RECAP_DIR.glob("*.md"))
     second = asyncio.run(recap.save(rep, srcs))
+    after_second = set(recap.RECAP_DIR.glob("*.md"))
 
     assert first["filename"] == second["filename"]
-    assert len(list(recap.RECAP_DIR.glob("*.md"))) == 1
+    # 这个文件名可能已经被本文件别的用例写过（同一天同名），所以不能断言
+    # `after_first - before` 有 1 个新文件——只能断言「它确实在」+「再存一次没多出来」。
+    assert (recap.RECAP_DIR / Path(first["filename"]).name).exists()
+    assert after_second == after_first  # 第二次覆盖，没有堆出第二份
 
 
 # ---------- run ----------

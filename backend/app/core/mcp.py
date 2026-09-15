@@ -21,6 +21,7 @@ import re
 import shutil
 import sys
 from contextlib import AsyncExitStack
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from html import unescape
 from pathlib import Path
@@ -37,6 +38,44 @@ log = logging.getLogger(__name__)
 
 _VAULT_ROOT = VAULT_DIR.resolve()
 _OUTPUT_LIMIT = 40000  # chars, keep tool output from blowing up the context
+
+# 工具跑完想「额外告诉界面一件事」时的旁路。
+#
+# 为什么不用返回值：`call_tool -> str` 是**给模型看**的形状，塞 JSON 进去等于让模型
+# 去解析副产物。而界面要的是副产物本身——最典型的是「这刀存到哪个文件了」，
+# 前端靠它渲染「已存入产出」的回执链接（见 `routers/chat.py` 的 tool_result 事件）。
+# 所以 handler 把结构化结果丢进这个 ContextVar，`call_tool` 在返回前捞出来交出去，
+# 模型那条字符串路径一个字节都不动。ContextVar 而非实例属性：并行工具（llm.py 的
+# asyncio.gather）各跑各的任务上下文，用共享属性会互相串味。
+_TOOL_META: ContextVar[dict | None] = ContextVar("mcp_tool_meta", default=None)
+
+# 这一轮已经存过哪些体裁（kind → 落点相对路径）。
+#
+# 为什么需要它：模型满足不了「300 字左右」这种约束时会**写一版、存一版、回头数一遍、
+# 再写再存**（实测 20 轮里 5 轮存了 ≥2 次，最坏一轮 4 次）。`save_artifact` 原来对
+# 「同一份东西的第 2 版」和「第 2 份东西」一视同仁，于是要么同日同名互相覆盖（前几版
+# 正文静默消失，却留下 3 条指向同一文件的回执），要么换标题堆出 5 个半成品文件
+# （产出清单和零柒成长值都按份数算）。一轮里同体裁的第二次落盘，语义上就是**在改
+# 自己刚写的那份**，所以让它覆盖同一个文件、只留一条回执。
+#
+# 用 ContextVar 装一个**可变 dict**，而不是每次 set 一个新值：llm.py 的并行工具跑在
+# gather 出来的子任务里，子任务里 `set()` 不会传回父上下文；但大家拿到的是同一个 dict
+# 对象，改它的内容是所有上下文都能看见的。
+_TURN_ARTIFACTS: ContextVar[dict[str, str] | None] = ContextVar("mcp_turn_artifacts", default=None)
+
+
+def begin_turn() -> dict[str, str]:
+    """开一轮：清掉上一轮的同体裁记录。返回这个 dict，调用方不必自己 set。"""
+    fresh: dict[str, str] = {}
+    _TURN_ARTIFACTS.set(fresh)
+    return fresh
+
+
+def take_tool_meta() -> dict | None:
+    """取走当前调用攒下的结构化结果（读完即清，避免串到下一个工具）。"""
+    meta = _TOOL_META.get()
+    _TOOL_META.set(None)
+    return meta
 
 
 # ---------- built-in tools ----------
@@ -82,6 +121,124 @@ async def _write_file(args: dict) -> str:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return f"已写入 {rel}（{len(content)} 字），将自动重新索引供 RAG 检索"
+
+
+# 体裁 → 落点。与五个成文引擎的 `*_DIR`（`report` / `research` / `decide` /
+# `conflict` / `recap` / `deliver` / `compose`）**是同一个约定**，不是新目录：
+# 存下来的产出必须出现在工作页的产出清单里，否则「已存入产出」是句谎话。
+# `pet._OUTPUT_DIRS` 数产出数也读这几个目录，所以这里多一个目录就等于成长值多一份。
+_ARTIFACT_KINDS: dict[str, tuple[str, str]] = {
+    "research": ("research", "研究"),
+    "decide": ("decisions", "方案"),
+    "conflict": ("conflicts", "对质"),
+    "recap": ("recap", "复盘"),
+    "deliver": ("deliver", "交付"),
+    "compose": ("notes", "成文"),
+}
+
+
+async def _save_artifact(args: dict) -> str:
+    """把模型已经写好的长文按体裁落进 vault，并回一个能点开的路径。
+
+    和 `vault_write_file` 的区别在**它是产出的语义**，不是裸写文件：体裁决定落点目录
+    （于是自动进工作页产出清单、自动算进零柒的成长值）、标题决定文件名，而且它会把
+    落点通过 `_TOOL_META` 交给会话流，让界面渲染成「已存入产出」的回执链接而不是把
+    整篇正文摊在对话里。
+
+    正文按**原文**存——这里不做 markdown 重排，模型写成什么样就是什么样（它是给人看的
+    成品，不是待解析的数据）。
+    """
+    kind = (args.get("kind") or "compose").strip().lower()
+    if kind not in _ARTIFACT_KINDS:
+        return f"[错误] kind 只能是 {'/'.join(_ARTIFACT_KINDS)} 之一"
+    title = (args.get("title") or "").strip()
+    content = (args.get("content") or "").strip()
+    if not content:
+        return "[错误] content 不能为空"
+
+    from app.core.report import slug
+
+    dest_dir_name, label = _ARTIFACT_KINDS[kind]
+    dest_dir = (VAULT_DIR / dest_dir_name)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
+
+    stem = f"{datetime.now():%Y-%m-%d}-{slug(title or '产出', dest_dir_name)}"
+    body = content if content.startswith("#") else f"# {title or '产出'}\n\n{content}"
+
+    # 落点三选一。区别全在「这份东西是不是已经在别处存在」：
+    turn = _TURN_ARTIFACTS.get()
+    prev_path = (turn or {}).get(kind)
+    body_text = body + "\n"
+
+    def _unchanged(p: Path) -> bool:
+        try:
+            return p.read_text(encoding="utf-8", errors="ignore") == body_text
+        except OSError:
+            return False
+
+    if prev_path:
+        # 这一轮里同体裁已经存过 → 模型在改自己刚写的那份，覆盖同一个文件。
+        # 不新开文件：否则「一版一个文件」把产出清单塞满，份数还会算进零柒的成长值。
+        dest = VAULT_DIR / prev_path
+        action = "更新"
+    else:
+        dest = dest_dir / f"{stem}.md"
+        if dest.exists() and _unchanged(dest):
+            # 逐字一样：实测出现过同一轮存两次、正文完全相同的两个 128 字版本。
+            # 这一条要在挑新名字**之前**判，否则会为了「不覆盖」白白多出一个 -2.md。
+            action = "未变"
+        elif dest.exists():
+            # 跨轮的同名不覆盖。之前那一版可能是上一轮、甚至上一个话题的东西，
+            # 静默盖掉它就是丢用户的数据。另存一个不冲突的名字，并如实说「另存」。
+            n = 2
+            while dest.exists():
+                dest = dest_dir / f"{stem}-{n}.md"
+                n += 1
+            action = "另存"
+        else:
+            action = "存为"
+
+    if turn is not None:
+        turn[kind] = dest.relative_to(VAULT_DIR).as_posix()
+
+    rel = dest.relative_to(VAULT_DIR).as_posix()
+    if action == "更新" and _unchanged(dest):
+        action = "未变"
+
+    # 索引是**增强**不是前置：索引器挂了产出也已经落盘了，回执照样得给出去
+    chunks = 0
+    if action != "未变":
+        dest.write_text(body_text, encoding="utf-8")
+        try:
+            from app.core import indexer
+
+            chunks = await asyncio.to_thread(indexer.index_file, dest)
+        except Exception:  # noqa: BLE001
+            log.warning("artifact saved but indexing failed: %s", rel, exc_info=True)
+
+    # 回执**无条件**给出去，包括「内容没变」那条路：界面靠 meta 渲染那一行链接，
+    # 少给一次就等于让「只存了产出、一个字没说」的那一轮整轮消失。
+    _TOOL_META.set(
+        {
+            "artifact": {
+                "kind": kind,
+                "label": label,
+                "title": title or dest.stem,
+                "path": rel,
+                "href": f"/notes?path={quote_plus(rel)}",
+                "chunks": chunks,
+                "action": action,
+            }
+        }
+    )
+    if action == "未变":
+        return f"{label}「{title or dest.stem}」和已存的那份一模一样，没有重复写 → {rel}"
+    verb = {"存为": "已存为", "更新": "已更新", "另存": "已另存为"}[action]
+    return (
+        f"{verb}{label}「{title or dest.stem}」→ {rel}"
+        f"（{len(content)} 字，{chunks} 段已索引）"
+    )
 
 
 async def _fetch_url(args: dict) -> str:
@@ -360,6 +517,30 @@ BUILTIN_TOOLS: list[dict] = [
         "handler": _write_file,
     },
     {
+        "name": "save_artifact",
+        "description": (
+            "把一份**写好的成品**存进 vault 的产出区，并让它在工作页的产出清单里出现。"
+            "写周报、调研、方案、复盘、交付稿这类成篇的东西，一律用它存——**别把长文直接"
+            "写在回复里**，长篇正文会淹掉对话。存完只回一句「已存入产出」，正文用户点链接看。"
+            "**一轮里同一个体裁只存一次**：写完直接存，不要先存一版、再改一版重存——"
+            "同一轮的第二次落盘会覆盖第一次，字数不对就直接在 content 里改好再存。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": list(_ARTIFACT_KINDS),
+                    "description": "体裁：research 调研 / decide 方案 / conflict 对质 / recap 复盘 / deliver 交付稿 / compose 成文",
+                },
+                "title": {"type": "string", "description": "标题，一句话说清这份东西是什么"},
+                "content": {"type": "string", "description": "成品正文（Markdown）"},
+            },
+            "required": ["title", "content"],
+        },
+        "handler": _save_artifact,
+    },
+    {
         "name": "fetch_url",
         "description": "抓取一个网页并把正文转为纯文本返回，用于查看网上资料、阅读文档。",
         "parameters": {
@@ -612,14 +793,39 @@ class McpManager:
 
     async def call_tool(self, name: str, args: dict) -> str:
         """Run a built-in or MCP tool. Returns output text (never raises for tool errors)."""
-        if name.startswith(("vault_", "memory_", "skill_")) or name in ("fetch_url", "web_search", "kb_search", "image_gen"):
+        if name.startswith(("vault_", "memory_", "skill_")) or name in (
+            "fetch_url",
+            "web_search",
+            "kb_search",
+            "image_gen",
+            "save_artifact",
+        ):
             handler = _BUILTIN_BY_NAME.get(name)
             if not handler:
                 return f"[tool error] 未知工具 {name!r}"
+            # 内置工具的副产物（如落盘路径）由 handler 写进 `_TOOL_META`，调用方在自己
+            # 的任务里用 `take_tool_meta()` 取。不存 self：并行工具（llm.py 的 gather）
+            # 会在这个共享属性上打架。进入前先清干净，免得上一个工具的残留被读走。
+            _TOOL_META.set(None)
             try:
                 out = await handler["handler"](args or {})
             except Exception as e:  # noqa: BLE001
                 out = f"[tool error] {type(e).__name__}: {e}"
+            return str(out)
+
+        # 宠物能力插件（P3）：零柒 "会干活" 的那双手。声明与实现在 `pet_plugins`，
+        # 这里只做**分派**——不加这一段，`pet_focus_start` 会掉进下面的 MCP 分支，
+        # 报「server 'pet_focus_start' 未连接」。
+        if name.startswith("pet_"):
+            from app.core import pet_plugins
+
+            _TOOL_META.set(None)
+            try:
+                out, meta = await pet_plugins.call_tool(name, args or {})
+            except Exception as e:  # noqa: BLE001
+                return f"[tool error] {type(e).__name__}: {e}"
+            if meta:
+                _TOOL_META.set(meta)
             return str(out)
 
         server, _, tool = name.partition("__")

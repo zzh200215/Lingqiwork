@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,16 @@ def test_compose_task_failed_mentions_failure():
 def test_compose_counts():
     assert "7" in pet.compose("digest", count=7)
     assert "5" in pet.compose("feeds", count=5)
+
+
+def test_compose_mastered_taught_has_its_own_line():
+    """费曼模式说通的那一下，主语是「你把它讲明白了」，不是「你搞懂了」。
+
+    这是两条不同的路：苏格拉底是它教你，费曼是你教它。同一个概念，台词不该一样。
+    """
+    line = pet.compose("mastered", name="asyncio 事件循环", detail="taught")
+    assert "讲明白" in line and "asyncio 事件循环" in line
+    assert line != pet.compose("mastered", name="asyncio 事件循环")
 
 
 def test_compose_greeting_by_hour():
@@ -133,6 +144,112 @@ def test_status_survives_missing_tables(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", _boom)
     st = pet.status()  # must not raise
     assert st["tasks_done"] == 0
+
+
+# --- 本地日 vs UTC：status() 曾经整体错位一个时区 --------------------------------
+#
+# 库里的 `started_at` / `created_at` 是 **UTC**（`models.utcnow()` 写的），而「今天」
+# 永远是**本地**的。旧写法 `LIKE '<本地日期>%'` 于是把本地 00:00–08:00 的活动算到
+# 前一天、又把第二天 00:00–08:00 的算进今天。下面这几条就是那张网。
+
+
+def test_local_day_utc_bounds_pins_a_known_offset():
+    """把语义钉在**显式时区**上——这条测试因此与跑它的机器在哪个时区无关。
+
+    非零偏移是关键：本地 00:00 落在 UTC 的**前一天** 16:00，正是旧写法漏掉的那一段。
+    """
+    tz = timezone(timedelta(hours=8))
+    start, end = pet.local_day_utc_bounds(datetime(2026, 9, 14, 7, 30, tzinfo=tz))
+    assert start == "2026-09-13 16:00:00.000000"
+    assert end == "2026-09-14 16:00:00.000000"
+
+
+def test_local_day_utc_bounds_handles_a_negative_offset():
+    """西半球是反方向的偏移，别写成只顾东八区的算式。"""
+    tz = timezone(timedelta(hours=-5))
+    start, end = pet.local_day_utc_bounds(datetime(2026, 9, 14, 23, 0, tzinfo=tz))
+    assert start == "2026-09-14 05:00:00.000000"
+    assert end == "2026-09-15 05:00:00.000000"
+
+
+def test_local_day_utc_bounds_naive_uses_local_midnight():
+    """不传 / 传 naive：按系统本地时区，取到本地 00:00，跨度一天。"""
+    start, end = pet.local_day_utc_bounds(datetime(2026, 9, 14, 15, 45))
+    s = datetime.fromisoformat(start).replace(tzinfo=timezone.utc).astimezone()
+    e = datetime.fromisoformat(end).replace(tzinfo=timezone.utc).astimezone()
+    assert (s.hour, s.minute, s.second) == (0, 0, 0)
+    assert s.date().isoformat() == "2026-09-14"
+    assert (e - s).total_seconds() == 86400
+
+
+def _today_at(offset: timedelta) -> datetime:
+    """本地「今天 00:00」+ 偏移，返回能直接交给 ORM 的 datetime。
+
+    给的是 **UTC 分量**：SQLite 上 `DateTime(timezone=True)` 存不下时区，ORM 写下去的
+    是字面分量，而应用写的一律是 UTC（`utcnow()`）——所以这里必须与它同一条路。
+    """
+    start, _ = pet.local_day_utc_bounds()
+    return datetime.fromisoformat(start) + offset
+
+
+async def test_status_counts_a_run_from_early_local_morning():
+    """**时区回归**：本地凌晨那一行必须算进「今天」。
+
+    本地 03:00 在 UTC+8 下是**前一天 19:00**，旧的 `LIKE '<本地日期>%'` 会漏掉它。
+    在偏移为 0 的机器上两种写法等价（CI 是 UTC），所以这条真正的作用是在带偏移的
+    开发机上——而带偏移的机器才是这个 bug 的现场。
+    """
+    await _tables()
+    from app.db import SessionLocal
+    from app.models import TaskRun
+
+    before = pet.status()["tasks_done"]
+    async with SessionLocal() as db:
+        db.add(TaskRun(task_id=1, status="ok", started_at=_today_at(timedelta(hours=3))))
+        await db.commit()
+    assert pet.status()["tasks_done"] == before + 1
+
+
+async def test_status_ignores_early_local_morning_tomorrow():
+    """对称的一半：**明天**凌晨那一行不算今天。
+
+    少了这条，把区间写成开区间、或者干脆用 `>= 今天00:00` 也能过——而旧写法在这
+    条上同样是错的（本地明天 03:00 的 UTC 串带着**今天**的日期）。
+    """
+    await _tables()
+    from app.db import SessionLocal
+    from app.models import TaskRun
+
+    before = pet.status()["tasks_done"]
+    async with SessionLocal() as db:
+        db.add(TaskRun(task_id=1, status="ok", started_at=_today_at(timedelta(hours=27))))
+        await db.commit()
+    assert pet.status()["tasks_done"] == before
+
+
+async def test_status_counts_tokens_from_early_local_morning():
+    """token 走的是另一张表（`messages`），同一个坑得分别钉住。"""
+    await _tables()
+    from app.db import SessionLocal
+    from app.models import Conversation, Message
+
+    before = pet.status()["tokens_today"]
+    async with SessionLocal() as db:
+        conv = Conversation(title="t")
+        db.add(conv)
+        await db.flush()
+        db.add(
+            Message(
+                conversation_id=conv.id,
+                role="user",
+                content="x",
+                tokens_in=7,
+                tokens_out=11,
+                created_at=_today_at(timedelta(hours=3)),
+            )
+        )
+        await db.commit()
+    assert pet.status()["tokens_today"] == before + 18
 
 
 # --- greeting: LLM with template fallback --------------------------------------
@@ -246,8 +363,22 @@ async def _tables() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-def test_growth_empty_db_is_level_one_and_never_raises():
-    g = pet.growth()
+def test_growth_empty_db_is_level_one_and_never_raises(monkeypatch):
+    """空 DB + 空产出目录 = 1 级 0 经验。
+
+    两个「空」都得显式造出来：conftest 的 sandbox 是**全 session 共用**的——DB 里
+    已经有别的测试写的习惯/复习/任务行，产出目录里也有别的测试落的产出。不隔离的话
+    「空 DB」根本不空，这条测试会随收集顺序飘（实测 exp 会是 17）。
+
+    不用 pytest 的 `tmp_path`：这台机器的 `%TEMP%\\pytest-of-TX` 拒绝访问（WinError 5）。
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="wb-pet-empty-", dir=Path(__file__).parent))
+    monkeypatch.setattr(pet, "VAULT_DIR", scratch)
+    monkeypatch.setattr(pet.settings, "db_path", scratch / "empty.db")
+    try:
+        g = pet.growth()
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     assert g["level"] == 1 and g["exp"] == 0
     assert g["title"] == "初识"
     assert g["parts"] == []  # 没有来源就不摆空档，也就没有「还欠」可写
@@ -283,6 +414,51 @@ async def test_growth_counts_real_accumulation_and_only_grows():
     )
     assert g["level"] >= 1
     assert pet.growth()["exp"] == g["exp"]  # 累计量只增不减：再读一次不回落
+
+
+# --- P2「教它」：把零柒教会是单独一条来源 -----------------------------------------
+
+
+async def test_growth_counts_teaching_the_pet_as_its_own_source():
+    """费曼模式说通 = 「把零柒教会」，它自己一条线，而且给得比单纯「学会」还多。"""
+    await _tables()
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    before = pet.growth()["exp"]
+    async with SessionLocal() as db:
+        db.add_all(
+            [
+                TutorSession(topic="t", concept="c1", verdict="got", mode="feynman"),
+                TutorSession(topic="t", concept="c2", verdict="half", mode="feynman"),
+                # 苏格拉底模式是**它教你**，不算教它——这条就是区分度所在
+                TutorSession(topic="t", concept="c3", verdict="got", mode="socratic"),
+            ]
+        )
+        await db.commit()
+
+    g = pet.growth()
+    assert g["counts"]["taught"] == 1  # 只有那场 feynman 的 got
+    assert g["counts"]["taught_half"] == 1
+    teach = next(p for p in g["parts"] if p["key"] == "teach")
+    assert teach["exp"] == pet.EXP_TAUGHT_PET + pet.EXP_TAUGHT_HALF
+    assert teach["label"] == "把零柒教会"
+    # 三场教学各自还进 learning 那一格（+5/场）——那不是重复计数，两件事都真发生了
+    assert g["exp"] == before + teach["exp"] + 3 * pet.EXP_SESSION
+
+
+def test_teaching_exp_outweighs_merely_mastering():
+    """讲明白比听明白难，所以单次给得更多。数字变了要重新想一遍这条。"""
+    assert pet.EXP_TAUGHT_PET > pet.EXP_MASTERED > pet.EXP_SESSION
+
+
+def test_growth_thresholds_were_not_raised_for_the_new_source():
+    """新增来源会让 EXP 涨得更快，等级只会往上——那是好事。
+
+    但**把门槛调高会让已经到过的等级回落**，那违反「只增不减」。这条把门槛
+    的字节钉住：P2 加了一条来源，`LEVEL_STEPS` 一个数都不许动。
+    """
+    assert pet.LEVEL_STEPS == (0, 120, 320, 640, 1100, 1700, 2500, 3500, 4800, 6400)
 
 
 # --- B2: 能力插件（openpets 范式） ------------------------------------------------

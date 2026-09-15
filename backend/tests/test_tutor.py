@@ -111,6 +111,7 @@ async def _seed(
     stuck: str = "",
     recalled: bool = False,
     aliases: str = "",
+    mode: str = "socratic",
 ) -> int:
     """A finished past session, written directly — `end()` has its own tests."""
     from app.db import SessionLocal
@@ -124,6 +125,7 @@ async def _seed(
             stuck=stuck,
             aliases=aliases,
             recalled=recalled,
+            mode=mode,
             ended_at=utcnow(),
         )
         db.add(row)
@@ -1731,6 +1733,32 @@ async def test_first_mastery_lets_zero_seven_say_it_once():
     await _seed("第二次", "React useEffect 依赖数组", "got")
     await core._note_first_mastery("React useEffect 依赖数组")
     assert len([e for e in pet.feed(limit=20) if e["kind"] == "mastered"]) == 1
+
+
+async def test_teaching_the_pet_gets_its_own_line():
+    """费曼模式说通 → 零柒说的不是「你搞懂了」，而是「你把它讲明白了」。
+
+    同一个概念、两条路：苏格拉底是**它教你**（你搞懂了），费曼是**你教它**
+    （你讲明白了）。台词不该一样——所以 `mode` 得传到底。
+    """
+    await _reset()
+    from app.core import pet
+
+    import sqlite3
+    from app.config import settings
+
+    conn = sqlite3.connect(settings.db_path)
+    conn.execute("DELETE FROM pet_events")
+    conn.commit()
+    conn.close()
+
+    await _seed("讲给它听", "asyncio 事件循环", "got", mode="feynman")
+    await core._note_first_mastery("asyncio 事件循环", "feynman")
+    lines = [e for e in pet.feed(limit=20) if e["kind"] == "mastered"]
+    assert len(lines) == 1
+    assert "讲明白" in lines[0]["text"]
+    assert "搞懂了" not in lines[0]["text"]
+    assert lines[0]["detail"] == "taught"
 
 
 # ---------- 概念的「邻居」（学习地图做深：关系那半截） ----------

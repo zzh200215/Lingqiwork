@@ -26,6 +26,16 @@ class ConversationUpdate(BaseModel):
     folder: str | None = None
 
 
+def _loads_or_none(raw: str | None):
+    """新加的 JSON 列：老行是 NULL，理论上也可能写坏——坏一行不该让整个会话 500。"""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _dump(c: Conversation, with_messages: bool = False) -> dict:
     data = {
         "id": c.id,
@@ -43,6 +53,9 @@ def _dump(c: Conversation, with_messages: bool = False) -> dict:
                 "role": m.role,
                 "content": m.content,
                 "sources": json.loads(m.sources_json) if m.sources_json else None,
+                # 这一轮落盘的产出回执。刷新后靠它把回执重建出来——正文在 vault
+                # 文件里，这条是会话流里唯一能把用户带回产出的线索。
+                "artifacts": _loads_or_none(getattr(m, "artifacts_json", None)),
                 "model_id": m.model_id,
                 "feedback": getattr(m, "feedback", None),
                 "tokens_in": getattr(m, "tokens_in", None),
@@ -245,7 +258,8 @@ async def export_conversation(conversation_id: int, db: AsyncSession = Depends(g
         who = "🧑 我" if m.role == "user" else ("🤖 助手" if m.role == "assistant" else "⚙️ 系统")
         lines.append(f"## {who}")
         lines.append("")
-        lines.append(m.content)
+        if m.content:
+            lines.append(m.content)
         if m.sources_json:
             try:
                 sources = json.loads(m.sources_json)
@@ -254,6 +268,20 @@ async def export_conversation(conversation_id: int, db: AsyncSession = Depends(g
             if sources:
                 lines.append("")
                 lines.append("**参考片段**: " + " · ".join(s.get("source", "?") for s in sources))
+        # 产出回执也要进导出件。正文那头可能是空的（正文在 vault 文件里），
+        # 不带这一行的话，导出来的那一轮就是一片空白。给的是 vault 相对路径——
+        # 导出的 md 是脱离应用看的，`/notes?path=` 这种应用内路由在那儿没用。
+        artifacts = _loads_or_none(getattr(m, "artifacts_json", None))
+        if artifacts:
+            lines.append("")
+            lines.append(
+                "**产出**: "
+                + " · ".join(
+                    f"{a.get('label') or '产出'}「{a.get('title') or '?'}」→ `{a.get('path') or '?'}`"
+                    for a in artifacts
+                    if isinstance(a, dict)
+                )
+            )
         lines.append("")
     md = "\n".join(lines)
     from urllib.parse import quote
