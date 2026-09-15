@@ -21,6 +21,9 @@ const TAIL: Record<string, string> = {
 }
 
 export default function ArtifactReceipt({ art }: { art: ArtifactRef }) {
+  // W4：字数由**服务端**数、超没超也是服务端判的（`mcp._save_artifact` 把它写进回执）。
+  // 界面上必须能看见它：不然用户没法知道「三百字左右」这句要求到底有没有被满足。
+  const over = !!art.over && art.budget != null
   return (
     <Link
       to={art.href}
@@ -33,6 +36,19 @@ export default function ArtifactReceipt({ art }: { art: ArtifactRef }) {
       <span className="min-w-0 flex-1 truncate font-medium text-teal-800 dark:text-teal-200">
         {art.title}
       </span>
+      {typeof art.chars === 'number' && (
+        <span
+          data-artifact-chars={art.chars}
+          title={art.budget != null ? `用户要的是 ${art.budget} 字${art.hard ? '以内' : '左右'}` : undefined}
+          className={
+            over
+              ? 'shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
+              : 'shrink-0 text-[10px] text-teal-600/80 dark:text-teal-400/80'
+          }
+        >
+          {art.chars} 字{over ? ` · 超 ${art.over_by}` : ''}
+        </span>
+      )}
       <span className="shrink-0 text-teal-600 dark:text-teal-400">
         {TAIL[art.action ?? '存为'] ?? TAIL['存为']}
       </span>

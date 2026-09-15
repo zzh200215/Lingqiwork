@@ -26,6 +26,18 @@ export interface ArtifactRef {
   /** 这次落盘干了什么：存为 / 更新（覆盖本轮的上一版）/ 另存（同名已有，另开一个）/
    *  未变（和已存的一样，没重复写）。老回执没有这个字段，按「存为」显示。 */
   action?: string
+  /** **服务端数过的**实际字数（W4）。以前「超没超」只有模型自己心里算过。 */
+  chars?: number
+  /** 用户那一句里的字数预算；没认出来就是 null/undefined（不许编一个「不限」出来）。 */
+  budget?: number | null
+  /** 预算是硬上限（不超过/以内）还是软约束（左右）。 */
+  hard?: boolean | null
+  /** 超了没有 —— 服务端判的，界面只显示。 */
+  over?: boolean
+  over_by?: number
+  /** 这是本回合同一体裁的第几次落盘（1 = 初稿，2 = 修订）。 */
+  save_no?: number
+  revised?: boolean
 }
 
 /** W2a：服务端对**这一轮**的两条底线校验结论。判定在 `core/turn_quality.py` 一处，

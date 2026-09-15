@@ -86,4 +86,61 @@ describe('ArtifactReceipt', () => {
     )
     expect(screen.getByText('同名已有，已另存 →')).toBeTruthy()
   })
+
+  // W4：字数由服务端数、超没超也是服务端判的 —— 界面上必须看得见。
+  it('把服务端数过的字数露出来（老回执没有这个字段时不显示，不编一个 0）', () => {
+    wrap(
+      <ArtifactReceipt
+        art={{
+          kind: 'deliver',
+          label: '交付',
+          title: '第 36 周周报',
+          path: 'deliver/x.md',
+          href: '/notes?path=deliver%2Fx.md',
+          chunks: 1,
+          chars: 412,
+          budget: 300,
+          hard: false,
+        }}
+      />
+    )
+    expect(screen.getByText('412 字')).toBeTruthy()
+
+    cleanup()
+    wrap(
+      <ArtifactReceipt
+        art={{
+          kind: 'deliver',
+          label: '交付',
+          title: '没有字数',
+          path: 'deliver/y.md',
+          href: '/notes?path=deliver%2Fy.md',
+          chunks: 1,
+        }}
+      />
+    )
+    expect(screen.queryByText(/字$/)).toBeNull()
+  })
+
+  it('超了预算就标出来（含超了多少），没超就只是个数', () => {
+    wrap(
+      <ArtifactReceipt
+        art={{
+          kind: 'deliver',
+          label: '交付',
+          title: '第 36 周周报',
+          path: 'deliver/x.md',
+          href: '/notes?path=deliver%2Fx.md',
+          chunks: 1,
+          chars: 412,
+          budget: 300,
+          over: true,
+          over_by: 112,
+        }}
+      />
+    )
+    const chip = screen.getByText('412 字 · 超 112')
+    expect(chip.getAttribute('data-artifact-chars')).toBe('412')
+    expect(chip.className).toContain('amber')
+  })
 })
