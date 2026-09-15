@@ -166,6 +166,28 @@ def check_turn(record: dict, expect: dict) -> list[dict]:
                 }
             )
 
+    # 6b) W2a 的两条底线 —— **与线上同一份判据**（`core/turn_quality.py`）。
+    # 这里刻意不重写一遍：`claims_a_save_without_one` 只留一份是同一个理由，
+    # 而这两条以后要跟「谎报率」一起对外讲，两份实现分叉的那天它就不成立了。
+    from app.core import turn_quality
+
+    if expect.get("long_body_without_a_receipt") and turn_quality.long_body_without_a_receipt(reply, arts):
+        findings.append(
+            {
+                "code": "long_body_without_a_receipt",
+                "detail": f"正文 {len(reply.strip())} 字却没有落盘（成品只活在对话里）",
+            }
+        )
+    if expect.get("no_invented_path"):
+        invented = turn_quality.invented_path_in_reply(reply, arts)
+        if invented:
+            findings.append(
+                {
+                    "code": "invented_path",
+                    "detail": f"回复里报了一个不在回执里的路径：{invented}",
+                }
+            )
+
     # 7) 落盘那轮的正文不许同时摊在对话里（缺陷四：同一篇正文的第二份拷贝）
     if expect.get("body_not_in_reply") and arts:
         blobs = [b for b in (record.get("bodies") or []) if len(b) >= BODY_OVERLAP_CHARS]

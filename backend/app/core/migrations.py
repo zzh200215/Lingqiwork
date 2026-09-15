@@ -97,9 +97,39 @@ async def _m001_baseline(conn) -> None:
             log.info("迁移 v1：%s 补上 %s", table, col)
 
 
+async def _add_column(conn, table: str, col: str, ddl: str) -> bool:
+    """补一列，已经有就跳过。返回是否真的动了结构。
+
+    **每条给老表加列的迁移都要走这里**：新库是 `create_all` 先建的（列早就有了），
+    老库才需要 ALTER —— 不先查一下就会在新库上撞一句 `duplicate column name`。
+    """
+    from sqlalchemy import text
+
+    cols = (await conn.execute(text(f"PRAGMA table_info({table})"))).mappings().all()
+    if not cols:
+        return False  # 表都没有：那是 create_all 的事，迁移不负责建表
+    if any(c["name"] == col for c in cols):
+        return False
+    await conn.execute(text(ddl))
+    return True
+
+
+async def _m002_turn_quality(conn) -> None:
+    """v2：回合账本加 `quality_json`（W2a 的两条底线校验结论）。
+
+    单独一版而不是塞进 v1：v1 是**历史基线**，它记的是「改动前那张列表」，
+    往里加东西就等于把历史改写了一遍，以后没人分得清哪一版到底改了什么。
+    """
+    if await _add_column(
+        conn, "turn_traces", "quality_json", "ALTER TABLE turn_traces ADD COLUMN quality_json TEXT DEFAULT '{}'"
+    ):
+        log.info("迁移 v2：turn_traces 补上 quality_json")
+
+
 # 有序。**只增不改**：已经发出去的版本号不许改内容（谁跑过就永远跑过了）。
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline：补齐历史列（改动前那张写死的列表）", _m001_baseline),
+    Migration(2, "W2a：回合账本加 quality_json（两条底线校验的结论）", _m002_turn_quality),
 ]
 
 

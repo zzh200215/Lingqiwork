@@ -70,6 +70,7 @@ def begin(conversation_id: int | None = None, model_id: str = "") -> dict:
         "claim_checked": False,
         "claim_truthful": True,
         "retried": 0,
+        "quality": {},
         "error": "",
         "_t0": time.monotonic(),
         "_usage_active": usage_ledger.active(),
@@ -140,6 +141,7 @@ async def _write(draft: dict, usage: dict, error: str) -> dict:
         claim_checked=bool(draft.get("claim_checked")),
         claim_truthful=bool(draft.get("claim_truthful", True)),
         retried=_int(draft.get("retried")),
+        quality_json=json.dumps(draft.get("quality") or {}, ensure_ascii=False),
         seconds=seconds,
         error=(error or draft.get("error") or "")[:500],
     )
@@ -171,6 +173,7 @@ def _view(row) -> dict:
         "claim_checked": bool(row.claim_checked),
         "claim_truthful": bool(row.claim_truthful),
         "retried": row.retried,
+        "quality": _load(getattr(row, "quality_json", None), {}),
         "seconds": row.seconds,
         "error": row.error,
     }
@@ -229,6 +232,10 @@ async def recent(limit: int = 50, only: str = "") -> dict:
 FILTERS: list[dict] = [
     {"key": "lie", "label": "声称存了没存", "hint": "校验过的回合里，说了已存入但这一轮没落盘"},
     {"key": "no_save", "label": "长正文没落盘", "hint": "正文很长、却没有任何产出回执"},
+    {"key": "retried", "label": "补跑过", "hint": "服务端判定没落盘，替它重跑了一次（W2a）"},
+    {"key": "repaired", "label": "补跑补上了", "hint": "补跑那一轮真的落盘了（长文没留在对话里）"},
+    {"key": "invented_path", "label": "报了个不存在的路径", "hint": "回复里写的产出路径不在这一轮的回执里（点开即 404）"},
+    {"key": "dropped_receipt", "label": "回执没给出去", "hint": "回执路径过不了白名单（不在 vault 里 / 盘上没有），界面不渲染成链接"},
     {"key": "multi", "label": "一轮多份", "hint": "同一轮落了不止一份产出"},
     {"key": "slow", "label": "慢", "hint": "这一轮超过 10 秒"},
     {"key": "expensive", "label": "贵", "hint": "输出 token 超过 1600"},
@@ -244,7 +251,23 @@ def _matches(t: dict, key: str) -> bool:
     if key == "lie":
         return bool(t["claim_checked"]) and not t["claim_truthful"]
     if key == "no_save":
+        # **同一件判断只有一份实现**：W2a 之后，服务端当场判的结论记在 `quality.findings`
+        # 里（与 W1 评测共用 `core/turn_quality.py`），这里读它。W2a 之前写下的老行没有
+        # 这一项，才回落到「长度 + 有没有回执」这条当时的事实列上。
+        q = t.get("quality") or {}
+        if q.get("findings") is not None:
+            return any(f.get("code") == "long_body_without_a_receipt" for f in q["findings"])
         return not t["artifacts"] and _int(t.get("answer_chars")) >= LONG_BODY_CHARS
+    # W2a：补跑过 / 补跑补上了 / 报了个不存在的路径 / 回执没给出去。
+    # 判据都在 `core/turn_quality.py`，这里只读它写进 `quality` 的结论。
+    if key == "retried":
+        return _int(t.get("retried")) > 0
+    if key == "repaired":
+        return bool((t.get("quality") or {}).get("repaired"))
+    if key == "invented_path":
+        return any(f.get("code") == key for f in (t.get("quality") or {}).get("findings") or [])
+    if key == "dropped_receipt":
+        return bool((t.get("quality") or {}).get("dropped_receipts"))
     if key == "multi":
         return len(t["artifacts"]) > 1
     if key == "slow":

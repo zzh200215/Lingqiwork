@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
-from app.core import indexer
+from app.core import indexer, turn_quality
 from app.core.llm import ProviderInfo, run_agentic_chat
 from app.core.mcp import begin_turn, mcp_manager
 from app.core.prefs import load_config
@@ -498,6 +498,8 @@ async def _generate(req: ChatRequest):
     saved_by_uid: dict[str | None, list[dict]] = {}
     # 工具循环的账（W5）：两路各一份草稿，由 `run_agentic_chat` 填轮数与工具明细
     turn_traces: dict[str | None, dict] = {}
+    # 两条底线校验的结论（W2a）：两路各一份，最后连同账本一起落库
+    quality_by_uid: dict[str | None, dict] = {}
 
     async def run_one(r: ResolvedModel, uid: str | None):
         # 这一轮的同体裁落盘记录交给 mcp：同一个体裁第二次存 = 模型在改自己刚写的那份，
@@ -510,6 +512,8 @@ async def _generate(req: ChatRequest):
         final = ""
         # 工具循环的账（W5）：轮数、每个工具的耗时与大小。对比模式两路各一份。
         turn_traces[uid] = {}
+        quality: dict = {}
+        quality_by_uid[uid] = quality
 
         def on_delta(t: str) -> None:
             q.put_nowait(("delta", t, uid))
@@ -524,27 +528,47 @@ async def _generate(req: ChatRequest):
             # 「已存为…」那句话写在回复里，这里给的是能点开的**链接**。
             art = (meta or {}).get("artifact")
             if isinstance(art, dict):
-                bucket = saved_by_uid.setdefault(uid, [])
-                # 按 path 去重、留最后一条。同一个文件被存了两版时，界面上不能出现
-                # 两条指向同一处的回执——用户点开都是一样的内容，多出来的那条是谎话。
-                path = art.get("path")
-                bucket[:] = [a for a in bucket if a.get("path") != path]
-                bucket.append(art)
+                # W2a 的白名单闸门：回执路径必须在 vault 里、而且盘上真有这个文件。
+                # 过不去就不进这一轮的产出、也不给界面链接 —— 一个看起来可信、点开即
+                # 404 的链接比没有链接更伤（用户会以为东西存好了）。
+                # **不是静默丢掉**：原因写进这一轮的 quality，账本和界面都看得见。
+                why = turn_quality.receipt_problem(art)
+                if why:
+                    log.warning("产出回执不给出去（%s）：%s", why, art.get("path"))
+                    quality.setdefault("dropped_receipts", []).append(
+                        {"path": str(art.get("path") or ""), "why": why}
+                    )
+                    meta = {k: v for k, v in (meta or {}).items() if k != "artifact"}
+                else:
+                    bucket = saved_by_uid.setdefault(uid, [])
+                    # 按 path 去重、留最后一条。同一个文件被存了两版时，界面上不能出现
+                    # 两条指向同一处的回执——用户点开都是一样的内容，多出来的那条是谎话。
+                    path = art.get("path")
+                    bucket[:] = [a for a in bucket if a.get("path") != path]
+                    bucket.append(art)
             q.put_nowait(("tool_result", {"name": name, "meta": meta}, uid))
 
         usage: dict = {}
-        final = await run_agentic_chat(
-            ProviderInfo(kind=r.provider.kind, base_url=r.provider.base_url, api_key=r.provider.api_key),
-            r.model,
-            llm_messages,
-            tool_specs,
-            mcp_manager.call_tool,
-            on_delta,
-            on_tool,
-            usage=usage,
-            emit_tool_result=on_tool_result,
-            trace=turn_traces[uid],
-        )
+
+        async def one_pass(extra: str) -> str:
+            """跑一遍工具循环。`extra` 非空 = 这是修复那一轮，多带一句指名道姓的话。"""
+            msgs = llm_messages
+            if extra:
+                msgs = [*llm_messages, {"role": "system", "content": extra}]
+            return await run_agentic_chat(
+                ProviderInfo(kind=r.provider.kind, base_url=r.provider.base_url, api_key=r.provider.api_key),
+                r.model,
+                msgs,
+                tool_specs,
+                mcp_manager.call_tool,
+                on_delta,
+                on_tool,
+                usage=usage,
+                emit_tool_result=on_tool_result,
+                trace=turn_traces[uid],
+            )
+
+        final = await one_pass("")
         # 正文那头怎么定：
         # - 模型最后说了话（`final` 非空）→ 用它。
         # - 一个字没说，但**这一轮落了产出** → 就用空的。正文在 vault 文件里，
@@ -556,6 +580,83 @@ async def _generate(req: ChatRequest):
         text = (final or "").strip()
         if not text and not saved_by_uid.get(uid):
             text = "".join(streamed_parts).strip()
+
+        # ---- W2a：事后校验 → 有界修复（**只重试一次**）----
+        # 判据在 `core/turn_quality.py` 一处（与 W1 评测同一份），这里只执行它给的动作。
+        # 「该不该补跑」还要看**用户有没有明说要落盘**：判断「这算不算一份成品」是 W3 的活，
+        # 在这里猜错的代价是把闲聊变成产出（见 turn_quality.should_retry）。
+        quality["asked_to_save"] = turn_quality.asked_to_save(req.content or query_text)
+        bad = turn_quality.findings(text, saved_by_uid.get(uid))
+        if turn_quality.should_retry(bad, req.content or query_text):
+            quality["findings_before"] = bad
+            turn_traces[uid]["retried"] = 1
+            # 先告诉界面「这一轮没落盘、要补一次」：上一轮那篇长文已经流出去了，
+            # 界面收到这帧就把它丢掉，换成下面这轮的短回执（**长文不进对话**是这一整
+            # 件事的目的，光在库里不存、屏幕上还留着，等于没做）。
+            q.put_nowait(
+                (
+                    "quality",
+                    {
+                        "codes": [b["code"] for b in bad],
+                        "retried": True,
+                        "asked_to_save": quality["asked_to_save"],
+                    },
+                    uid,
+                )
+            )
+            log.info("uid=%s 上一轮没落盘（%s），补跑一次", uid, [b["code"] for b in bad])
+            before = len(saved_by_uid.get(uid) or [])
+            kept_text = text
+            mark = len(partial_parts)
+            streamed_parts.clear()
+            del partial_parts[mark:]
+            try:
+                final2 = await one_pass(turn_quality.retry_instruction(bad, req.content or query_text))
+            except BaseException:
+                # 补跑炸了：把上一轮那篇正文还给错误分支（那是用户唯一的一份东西）
+                partial_parts.append(kept_text)
+                raise
+            after = saved_by_uid.get(uid) or []
+            if len(after) > before:
+                # 补上了：正文就用这一轮的（一句话回执），上一轮那篇长文不进历史。
+                # 它可能一个字都没说（正文进了 vault），那正文就该是空的 —— 回执行是
+                # 这一轮的正身（`_replay_message` 会把它还原成一句话）。
+                text = (final2 or "").strip()
+                quality["repaired"] = True
+                log.info("uid=%s 补跑成功：产出落盘了", uid)
+            else:
+                # 还是没存。**不能把上一轮那篇正文丢掉**——它是用户唯一的一份成品，
+                # 而这一轮的失败已经由界面上的「存进产出」兜底（一键补）。
+                text = kept_text
+                quality["repaired"] = False
+                log.warning("uid=%s 补跑之后仍然没有落盘", uid)
+            bad = turn_quality.findings(text, after)
+        quality["findings"] = bad
+        # 落库前再过一遍白名单：从「工具说存好了」到「把回执交给界面」中间隔了这一整轮，
+        # 文件可能在半路被删/被移走（用户手动整理了 vault）。这一遍是**同一条判据的第二次
+        # 调用**，不是第二份实现；挑掉的那些连原因一起记进 quality。
+        good_receipts, broken = turn_quality.drop_broken_receipts(saved_by_uid.get(uid))
+        if broken:
+            seen = {d.get("path") for d in quality.get("dropped_receipts") or []}
+            quality.setdefault("dropped_receipts", []).extend(d for d in broken if d.get("path") not in seen)
+            saved_by_uid[uid] = good_receipts
+            for d in broken:
+                log.warning("落库前发现回执给不出去（%s）：%s", d["why"], d["path"])
+        # 收尾那一帧：界面拿它决定还显不显示「该存没存」那条提示（成功修复后就不显示了），
+        # 以及要不要把「📄 存进产出」提到最显眼处（**只有用户真说过要落盘时**才提；
+        # 对一次「我不想凭空编」的拒绝，提那个按钮是在误导人）。
+        q.put_nowait(
+            (
+                "quality",
+                {
+                    "codes": [b["code"] for b in bad],
+                    "retried": bool(turn_traces[uid].get("retried")),
+                    "asked_to_save": quality["asked_to_save"],
+                    "dropped_receipts": quality.get("dropped_receipts") or [],
+                },
+                uid,
+            )
+        )
         return (text, usage)
 
     async def runner():
@@ -595,6 +696,14 @@ async def _generate(req: ChatRequest):
                 if b is not None:
                     payload["uid"] = b
                 yield _sse("tool_result", payload)
+            elif kind == "quality":
+                # W2a 的两条底线校验结论。**判定在服务端一处**（`core/turn_quality.py`），
+                # 界面只负责显示 —— 让界面自己再算一遍「算不算该存没存」就是第二份实现，
+                # 两份分叉的那天这个数就没人敢信了。
+                payload = dict(a)
+                if b is not None:
+                    payload["uid"] = b
+                yield _sse("quality", payload)
             elif kind == "done_one":
                 uid, res = a, b
                 if isinstance(res, BaseException):
@@ -647,8 +756,9 @@ async def _generate(req: ChatRequest):
                 await _record_turn(
                     conv.id, msg_id, mid, turn_traces.get(uid) or {},
                     content=content, artifacts=artifacts, usage=u, truthful=truthful,
-                    draft=draft,
+                    draft=draft, quality=quality_by_uid.get(uid) or {},
                 )
+                yield _sse("saved", {"uid": uid, "message_id": msg_id})
         else:
             content = _without_placeholder(final_text or "")
             artifacts = saved_by_uid.get(None) or []
@@ -665,8 +775,11 @@ async def _generate(req: ChatRequest):
             await _record_turn(
                 conv.id, msg_id, model_id, turn_traces.get(None) or {},
                 content=content, artifacts=artifacts, usage=final_usage, truthful=truthful,
-                draft=draft,
+                draft=draft, quality=quality_by_uid.get(None) or {},
             )
+            # 把这一轮的 message id 交给界面：它手里的气泡还没有后端 id，而「📄 存进
+            # 产出」那条人工出口是按 id 存的。不交出去，用户得先刷新才能点那一下。
+            yield _sse("saved", {"message_id": msg_id})
         yield _sse("done", {})
         # automemory: let the model decide whether this exchange was worth
         # remembering (Khoj automemory style). Best-effort, after done so the
@@ -760,19 +873,23 @@ async def _save_assistant_message(
     tokens_out: int | None = None,
     artifacts: list[dict] | None = None,
 ):
+    """落一条助手消息，**返回新行的 id**。
+
+    返回值是给界面用的：这一轮跑完时它手里那条气泡还没有后端 id，而「📄 存进产出」
+    那条人工出口是按 id 存的（W2a 的兜底动作）。不把 id 给它，用户就得先刷新才能点。
+    """
     async with SessionLocal() as db:
-        db.add(
-            Message(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=content,
-                sources_json=json.dumps(sources, ensure_ascii=False) if sources else None,
-                artifacts_json=json.dumps(artifacts, ensure_ascii=False) if artifacts else None,
-                model_id=model_id,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-            )
+        msg = Message(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=content,
+            sources_json=json.dumps(sources, ensure_ascii=False) if sources else None,
+            artifacts_json=json.dumps(artifacts, ensure_ascii=False) if artifacts else None,
+            model_id=model_id,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
         )
+        db.add(msg)
         from datetime import datetime, timezone
         from sqlalchemy import update
 
@@ -782,6 +899,8 @@ async def _save_assistant_message(
             .values(updated_at=datetime.now(timezone.utc))
         )
         await db.commit()
+        await db.refresh(msg)
+        return msg.id
 
 
 async def _record_turn(
@@ -795,12 +914,15 @@ async def _record_turn(
     usage: dict,
     truthful: bool,
     draft: dict | None,
+    quality: dict | None = None,
 ) -> None:
     """落一行回合账（W5）。**best-effort**：记账失败不该影响已经答完的那一轮。
 
     `truthful` 由调用方算好传进来 —— 校验只有 `claims_a_save_without_one` 那一处，
     这里是记录，不是第二个判断。`draft` 是本回合开头的草稿（带着开始时刻）；
     对比模式两路共用它，所以每次落库都传**副本**（`finish` 会把 contextvar 清掉）。
+    `quality` 是 W2a 那两条底线校验的结论（findings / 有没有修复 / 哪条回执没给出去）
+    —— 一并落库，界面和评测读的是同一份。
     """
     try:
         from app.core import turn_trace
@@ -820,6 +942,10 @@ async def _record_turn(
                 "answer_chars": len(content or ""),
                 "claim_checked": True,
                 "claim_truthful": bool(truthful),
+                # 重试次数从工具循环的账里来（W2a 的补跑记在这里），quality 是那两条
+                # 底线的结论。两者都是**事实**，不是评分。
+                "retried": int(trace.get("retried") or 0),
+                "quality": quality or {},
             }
         )
         row = await turn_trace.finish(base, usage=usage)

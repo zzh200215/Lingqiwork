@@ -61,14 +61,21 @@ def _with_extra(monkeypatch, version: int, name: str, fn) -> list[int]:
 # ---------- 基线：新库记 v1，老库补列 ----------
 
 
-async def test_a_fresh_db_is_recorded_as_v1():
+async def test_a_fresh_db_records_every_shipped_version():
+    """新库跑完 = 每一版都记上了（不是只有基线那一版）。
+
+    刻意不写死「1」：加了 v2 之后，写死版本号的断言会把一次**正常**的迁移变动报成失败，
+    于是下次真出问题时那条断言已经被人改麻了。这里对着 `MIGRATIONS` 自身断言。
+    """
     await _reset_db()
     out = await mig.run()
-    assert [(m["version"], m["name"][:8]) for m in out["applied"]] == [(1, "baseline")]
+    versions = [m.version for m in mig.MIGRATIONS]
+    assert [m["version"] for m in out["applied"]] == versions
     done = await mig.applied()
-    assert list(done) == [1]
+    assert list(done) == versions
     assert await mig.pending() == []
     # 记了时间，不是一行空壳
+    assert all(done.values())
     assert done[1]
 
 
@@ -195,6 +202,32 @@ def test_the_legacy_list_still_has_the_columns_it_shipped_with():
     for table, col, ddl in mig.LEGACY_COLUMNS:
         assert f"ADD COLUMN {col}" in ddl and table in ddl
     assert ("eval_items", "domain", "ALTER TABLE eval_items ADD COLUMN domain VARCHAR(30) DEFAULT ''") in mig.LEGACY_COLUMNS
+    # v1 是**改动之前**那张列表：新加的东西不许塞回去，不然以后没人分得清哪一版改了什么
+    assert not any(col == "quality_json" for _t, col, _d in mig.LEGACY_COLUMNS)
+
+
+async def test_a_new_column_lands_on_an_old_db_and_not_twice():
+    """v2 那种「给老表加列」的迁移：老库要补上，新库（create_all 已建列）不能炸。
+
+    这一条是照着 `_add_column` 的存在理由写的 —— 少了 PRAGMA 自检，新库上会撞
+    `duplicate column name`，而那是每次全新安装都会走的路径。
+    """
+    await _reset_db()
+    # 造一个「老库」：turn_traces 建回来但没有 quality_json
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE turn_traces"))
+        await conn.execute(text("CREATE TABLE turn_traces (id INTEGER PRIMARY KEY)"))
+    out = await mig.run()
+    assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+    async with engine.begin() as conn:
+        cols = {r["name"] for r in (await conn.execute(text("PRAGMA table_info(turn_traces)"))).mappings()}
+    assert "quality_json" in cols
+
+    # 新库那条路：create_all 已经建好了列，v2 必须是空操作而不是报错
+    await _reset_db()
+    await mig.run()
+    again = await mig.run()
+    assert again["applied"] == []
 
 
 def test_status_reports_where_the_db_is():
@@ -204,9 +237,11 @@ def test_status_reports_where_the_db_is():
         return await mig.status()
 
     st = asyncio.run(run())
-    assert st["current"] == st["head"] == 1
+    head = max(m.version for m in mig.MIGRATIONS)
+    assert st["current"] == st["head"] == head
     assert st["pending"] == []
     assert st["applied"][0]["version"] == 1 and st["applied"][0]["at"]
+    assert st["applied"][-1]["version"] == head
 
 
 def test_the_module_uses_a_real_path():

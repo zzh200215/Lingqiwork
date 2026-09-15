@@ -27,8 +27,17 @@ async def _reset() -> None:
 
 
 def test_the_filters_are_the_measured_failure_modes():
+    """筛选项就是实测到的那几类毛病 —— 一条都不能丢，也不许重号。
+
+    **不写死整个列表**：W2a 往里加了四条（补跑过 / 补跑补上了 / 报了个不存在的路径 /
+    回执没给出去），写死整串的断言会把一次正常的追加报成失败，于是下次真丢了一条时
+    这条断言已经被人改麻了。这里钉的是「一条都不许少」。
+    """
     keys = [f["key"] for f in tt.FILTERS]
-    assert keys == ["lie", "no_save", "multi", "slow", "expensive", "error"]
+    assert keys[:2] == ["lie", "no_save"]  # 第一版那两条最重的排最前，顺序别动
+    assert {"multi", "slow", "expensive", "error"} <= set(keys)
+    assert {"retried", "repaired", "invented_path", "dropped_receipt"} <= set(keys)
+    assert len(keys) == len(set(keys))
     assert all(f["label"] and f["hint"] for f in tt.FILTERS)
 
 
@@ -263,13 +272,56 @@ def test_turn_trace_row_has_every_column_the_plan_asked_for():
         "created_at", "conversation_id", "message_id", "model_id", "prompt_sha",
         "route_level", "route_kind", "rounds", "tool_calls_json", "tokens_in",
         "tokens_out", "artifacts_json", "answer_chars", "claim_checked",
-        "claim_truthful", "retried", "seconds", "error",
+        "claim_truthful", "retried", "quality_json", "seconds", "error",
     ):
         assert c in cols, f"少了 {c}"
 
 
-@pytest.mark.parametrize("key", ["", "lie", "no_save", "multi", "slow", "expensive", "error"])
+@pytest.mark.parametrize(
+    "key",
+    ["", "lie", "no_save", "multi", "slow", "expensive", "error",
+     "retried", "repaired", "invented_path", "dropped_receipt"],
+)
 def test_every_filter_key_is_a_keyword_the_core_knows(key):
     """界面只会传 `FILTERS` 里那几把 key；传了个没人认识的，`_matches` 会当成不筛。"""
     known = {f["key"] for f in tt.FILTERS}
     assert key == "" or key in known
+
+
+# ---------- W2a：两条底线的结论也落在这里 ----------
+
+
+async def test_the_quality_verdict_is_recorded_and_read_back():
+    """这一轮该存的存了没、有没有编路径 —— 判定在 `core/turn_quality.py` 一处，
+    账本只负责记下来。界面靠读它显示提示，不自己再算一遍。"""
+    await _reset()
+    d = tt.begin(conversation_id=7, model_id="m")
+    d["retried"] = 1
+    d["quality"] = {
+        "findings": [
+            {"code": "long_body_without_a_receipt", "detail": "正文 900 字却没落盘"},
+            {"code": "invented_path", "detail": "回复里报了一个不在回执里的路径：recap/编的.md"},
+        ],
+        "asked_to_save": True,
+        "repaired": False,
+        "dropped_receipts": [{"path": "recap/编的.md", "why": "回执指向的文件不在盘上：recap/编的.md"}],
+    }
+    d["answer_chars"] = 900
+    row = await tt.finish(d)
+
+    assert row["quality"]["findings"][0]["code"] == "long_body_without_a_receipt"
+    assert row["retried"] == 1
+    # 「长正文没落盘」这件事**只有一份实现**：判据写进结论后，筛子读的是它
+    assert set(row["flags"]) >= {"no_save", "retried", "invented_path", "dropped_receipt"}
+    assert "repaired" not in row["flags"]  # 没修复就不许说修复了
+
+
+async def test_an_old_row_without_a_quality_verdict_still_filters():
+    """W2a 之前写下的行没有这一项 —— 那时的事实列（长度 + 有没有回执）照样能筛。"""
+    await _reset()
+    d = tt.begin(conversation_id=8, model_id="m")
+    d["answer_chars"] = 900
+    d["quality"] = {}
+    row = await tt.finish(d)
+    assert "no_save" in row["flags"]
+    assert row["quality"] == {}

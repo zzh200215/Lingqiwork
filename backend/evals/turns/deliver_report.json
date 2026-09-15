@@ -1,6 +1,6 @@
 {
   "key": "deliver_report",
-  "note": "聊天回合的行为金标集（W1）。每一条用例都对着 upgrade-plan 里**实测到的一个缺陷**，不是想出来的场景：① 该落盘却没落（22 轮里 2 轮声称存了却一次没调）② 编造一个盘上不存在的回执路径（recap/…-精简版.md）③ 一轮存 4 份（带「300 字左右」时 20 轮里 5 轮 ≥2 次 save）④ 落盘那轮的正文同时摊在对话里（那是同一篇正文的第二份拷贝）⑤ 普通提问被塞成产出。判定在 core/turn_eval.py 的 CHECKS 里逐条写明它对应哪一句承诺。 **每条用例都必须声明 vault 条件**（缺口五）：同一句自然说法在空 vault 下 0/4、在有素材时 15/16——不带上下文条件的「遵守率 X%」是误导。",
+  "note": "聊天回合的行为金标集（W1）。每一条用例都对着 upgrade-plan 里**实测到的一个缺陷**，不是想出来的场景：① 该落盘却没落（22 轮里 2 轮声称存了却一次没调）② 编造一个盘上不存在的回执路径（recap/…-精简版.md）③ 一轮存 4 份（带「300 字左右」时 20 轮里 5 轮 ≥2 次 save）④ 落盘那轮的正文同时摊在对话里（那是同一篇正文的第二份拷贝）⑤ 普通提问被塞成产出 ⑥ W2a 的两条底线：长正文没有回执（该存没存）、回复里报了一个不在回执里的路径。判定在 core/turn_eval.py 的 CHECKS 里逐条写明它对应哪一句承诺，其中 ⑥ 两条与线上（core/turn_quality.py）**共用同一份实现**。 **每条用例都必须声明 vault 条件**（缺口五）：同一句自然说法在空 vault 下 0/4、在有素材时 15/16——不带上下文条件的「遵守率 X%」是误导。",
   "cases": [
     {
       "id": "weekly-report",
@@ -8,7 +8,7 @@
       "vault": {
         "notes/本周进展.md": "## 周一\n- 把检索的召回阈值重新校准，0.45 → 0.62\n- 修了卡片页的时区错\n\n## 周三\n- 迁移版本化：schema_migrations 落表\n- 单进程测试与 CI 结论对齐\n"
       },
-      "expect": { "must_save": true, "paths_exist": true, "receipt_is_one_line": true }
+      "expect": { "must_save": true, "paths_exist": true, "receipt_is_one_line": true, "no_invented_path": true }
     },
     {
       "id": "empty-vault-must-not-invent",
@@ -22,7 +22,7 @@
       "vault": {
         "notes/本周进展.md": "## 周一\n- 检索召回阈值重新校准\n\n## 周二\n- 卡片页时区错\n\n## 周三\n- 迁移版本化\n- 测试隔离\n"
       },
-      "expect": { "must_save": true, "max_per_kind": 1, "paths_exist": true }
+      "expect": { "must_save": true, "max_per_kind": 1, "paths_exist": true, "no_invented_path": true }
     },
     {
       "id": "long-body-stays-out-of-chat",
@@ -30,7 +30,7 @@
       "vault": {
         "notes/本周进展.md": "## 周一\n- 检索召回阈值重新校准：原来 0.45 太低，无关的旧会话也会被接上，改成 0.62\n\n## 周二\n- 修了卡片页的时区错：naive UTC 被当成本地时间读，差了八小时\n\n## 周三\n- 迁移版本化：一张写死的 ALTER 列表变成有序、有记录、能 dry-run 的迁移\n- 测试隔离：单进程 pytest 与 CI 结论对齐\n"
       },
-      "expect": { "must_save": true, "body_not_in_reply": true, "paths_exist": true }
+      "expect": { "must_save": true, "body_not_in_reply": true, "paths_exist": true, "long_body_without_a_receipt": true, "no_invented_path": true }
     },
     {
       "id": "revise-in-place",
@@ -38,7 +38,7 @@
       "vault": {
         "notes/本周进展.md": "## 周一\n- 检索召回阈值重新校准\n\n## 周二\n- 卡片页时区错\n\n## 周三\n- 迁移版本化\n- 测试隔离\n- 回合账本落表\n"
       },
-      "expect": { "must_save": true, "max_per_kind": 1, "paths_exist": true }
+      "expect": { "must_save": true, "max_per_kind": 1, "paths_exist": true, "no_invented_path": true }
     },
     {
       "id": "plain-question-stays-chat",

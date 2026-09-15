@@ -731,6 +731,10 @@ class TurnTrace(Base):
     claim_checked: Mapped[bool] = mapped_column(Boolean, default=False)
     claim_truthful: Mapped[bool] = mapped_column(Boolean, default=True)
     retried: Mapped[int] = mapped_column(Integer, default=0)
+    # W2a 的两条底线校验结论：`{"findings":[{"code","detail"}...], "repaired":bool,
+    # "dropped_receipts":[...]}`。**存 findings 而不是存一个分数** —— 判据在
+    # `core/turn_quality.py` 一处，界面照着显示，不自己再算一遍。
+    quality_json: Mapped[str] = mapped_column(Text, default="{}")
     seconds: Mapped[float] = mapped_column(Float, default=0.0)
     error: Mapped[str] = mapped_column(Text, default="")
 

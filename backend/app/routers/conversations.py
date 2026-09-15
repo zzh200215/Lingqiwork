@@ -36,7 +36,7 @@ def _loads_or_none(raw: str | None):
         return None
 
 
-def _dump(c: Conversation, with_messages: bool = False) -> dict:
+def _dump(c: Conversation, with_messages: bool = False, quality_by_msg: dict | None = None) -> dict:
     data = {
         "id": c.id,
         "title": c.title,
@@ -46,6 +46,7 @@ def _dump(c: Conversation, with_messages: bool = False) -> dict:
         "created_at": c.created_at.isoformat(),
         "updated_at": c.updated_at.isoformat(),
     }
+    quality_by_msg = quality_by_msg or {}
     if with_messages:
         data["messages"] = [
             {
@@ -56,6 +57,10 @@ def _dump(c: Conversation, with_messages: bool = False) -> dict:
                 # 这一轮落盘的产出回执。刷新后靠它把回执重建出来——正文在 vault
                 # 文件里，这条是会话流里唯一能把用户带回产出的线索。
                 "artifacts": _loads_or_none(getattr(m, "artifacts_json", None)),
+                # W2a 的两条底线校验结论（这一轮该存的存了没、有没有编路径）。
+                # **从回合账本读，不在界面里重算**：判定只有 `core/turn_quality.py`
+                # 那一处，两份实现分叉的那天这条提示就没人敢信了。
+                "quality": quality_by_msg.get(m.id) or {},
                 "model_id": m.model_id,
                 "feedback": getattr(m, "feedback", None),
                 "tokens_in": getattr(m, "tokens_in", None),
@@ -99,7 +104,33 @@ async def get_conversation(conversation_id: int, db: AsyncSession = Depends(get_
     ).scalar_one_or_none()
     if not row:
         raise HTTPException(404, "conversation not found")
-    return _dump(row, with_messages=True)
+    return _dump(
+        row, with_messages=True, quality_by_msg=await _quality_by_message(conversation_id, db)
+    )
+
+
+async def _quality_by_message(conversation_id: int, db: AsyncSession) -> dict:
+    """这一轮会话里「哪条回答被判了哪几条毛病」—— 从回合账本读，读不到就当没有。
+
+    单独查账本而不是给 Message 加一列：这是**回合**的属性，账本已经存着了，
+    再抄一份到消息上就是同一件事存两处（迟早有一处是旧的）。
+    """
+    from app.models import TurnTrace
+
+    rows = (
+        await db.execute(
+            select(TurnTrace.message_id, TurnTrace.quality_json).where(
+                TurnTrace.conversation_id == conversation_id,
+                TurnTrace.message_id.is_not(None),
+            )
+        )
+    ).all()
+    out: dict[int, dict] = {}
+    for message_id, raw in rows:
+        q = _loads_or_none(raw)
+        if isinstance(q, dict) and q:
+            out[int(message_id)] = q
+    return out
 
 
 @router.put("/{conversation_id}")

@@ -70,6 +70,55 @@ def test_claiming_a_save_without_one_uses_the_single_existing_judgement():
     assert got == []
 
 
+LONG_REPLY = "这周的工作可以分成三段来讲。" + "每段都写得很细，" * 50  # > 400 字
+
+
+def test_a_long_body_that_never_landed_is_named_as_such():
+    """W2a 的第一条底线：正文很长却没有回执 = 该存没存（成品只活在对话里）。"""
+    got = te.check_turn(_rec(reply=LONG_REPLY), {"long_body_without_a_receipt": True})
+    assert _codes(got) == {"long_body_without_a_receipt"}
+    # **没声明就不判**：一次「没有素材，我不想凭空编」的拒绝也是长正文、也没回执，
+    # 而那是正确行为。用例必须说清它要的是哪一种回合。
+    assert te.check_turn(_rec(reply=LONG_REPLY), {"must_not_save": True}) == []
+
+
+def test_a_receipt_clears_the_long_body_check():
+    arts = [{"kind": "deliver", "path": "deliver/a.md", "exists": True}]
+    assert te.check_turn(_rec(reply=LONG_REPLY, artifacts=arts), {"long_body_without_a_receipt": True}) == []
+
+
+def test_an_invented_path_in_the_reply_is_a_finding():
+    """这一条看的是**回复正文里报的路径**，第 6 条看的是回执自己的路径 —— 两件事。
+
+    实测那条：模型报 `recap/2026-09-14-本周周报-精简版.md`，盘上根本没有这个文件，
+    用户点开即 404。
+    """
+    got = te.check_turn(
+        _rec(reply="已经存好了：recap/2026-09-14-本周周报-精简版.md", artifacts=[]),
+        {"no_invented_path": True},
+    )
+    assert _codes(got) == {"invented_path"}
+    assert "recap/2026-09-14-本周周报-精简版.md" in got[0]["detail"]
+
+
+def test_an_invented_path_check_is_silent_when_the_path_is_a_receipt():
+    arts = [{"kind": "deliver", "path": "deliver/周报.md", "exists": True}]
+    got = te.check_turn(
+        _rec(reply="已存入产出：deliver/周报.md", artifacts=arts), {"no_invented_path": True}
+    )
+    assert got == []
+
+
+def test_the_two_new_checks_share_one_implementation_with_the_live_path():
+    """**判定只有一份**：这两条住在 `core/turn_quality.py`，线上（`routers/chat.py`）
+    与标尺调的是同一份。改一边不改另一边的那天，「谎报率」这个数就没人敢信了。"""
+    from app.core import turn_quality
+
+    assert te.check_turn is not turn_quality.findings  # 是两个函数，但判据是同一份
+    long_rec = te.check_turn(_rec(reply=LONG_REPLY), {"long_body_without_a_receipt": True})
+    assert long_rec[0]["code"] == turn_quality.findings(LONG_REPLY, [])[0]["code"]
+
+
 def test_too_many_per_kind_catches_the_length_induced_loop():
     """缺口四：带「300 字左右」时 20 轮里 5 轮 save ≥2 次，最坏一轮 4 次。"""
     arts = [
