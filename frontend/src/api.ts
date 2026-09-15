@@ -1124,6 +1124,11 @@ export interface TutorEndResult {
   stuck: string
   transfer: string
   material_nearby: { source: string; title: string; score: number }[]
+  /** 这次把新叫法并进了哪个已有概念（没有就是 null）。
+   *
+   *  「它自己换了个名字」如果界面上不说，就是一件用户看不见也查不到的事 —— 说出
+   *  来 + 凭什么（`why`）才算诚实。 */
+  merged: { from: string; into: string; why: string; score: number } | null
 }
 
 export interface TutorSessionStart {
@@ -2294,6 +2299,16 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   tutorStuck: (limit = 200) =>
     request<{ stuck: TutorStuckRow[] }>(`/api/tutor/stuck?limit=${limit}`),
   tutorConcepts: () => request<{ concepts: TutorConceptRow[] }>('/api/tutor/concepts'),
+  /** 把两个概念并成一个（**人工**，Q3.5）。
+   *
+   *  机器自己只在有量出来的余量的地方并（相似度 0.80，尺子在 `backend/smoke_concept.py`：
+   *  零误并、余量 +0.10）；**同领域的相邻概念它分不开**，只能由你指认。
+   *  只改 concept 与 aliases 两列，可复算。 */
+  mergeConcepts: (source: string, into: string) =>
+    request<{ from: string; into: string; moved: number }>('/api/tutor/concepts/merge', {
+      method: 'POST',
+      body: JSON.stringify({ source, into }),
+    }),
   /** 学习地图：已掌握 / 在学 / 卡住 / 未触及 四档（前三档纯派生，第四档读建议日志）。 */
   tutorMap: () => request<TutorLearningMap>('/api/tutor/map'),
   /** 成长事件：概念「学会了」的时刻（零柒成长面板的原料）。纯派生。 */

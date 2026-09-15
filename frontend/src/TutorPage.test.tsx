@@ -2,10 +2,11 @@
 // 教学页是产品独有价值所在的地方，所以第一批判的是它：卡点召回条、取材来源行、
 // 以及 SSE 流里 sources 事件的解析——这三个都是「页面能不能说实话」的关口。
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import {
+  ConceptMerge,
   MaterialLine,
   pointCardBody,
   ReceiptLine,
@@ -175,5 +176,68 @@ describe('pointCardBody', () => {
     const body = pointCardBody('某个点', null, '材料'.repeat(60))
     expect(body).toMatchObject({ focus: '某个点', count: 3 })
     expect(body).toHaveProperty('text')
+  })
+})
+
+// Q3.5 · 概念归一的人工出口。
+//
+// 机器只在有量出来的余量的地方并（相似度 0.80）；同领域的相邻概念它**分不开**
+// （实测比某些该并的还近）。所以这个交互是**指认**，测的是：折叠时不摆候选、
+// 候选只来自已有概念、点了把方向传对（source→into）、并的时候按不动。
+describe('ConceptMerge', () => {
+  afterEach(cleanup)
+
+  const OTHERS = ['SQLite WAL 模式', 'SQLite 锁机制', 'CPython GIL']
+
+  it('折叠时只有一句「并到…」——判断不该挂在每一行上', () => {
+    const { container } = render(
+      <ConceptMerge concept="SQLite 库级锁" others={OTHERS} busy={false} onMerge={() => {}} />
+    )
+    expect(container.querySelector('[data-merge-open="SQLite 库级锁"]')).toBeTruthy()
+    expect(container.querySelector('[data-merge-into]')).toBeNull()
+  })
+
+  it('展开后列出别的概念，点了就把「这一条」并到挑中的那个', () => {
+    const onMerge = vi.fn()
+    const { container } = render(
+      <ConceptMerge concept="SQLite 库级锁" others={OTHERS} busy={false} onMerge={onMerge} />
+    )
+    fireEvent.click(container.querySelector('[data-merge-open]') as HTMLElement)
+
+    // 候选里**没有它自己**
+    expect(container.querySelector('[data-merge-into="SQLite 库级锁"]')).toBeNull()
+    expect(screen.getByText('SQLite WAL 模式')).toBeTruthy()
+
+    fireEvent.click(container.querySelector('[data-merge-into="SQLite 锁机制"]') as HTMLElement)
+    // 方向：这一条是 source，挑中的那个是 into（留下来的名字是后者）
+    expect(onMerge).toHaveBeenCalledWith('SQLite 库级锁', 'SQLite 锁机制')
+  })
+
+  it('能筛：概念多了以后不该让人在几十个名字里找', () => {
+    const { container } = render(
+      <ConceptMerge concept="SQLite 库级锁" others={OTHERS} busy={false} onMerge={() => {}} />
+    )
+    fireEvent.click(container.querySelector('[data-merge-open]') as HTMLElement)
+    fireEvent.change(container.querySelector('[data-merge-q]') as HTMLInputElement, {
+      target: { value: 'GIL' },
+    })
+    expect(container.querySelector('[data-merge-into="CPython GIL"]')).toBeTruthy()
+    expect(container.querySelector('[data-merge-into="SQLite WAL 模式"]')).toBeNull()
+  })
+
+  it('并的时候按不动（重复点击不该并两遍）', () => {
+    const { container } = render(
+      <ConceptMerge concept="A" others={['B']} busy onMerge={() => {}} />
+    )
+    fireEvent.click(container.querySelector('[data-merge-open]') as HTMLElement)
+    expect((container.querySelector('[data-merge-into="B"]') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('只有一条概念时说「没得挑」，不摆一个空列表', () => {
+    const { container } = render(
+      <ConceptMerge concept="唯一的一条" others={['唯一的一条']} busy={false} onMerge={() => {}} />
+    )
+    fireEvent.click(container.querySelector('[data-merge-open]') as HTMLElement)
+    expect(screen.getByText(/没得挑/)).toBeTruthy()
   })
 })

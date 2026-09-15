@@ -116,6 +116,7 @@ beforeEach(() => {
     stuck: '',
     transfer: '',
     material_nearby: [],
+    merged: null,
   })
   vi.mocked(api.petGrowth).mockResolvedValue(growth(100, 1))
   vi.mocked(api.petRoom).mockResolvedValue({

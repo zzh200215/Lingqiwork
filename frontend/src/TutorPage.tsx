@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import AttachToThread from './AttachToThread'
@@ -170,6 +170,88 @@ export function ReceiptLine({ title, meta, saved }: { title: string; meta: strin
   )
 }
 
+/** 「这一条其实是别的概念？并到…」（Q3.5 的人工归一出口）。
+ *
+ *  **为什么不是自动的。** 机器只在有量出来的余量的地方并（相似度 0.80）；同一个领域的
+ *  相邻概念它**分不开** —— 实测里「SQLite WAL 模式」和「SQLite 锁机制」比某些该并的
+ *  还近（尺子：`backend/smoke_concept.py` 的原始数据）。所以这里是指认，不是「再调调阈值」。
+ *
+ *  单独导出是为了能测：并错了会同时污染「搞懂过几个概念」和召回，这个交互值得有自己的测试。
+ *  候选**只来自已有的概念名**（没有「新建一个」）——并到一个不存在的名字上不在这个交互里。
+ */
+export function ConceptMerge({
+  concept,
+  others,
+  busy,
+  onMerge,
+}: {
+  concept: string
+  others: string[]
+  busy: boolean
+  onMerge: (source: string, into: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const candidates = others
+    .filter((t) => t !== concept && (!q.trim() || t.includes(q.trim())))
+    .slice(0, 8)
+
+  if (!open) {
+    return (
+      <button
+        data-merge-open={concept}
+        onClick={() => {
+          setOpen(true)
+          setQ('')
+        }}
+        title="同一个领域的相邻概念，机器分不开（实测比某些该并的还近）——这一条得你来指认"
+        className="pt-1 block text-[10px] text-neutral-400 transition-colors hover:text-violet-600 dark:hover:text-violet-300"
+      >
+        这一条其实是别的概念？并到…
+      </button>
+    )
+  }
+  return (
+    <div className="pt-1">
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          data-merge-q
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="并到哪个概念？"
+          className="min-w-0 flex-1 rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-[10px] outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+        />
+        <button
+          onClick={() => setOpen(false)}
+          className="shrink-0 text-[10px] text-neutral-400 hover:text-neutral-600"
+        >
+          取消
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1 pt-1">
+        {candidates.map((t) => (
+          <button
+            key={t}
+            data-merge-into={t}
+            disabled={busy}
+            onClick={() => onMerge(concept, t)}
+            title={`把「${concept}」的历次记录并到「${t}」（留下来的是「${t}」这个名字）`}
+            className="max-w-full truncate rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600 transition-colors hover:bg-violet-100 hover:text-violet-700 disabled:opacity-40 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+          >
+            {t}
+          </button>
+        ))}
+        {candidates.length === 0 ? (
+          <span className="text-[10px] text-neutral-400">
+            没有别的概念可以并 —— 只有一条的时候，没得挑。
+          </span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export default function TutorPage() {
   const [searchParams] = useSearchParams()
   const [sid, setSid] = useState<number | null>(null)
@@ -183,7 +265,7 @@ export default function TutorPage() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [verdict, setVerdict] = useState<'' | 'got' | 'half' | 'useless'>('')
-  const [ended, setEnded] = useState<{ concept: string; domain: string; stuck: string; transfer: string; nearby: TutorEndResult['material_nearby'] } | null>(null)
+  const [ended, setEnded] = useState<{ concept: string; domain: string; stuck: string; transfer: string; nearby: TutorEndResult['material_nearby']; merged: TutorEndResult['merged'] } | null>(null)
   const [rows, setRows] = useState<TutorSessionRow[]>([])
   const [learnMap, setLearnMap] = useState<TutorLearningMap | null>(null)
   // 展开中的概念（看它历次自评与卡点的演进）；一次只展开一个，右栏窄
@@ -309,6 +391,41 @@ export default function TutorPage() {
         refreshRail()
       } catch {
         /* 静默：右栏不挡教学 */
+      }
+    },
+    [refreshRail]
+  )
+
+  // 归一的人工出口（Q3.5）：机器只并在有余量的地方（相似度 0.80，尺子在
+  // backend/smoke_concept.py 里量过：零误并、余量 +0.10、并上 12/15），**同领域的
+  // 相邻概念它分不开** —— 那一类只能由人指认。所以这里没有「自动整理」按钮，只有指认。
+  const [mergeBusy, setMergeBusy] = useState(false)
+  const [mergeMsg, setMergeMsg] = useState('')
+
+  /** 认识的概念名（四档 + 会话历史里出现过的），供「并到…」挑。 */
+  const allConcepts = useMemo(() => {
+    const out = new Set<string>()
+    for (const bucket of [learnMap?.mastered, learnMap?.learning, learnMap?.stuck]) {
+      for (const c of bucket ?? []) out.add(c.concept)
+    }
+    for (const r of rows) if (r.concept) out.add(r.concept)
+    return [...out]
+  }, [learnMap, rows])
+
+  const doMerge = useCallback(
+    async (source: string, into: string) => {
+      setMergeBusy(true)
+      setMergeMsg('')
+      try {
+        const r = await api.mergeConcepts(source, into)
+        // 消息挂在面板上而不是那一行：并完之后 source 那一行就没了，挂在行上会跟着消失
+        setMergeMsg(`「${r.from}」的 ${r.moved} 场并到了「${r.into}」`)
+        setOpenConcept(into) // 并到哪条上就展开哪条——不然刚并完像什么都没发生
+        refreshRail()
+      } catch (e) {
+        setMergeMsg(e instanceof Error ? e.message : String(e))
+      } finally {
+        setMergeBusy(false)
       }
     },
     [refreshRail]
@@ -869,7 +986,7 @@ export default function TutorPage() {
       try {
         const got = await api.tutorEnd(sid, v)
         setVerdict(v)
-        setEnded({ concept: got.concept, domain: got.domain ?? '', stuck: got.stuck, transfer: got.transfer ?? '', nearby: got.material_nearby ?? [] })
+        setEnded({ concept: got.concept, domain: got.domain ?? '', stuck: got.stuck, transfer: got.transfer ?? '', nearby: got.material_nearby ?? [], merged: got.merged ?? null })
         refreshRail()
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e))
@@ -892,7 +1009,7 @@ export default function TutorPage() {
       setTurns(d.turns)
       setHits([])
       setVerdict(d.verdict)
-      setEnded(d.verdict ? { concept: d.concept, domain: d.domain ?? '', stuck: d.stuck, transfer: '', nearby: [] } : null)
+      setEnded(d.verdict ? { concept: d.concept, domain: d.domain ?? '', stuck: d.stuck, transfer: '', nearby: [], merged: null } : null)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
@@ -1456,6 +1573,7 @@ export default function TutorPage() {
     return (
               <div key={c.concept} className="group/c relative">
                 <button
+                  data-concept-row={c.concept}
                   onClick={() => openConceptRow(c.concept)}
                   title={expanded ? '收起' : '展开这个概念的历次记录'}
                   className="block w-full rounded-lg py-1.5 pr-5 text-left transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800/70"
@@ -1556,6 +1674,16 @@ export default function TutorPage() {
                         </span>
                       </div>
                     ) : null}
+
+                    {/* 归一的人工出口（Q3.5）：机器并不了的那些由**人指认** —— 同一个领域的
+                        相邻概念在向量空间里比某些该并的还近（尺子：backend/smoke_concept.py）。
+                        放在展开了才看得见的地方：这是判断，不是每行都该挂的按钮。 */}
+                    <ConceptMerge
+                      concept={c.concept}
+                      others={allConcepts}
+                      busy={mergeBusy}
+                      onMerge={doMerge}
+                    />
                   </div>
                 ) : null}
               </div>
@@ -1625,6 +1753,13 @@ export default function TutorPage() {
 
   const conceptsPanel = (
     <>
+      {/* 并概念的回执挂在这里而不是那一行：并完之后 source 那一行就没了。
+          「机器自己换了个名字」如果界面上不说，就是一件看不见也查不到的事。 */}
+      {mergeMsg ? (
+        <p data-merge-msg className="px-3 pb-2 text-[11px] text-neutral-500">
+          {mergeMsg}
+        </p>
+      ) : null}
       {learnMap && mapCount > 0 ? (
         <div className="px-3 pb-3">
           <div className="flex items-center justify-between pb-1.5">
@@ -1803,6 +1938,7 @@ export default function TutorPage() {
                   ).map(([key, label]) => (
                     <button
                       key={key}
+                      data-tutor-tab={key}
                       onClick={() => setTab(key)}
                       className={`rounded-lg px-6 py-1.5 text-sm transition-colors ${
                         tab === key
@@ -1864,10 +2000,12 @@ export default function TutorPage() {
                       if (e.key === 'Enter') void begin()
                     }}
                     autoFocus
+                    data-tutor-topic
                     placeholder="例如：asyncio 里 await 到底把控制权交给了谁"
                     className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3.5 py-2.5 text-left text-sm outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
                   />
                   <button
+                    data-tutor-begin
                     onClick={() => void begin()}
                     disabled={!topic.trim() || busy}
                     className="shrink-0 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:brightness-110 disabled:opacity-40 disabled:shadow-none dark:shadow-violet-900/60"
@@ -2432,6 +2570,14 @@ export default function TutorPage() {
                       {ended.stuck ? ` · 卡点：${ended.stuck}` : ''}
                     </p>
                   ) : null}
+                  {/* 这次归并了什么，必须说出来：机器自己换了个名字如果界面上不提，
+                      就是一件用户看不见也查不到的事。 */}
+                  {ended?.merged ? (
+                    <p data-ended-merged className="truncate text-[11px] text-violet-600 dark:text-violet-300">
+                      这次的叫法「{ended.merged.from}」并进了已有概念「{ended.merged.into}」
+                      （{ended.merged.why}）
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   onClick={() => void runResearch()}
@@ -2502,6 +2648,7 @@ export default function TutorPage() {
                     {VERDICTS.map((v) => (
                       <button
                         key={v.v}
+                        data-verdict={v.v}
                         onClick={() => void mark(v.v)}
                         disabled={busy || turns.length === 0}
                         className={`rounded-lg border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 ${
@@ -2557,6 +2704,7 @@ export default function TutorPage() {
                   </div>
                   <div className="flex items-end gap-2">
                     <textarea
+                      data-tutor-say
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
