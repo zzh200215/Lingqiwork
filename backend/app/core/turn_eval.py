@@ -206,6 +206,19 @@ def check_turn(record: dict, expect: dict) -> list[dict]:
 
     if reply.strip() and not _without_placeholder(reply):
         findings.append({"code": "placeholder_reply", "detail": "回复整条是一个空占位串"})
+
+    # 9) W4：一轮里为了字数反复重写重存（实测 20 轮里 5 轮 ≥2 次，最坏一轮 4 次）。
+    # **数的是落盘调用次数**，不是回执条数：回执按 path 去重，改两版只会剩一条 ——
+    # 而每一次重写都要用户多付一次生成的钱。
+    cap = int(expect.get("max_saves") or 0)
+    saves = int(record.get("saves") or 0)
+    if cap and saves > cap:
+        findings.append(
+            {
+                "code": "too_many_saves",
+                "detail": f"这一轮落盘 {saves} 次（上限 {cap}）——为字数反复重写，每次都多花一次生成",
+            }
+        )
     return findings
 
 
@@ -640,6 +653,8 @@ async def _one_case(
             "artifacts": [],
             "rounds": 0,
             "tools": 0,
+            "saves": 0,
+            "tokens_out": 0,
             "seconds": 0.0,
             "error": "",
             "vault_files": 0,
@@ -667,6 +682,11 @@ async def _one_case(
                 "error": got.get("error") or "",
                 "rounds": int(trace.get("rounds") or 0),
                 "tools": len(trace.get("tool_calls") or []),
+                # W4 的尺子：这一轮**落盘了几次**（不是回执条数 —— 回执按 path 去重）
+                "saves": sum(
+                    1 for c in (trace.get("tool_calls") or []) if c.get("name") == "save_artifact"
+                ),
+                "tokens_out": int(trace.get("tokens_out") or 0),
                 "seconds": round(time.time() - t0, 1),
             }
         )
@@ -750,6 +770,11 @@ async def run(
     passed = sum(1 for r in results if not r["findings"] and not r["error"])
     judged = [r["judge"] for r in results if r["judge"] is not None]
     lo, hi = wilson(passed, total)
+    # W4 的三把尺子（upgrade-plan 的原话：每轮 save 次数均值、每轮落盘文件数、每轮 output token）。
+    # **每轮均值要比就一起比**（同一套用例、同一个模型），单看一个会被别的改动带偏。
+    saves = sum(int(r.get("saves") or 0) for r in results)
+    files = sum(len(r.get("artifacts") or []) for r in results)
+    tokens_out = sum(int(r.get("tokens_out") or 0) for r in results)
     agg = {
         "scenario": fx["key"],
         "scenario_sha": fx["sha"],
@@ -763,6 +788,9 @@ async def run(
         "can_tell": (hi - lo) <= 0.34,
         "judged": round(sum(judged) / len(judged), 2) if judged else None,
         "judged_n": len(judged),
+        "saves_per_turn": round(saves / total, 2) if total else 0.0,
+        "files_per_turn": round(files / total, 2) if total else 0.0,
+        "tokens_out_per_turn": round(tokens_out / total, 1) if total else 0.0,
         "seconds": seconds,
     }
 

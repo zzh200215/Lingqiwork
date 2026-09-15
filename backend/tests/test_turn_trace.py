@@ -280,7 +280,7 @@ def test_turn_trace_row_has_every_column_the_plan_asked_for():
 @pytest.mark.parametrize(
     "key",
     ["", "lie", "no_save", "multi", "slow", "expensive", "error",
-     "retried", "repaired", "invented_path", "dropped_receipt"],
+     "retried", "repaired", "invented_path", "dropped_receipt", "over", "rewrote"],
 )
 def test_every_filter_key_is_a_keyword_the_core_knows(key):
     """界面只会传 `FILTERS` 里那几把 key；传了个没人认识的，`_matches` 会当成不筛。"""
@@ -325,3 +325,18 @@ async def test_an_old_row_without_a_quality_verdict_still_filters():
     row = await tt.finish(d)
     assert "no_save" in row["flags"]
     assert row["quality"] == {}
+
+
+async def test_the_length_facts_get_their_own_filters():
+    """W4：超没超、写了几版，都从服务端写下的那一栏读 —— 界面不重算。"""
+    await _reset()
+    d = tt.begin(conversation_id=11, model_id="m")
+    d["quality"] = {"length": {"budget": 300, "hard": False, "chars": 412, "over": True, "saves": 2}}
+    row = await tt.finish(d)
+    assert {"over", "rewrote"} <= set(row["flags"])
+
+    # 没认预算的那一轮：没有「超」这回事，也不该被标成重写
+    d2 = tt.begin(conversation_id=12, model_id="m")
+    d2["quality"] = {"length": {"budget": None, "hard": None, "chars": 900, "over": False, "saves": 1}}
+    row2 = await tt.finish(d2)
+    assert "over" not in row2["flags"] and "rewrote" not in row2["flags"]

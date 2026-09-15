@@ -248,6 +248,62 @@ def test_an_invented_path_is_reported_but_not_retried(monkeypatch):
     assert "invented_path" in trace["flags"]
 
 
+# ---------- W4：字数那一栏是服务端数的 ----------
+
+
+def test_the_turn_records_what_the_server_counted(monkeypatch):
+    """用户说了「三百字左右」→ 账本里留着预算与**服务端数出来的**字数、超没超、写了几版。
+
+    这一段以前只活在模型的自我叙述里（它估一下「超了」，再写一版）。现在它是账本上的事实，
+    界面按它显示，评测按它算「每轮落盘几次」。
+    """
+    asyncio.run(_prepare_db(9107))
+    _stub_turn(
+        monkeypatch,
+        [
+            (
+                "",
+                [
+                    ToolCall(
+                        "1",
+                        "save_artifact",
+                        {"kind": "deliver", "title": "周报", "content": "正" * 400},
+                    )
+                ],
+            ),
+            ("已存好了。", []),
+        ],
+    )
+    _drive(9107, "把 notes/本周进展.md 里的东西整理成一份三百字左右的周报，存进产出。")
+
+    trace = _trace(9107)
+    assert trace is not None
+    length = trace["quality"]["length"]
+    assert length["budget"] == 300 and length["hard"] is False
+    assert length["chars"] == 400 and length["over"] is True
+    assert length["saves"] == 1  # 只落了一次（没为字数重写）
+    assert "over" in trace["flags"] and "rewrote" not in trace["flags"]
+
+
+def test_no_budget_in_the_ask_means_no_budget_in_the_trace(monkeypatch):
+    """没给字数就如实记 None —— 不许把「没约束」写成「不限」或者某个默认值。"""
+    asyncio.run(_prepare_db(9108))
+    _stub_turn(
+        monkeypatch,
+        [
+            ("", [ToolCall("1", "save_artifact", {"kind": "deliver", "title": "稿子", "content": "正" * 400})]),
+            ("存好了。", []),
+        ],
+    )
+    _drive(9108, "把 notes/本周进展.md 整理成一份稿子，存进产出。")
+
+    trace = _trace(9108)
+    assert trace is not None
+    assert trace["quality"]["length"]["budget"] is None
+    assert trace["quality"]["length"]["over"] is False
+    assert "over" not in trace["flags"]
+
+
 # ---------- 白名单：回执指向的文件在半路没了 ----------
 
 

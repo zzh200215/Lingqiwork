@@ -142,6 +142,22 @@ def test_duplicate_paths_are_a_lie_in_the_receipt():
     assert "duplicate_paths" in _codes(te.check_turn(_rec(artifacts=arts), {}))
 
 
+def test_too_many_saves_counts_calls_not_receipts():
+    """W4：数的是**落盘调用次数**，不是回执条数。
+
+    回执按 path 去重（一轮里改两版只剩一条），所以「它写了几版」这件事只有工具账里有 ——
+    而每多写一版，用户就多付一次生成的钱。
+    """
+    # 落盘 1 次、回执 1 条：正常
+    assert te.check_turn(_rec(saves=1, artifacts=[{"kind": "deliver", "path": "d/a.md", "exists": True}]), {"max_saves": 2}) == []
+    # 落盘 3 次、回执仍只有 1 条（都覆盖到同一个文件）→ 抓得住
+    got = te.check_turn(_rec(saves=3, artifacts=[{"kind": "deliver", "path": "d/a.md", "exists": True}]), {"max_saves": 2})
+    assert _codes(got) == {"too_many_saves"}
+    assert "3 次" in got[0]["detail"]
+    # 没声明这条判据的用例不受影响
+    assert te.check_turn(_rec(saves=9), {}) == []
+
+
 def test_a_receipt_pointing_at_nothing_on_disk():
     """缺口：编了一个不存在的路径 `recap/2026-09-14-本周周报-精简版.md`，点开即 404。"""
     arts = [{"kind": "recap", "path": "recap/编的.md", "exists": False}]

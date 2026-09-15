@@ -236,6 +236,8 @@ FILTERS: list[dict] = [
     {"key": "repaired", "label": "补跑补上了", "hint": "补跑那一轮真的落盘了（长文没留在对话里）"},
     {"key": "invented_path", "label": "报了个不存在的路径", "hint": "回复里写的产出路径不在这一轮的回执里（点开即 404）"},
     {"key": "dropped_receipt", "label": "回执没给出去", "hint": "回执路径过不了白名单（不在 vault 里 / 盘上没有），界面不渲染成链接"},
+    {"key": "over", "label": "超了字数预算", "hint": "用户在那一句里给了字数，服务端数出来超过了（W4）"},
+    {"key": "rewrote", "label": "为字数重写过", "hint": "同一轮里落盘 ≥2 次（每多一版都是多一次生成，要用户付钱）"},
     {"key": "multi", "label": "一轮多份", "hint": "同一轮落了不止一份产出"},
     {"key": "slow", "label": "慢", "hint": "这一轮超过 10 秒"},
     {"key": "expensive", "label": "贵", "hint": "输出 token 超过 1600"},
@@ -268,6 +270,11 @@ def _matches(t: dict, key: str) -> bool:
         return any(f.get("code") == key for f in (t.get("quality") or {}).get("findings") or [])
     if key == "dropped_receipt":
         return bool((t.get("quality") or {}).get("dropped_receipts"))
+    # W4：字数。`budget` 是 None = 用户那一句里没给字数（那就没有「超」这回事）。
+    if key == "over":
+        return bool(((t.get("quality") or {}).get("length") or {}).get("over"))
+    if key == "rewrote":
+        return _int(((t.get("quality") or {}).get("length") or {}).get("saves")) >= 2
     if key == "multi":
         return len(t["artifacts"]) > 1
     if key == "slow":

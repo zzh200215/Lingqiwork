@@ -693,6 +693,153 @@ def test_different_kinds_in_one_turn_each_keep_a_file(monkeypatch, vault_root):
     assert len(list((vault_root / "deliver").glob("*.md"))) == 1
 
 
+# ---------- W4：长度约束的确定性执行（单次受限修订 + 服务端报字数） ----------
+
+
+def test_a_third_save_in_one_turn_is_refused_and_writes_nothing(monkeypatch, vault_root):
+    """一回合 1 次初稿 + 1 次修订，**第三次直接拒绝**。
+
+    实测最坏一轮存了 4 次：模型估不准字数，写一版、存一版、再估、再写。每一次重写都要用户
+    多付一次生成的钱，所以在服务端给它一个硬上限 —— 而不是继续指望它自己数对。
+    """
+    _vault(monkeypatch, vault_root)
+
+    async def go():
+        mcp.begin_turn()
+        out = []
+        for i in range(3):
+            out.append(
+                await mcp._save_artifact(
+                    {"kind": "recap", "title": f"第 {i + 1} 版", "content": "正文" * (10 + i)}
+                )
+            )
+            mcp.take_tool_meta()
+        return out
+
+    first, second, third = asyncio.run(go())
+    assert first.startswith("已存为") and second.startswith("已更新")
+    assert third.startswith("[错误]") and "修订额度" in third
+    files = list((vault_root / "recap").glob("*.md"))
+    assert len(files) == 1, "被拒绝的那一次不许写盘"
+    assert "第 2 版" in files[0].read_text(encoding="utf-8"), "留在盘上的是最后一次真的存下来的"
+
+
+def test_the_revision_slot_is_per_kind(monkeypatch, vault_root):
+    """额度按体裁算：复盘写两版用完了，交付稿还是有它自己的一次。"""
+    _vault(monkeypatch, vault_root)
+
+    async def go():
+        mcp.begin_turn()
+        for _ in range(2):
+            await mcp._save_artifact({"kind": "recap", "title": "复盘", "content": "甲"})
+            mcp.take_tool_meta()
+        out = await mcp._save_artifact({"kind": "deliver", "title": "交付", "content": "乙"})
+        mcp.take_tool_meta()
+        return out
+
+    assert asyncio.run(go()).startswith("已存为")
+
+
+def test_a_new_turn_gets_its_slots_back(monkeypatch, vault_root):
+    _vault(monkeypatch, vault_root)
+
+    async def go():
+        mcp.begin_turn()
+        for _ in range(2):
+            await mcp._save_artifact({"kind": "recap", "title": "复盘", "content": "甲"})
+            mcp.take_tool_meta()
+        mcp.begin_turn()  # 下一轮
+        out = await mcp._save_artifact({"kind": "recap", "title": "复盘", "content": "乙"})
+        mcp.take_tool_meta()
+        return out
+
+    assert asyncio.run(go()).startswith("已另存为")
+
+
+def test_the_server_counts_the_chars_and_says_whether_it_is_over(monkeypatch, vault_root):
+    """「超没超」由**服务端**数、服务端判，并写进回执与工具返回 —— 不再是模型的自我叙述。"""
+    from app.core import length_budget as lb
+
+    _vault(monkeypatch, vault_root)
+
+    async def go():
+        budget = lb.parse_budget("整理成一份三百字左右的周报。")
+        mcp.begin_turn(budget)
+        out = await mcp._save_artifact(
+            {"kind": "deliver", "title": "周报", "content": "正" * 400}
+        )
+        art = mcp.take_tool_meta()["artifact"]
+        return out, art
+
+    text, art = asyncio.run(go())
+    assert art["budget"] == 300 and art["budget_source"] == "ask" and art["hard"] is False
+    assert art["chars"] == 400 and art["over"] is True and art["over_by"] == 100
+    assert "服务端数过" in text and "超了 100 字" in text
+    assert "还剩 1 次修订额度" in text
+
+
+def test_within_budget_it_says_not_to_rewrite(monkeypatch, vault_root):
+    """没超就明说「不要再为字数重写一版」——这是 W4 想消掉的那个动作。"""
+    from app.core import length_budget as lb
+
+    _vault(monkeypatch, vault_root)
+
+    async def go():
+        mcp.begin_turn(lb.parse_budget("不超过 500 字。"))
+        out = await mcp._save_artifact({"kind": "deliver", "title": "短稿", "content": "正" * 480})
+        art = mcp.take_tool_meta()["artifact"]
+        return out, art
+
+    text, art = asyncio.run(go())
+    assert art["over"] is False and art["hard"] is True and art["chars"] == 480
+    assert "没超" in text and "不要再为字数重写一版" in text
+
+
+def test_no_budget_means_the_tail_says_nothing(monkeypatch, vault_root):
+    """用户那一句里没有字数 → 回执里一个字都不多说（不编一个「不限」出来）。"""
+    _vault(monkeypatch, vault_root)
+
+    async def go():
+        mcp.begin_turn()
+        out = await mcp._save_artifact({"kind": "note" if False else "compose", "title": "随记", "content": "正文"})
+        art = mcp.take_tool_meta()["artifact"]
+        return out, art
+
+    text, art = asyncio.run(go())
+    assert art["budget"] is None and art["chars"] == 2
+    assert "服务端数过" not in text and "预算" not in text
+
+
+def test_the_tool_argument_is_only_a_fallback(monkeypatch, vault_root):
+    """服务端从用户那句话里认出来的预算**优先**；认不出才用工具参数里的数。
+
+    顺序不能反：预算是**用户说的**，模型自己填一个 300 然后按 300 交差，正是 W4 要治的病。
+    """
+    from app.core import length_budget as lb
+
+    _vault(monkeypatch, vault_root)
+
+    async def go():
+        # ① 服务端认出来了（用户说的是 300）→ 工具参数里的 8000 不作数
+        mcp.begin_turn(lb.parse_budget("三百字左右。"))
+        await mcp._save_artifact(
+            {"kind": "deliver", "title": "甲", "content": "正" * 400, "length_budget": 8000}
+        )
+        a = mcp.take_tool_meta()["artifact"]
+        # ② 服务端认不出 → 用工具参数里的数，并如实标出来源
+        mcp.begin_turn(None)
+        await mcp._save_artifact(
+            {"kind": "deliver", "title": "乙", "content": "正" * 400, "length_budget": 200}
+        )
+        b = mcp.take_tool_meta()["artifact"]
+        return a, b
+
+    a, b = asyncio.run(go())
+    assert (a["budget"], a["budget_source"]) == (300, "ask")
+    assert (b["budget"], b["budget_source"]) == (200, "tool")
+    assert b["over"] is True
+
+
 def test_same_title_in_a_new_turn_does_not_overwrite(monkeypatch, vault_root):
     """跨轮的同名不覆盖：之前那一版可能是上一轮、甚至上一个话题的东西。
 

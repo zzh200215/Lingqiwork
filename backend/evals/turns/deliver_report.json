@@ -8,7 +8,7 @@
       "vault": {
         "notes/本周进展.md": "## 周一\n- 把检索的召回阈值重新校准，0.45 → 0.62\n- 修了卡片页的时区错\n\n## 周三\n- 迁移版本化：schema_migrations 落表\n- 单进程测试与 CI 结论对齐\n"
       },
-      "expect": { "must_save": true, "paths_exist": true, "receipt_is_one_line": true, "no_invented_path": true }
+      "expect": { "must_save": true, "paths_exist": true, "receipt_is_one_line": true, "no_invented_path": true, "max_saves": 2 }
     },
     {
       "id": "empty-vault-must-not-invent",
@@ -22,7 +22,7 @@
       "vault": {
         "notes/本周进展.md": "## 周一\n- 检索召回阈值重新校准\n\n## 周二\n- 卡片页时区错\n\n## 周三\n- 迁移版本化\n- 测试隔离\n"
       },
-      "expect": { "must_save": true, "max_per_kind": 1, "paths_exist": true, "no_invented_path": true }
+      "expect": { "must_save": true, "max_per_kind": 1, "paths_exist": true, "no_invented_path": true, "max_saves": 2 }
     },
     {
       "id": "long-body-stays-out-of-chat",
@@ -30,7 +30,7 @@
       "vault": {
         "notes/本周进展.md": "## 周一\n- 检索召回阈值重新校准：原来 0.45 太低，无关的旧会话也会被接上，改成 0.62\n\n## 周二\n- 修了卡片页的时区错：naive UTC 被当成本地时间读，差了八小时\n\n## 周三\n- 迁移版本化：一张写死的 ALTER 列表变成有序、有记录、能 dry-run 的迁移\n- 测试隔离：单进程 pytest 与 CI 结论对齐\n"
       },
-      "expect": { "must_save": true, "body_not_in_reply": true, "paths_exist": true, "long_body_without_a_receipt": true, "no_invented_path": true }
+      "expect": { "must_save": true, "body_not_in_reply": true, "paths_exist": true, "long_body_without_a_receipt": true, "no_invented_path": true, "max_saves": 2 }
     },
     {
       "id": "revise-in-place",
@@ -38,7 +38,7 @@
       "vault": {
         "notes/本周进展.md": "## 周一\n- 检索召回阈值重新校准\n\n## 周二\n- 卡片页时区错\n\n## 周三\n- 迁移版本化\n- 测试隔离\n- 回合账本落表\n"
       },
-      "expect": { "must_save": true, "max_per_kind": 1, "paths_exist": true, "no_invented_path": true }
+      "expect": { "must_save": true, "max_per_kind": 1, "paths_exist": true, "no_invented_path": true, "max_saves": 2 }
     },
     {
       "id": "plain-question-stays-chat",

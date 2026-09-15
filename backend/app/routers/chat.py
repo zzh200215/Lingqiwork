@@ -501,13 +501,20 @@ async def _generate(req: ChatRequest):
     # 两条底线校验的结论（W2a）：两路各一份，最后连同账本一起落库
     quality_by_uid: dict[str | None, dict] = {}
 
+    # 这两条底线之外的第三件事（W4）：**用户这一句里有没有字数预算**。
+    # 认出来就挂到这一轮上，`save_artifact` 落盘时报的是服务端数过的字数 ——
+    # 「超没超」不再靠模型自我叙述。认不出就是 None（不猜）。
+    from app.core import length_budget
+
+    turn_budget = length_budget.parse_budget(req.content or query_text)
+
     async def run_one(r: ResolvedModel, uid: str | None):
         # 这一轮的同体裁落盘记录交给 mcp：同一个体裁第二次存 = 模型在改自己刚写的那份，
         # 覆盖同一个文件而不是新开一个（否则一版一个文件，产出清单和零柒成长值都按份数涨）。
         # 必须**按 uid 各开一份**：对比模式两路是并发的两个任务，共用一个 dict 会让
         # B 模型的产出盖掉 A 模型刚写的那个文件。并发在这行 set 的上下文是各自的任务，
-        # 不会互相串。
-        begin_turn()
+        # 不会互相串。`budget` 一并挂上去（W4）。
+        begin_turn(turn_budget)
         streamed_parts: list[str] = []
         final = ""
         # 工具循环的账（W5）：轮数、每个工具的耗时与大小。对比模式两路各一份。
@@ -587,6 +594,8 @@ async def _generate(req: ChatRequest):
         # 在这里猜错的代价是把闲聊变成产出（见 turn_quality.should_retry）。
         quality["asked_to_save"] = turn_quality.asked_to_save(req.content or query_text)
         bad = turn_quality.findings(text, saved_by_uid.get(uid))
+        # W4：字数那一栏**记服务端数过的数**。没认预算就如实写 None（不编一个「不限」出来）。
+        quality["length"] = _length_note(turn_budget, turn_traces[uid], saved_by_uid.get(uid))
         if turn_quality.should_retry(bad, req.content or query_text):
             quality["findings_before"] = bad
             turn_traces[uid]["retried"] = 1
@@ -862,6 +871,25 @@ async def _generate_followups(
     if obj is None:
         return []
     return obj.items[:3]
+
+
+def _length_note(budget, trace: dict, artifacts: list | None) -> dict:
+    """这一轮的字数事实（W4）：预算、服务端数过的字数、超没超、落盘几次。**不评分。**
+
+    `saves` 从工具账里数（`trace["tool_calls"]`）而不是从回执里数：回执按 path 去重，
+    同一体裁改两版只会剩一条 —— 而 W4 要看的恰恰是**它写了几版**（每版都要用户付钱）。
+    """
+    saves = sum(1 for c in (trace.get("tool_calls") or []) if c.get("name") == "save_artifact")
+    chars = max((int(a.get("chars") or 0) for a in (artifacts or []) if isinstance(a, dict)), default=0)
+    if budget is None:
+        return {"budget": None, "hard": None, "chars": chars, "over": False, "saves": saves}
+    return {
+        "budget": budget.chars,
+        "hard": budget.hard,
+        "chars": chars,
+        "over": any(bool(a.get("over")) for a in (artifacts or []) if isinstance(a, dict)),
+        "saves": saves,
+    }
 
 
 async def _save_assistant_message(

@@ -90,6 +90,11 @@ async def _main(args) -> int:
         print("  区间太宽：这个样本量下**下不了结论**（要下结论得加用例或加 --repeat）")
     if out["judged"] is not None:
         print(f"回执一行话（LLM 判分）：{out['judged']}/5（n={out['judged_n']}）")
+    # W4 的三把尺子。**三行一起看**：只盯「落盘次数」会被别的改动带偏。
+    print(
+        f"每轮落盘 {out['saves_per_turn']} 次 ｜ 每轮文件 {out['files_per_turn']} 份 ｜ "
+        f"每轮输出 {out['tokens_out_per_turn']} token"
+    )
     print(f"耗时 {out['seconds']}s ｜ 模型 {out['model_id'] or '(没跑模型)'}")
     print(f"用例指纹 {out['scenario_sha']} ｜ 输出规矩指纹 {out['prompt_sha']}")
 

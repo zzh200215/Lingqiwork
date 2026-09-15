@@ -63,12 +63,42 @@ _TOOL_META: ContextVar[dict | None] = ContextVar("mcp_tool_meta", default=None)
 # 对象，改它的内容是所有上下文都能看见的。
 _TURN_ARTIFACTS: ContextVar[dict[str, str] | None] = ContextVar("mcp_turn_artifacts", default=None)
 
+# 这一轮的**字数预算**（W4）。由 `chat` 在开轮时从用户那句话里认出来传进来 ——
+# 「多少字」是用户说的，不是模型自己叙述的。
+_TURN_BUDGET: ContextVar[object | None] = ContextVar("mcp_turn_budget", default=None)
 
-def begin_turn() -> dict[str, str]:
-    """开一轮：清掉上一轮的同体裁记录。返回这个 dict，调用方不必自己 set。"""
+# 这一轮每个体裁已经**存了几次**（W4 的「单次受限修订」）。
+# 为什么要在服务端数：模型满足不了字数时会写一版存一版（实测 20 轮里 5 轮 ≥2 次，最坏 4 次），
+# 而它自己的估算是不可靠的。这里给一个**硬上限**：1 次初稿 + 1 次修订，第三次直接拒绝。
+# 拒绝而不是静默覆盖：静默覆盖等于让它一直写下去，而每一次都要用户付 token。
+_TURN_SAVES: ContextVar[dict[str, int] | None] = ContextVar("mcp_turn_saves", default=None)
+
+# 一回合里同一个体裁最多落盘几次（1 次初稿 + 1 次修订）。改这个数要想清楚：
+# 它同时是「模型还有没有机会改」和「用户要为几次生成付钱」。
+MAX_SAVES_PER_KIND = 2
+
+
+def begin_turn(budget=None) -> dict[str, str]:
+    """开一轮：清掉上一轮的同体裁记录与修订额度。返回这个 dict，调用方不必自己 set。
+
+    `budget` 是本轮的字数预算（`core.length_budget.Budget` 或 None），由调用方从用户那句话
+    里认出来 —— 这里只负责把它挂到这一轮上，让 `save_artifact` 是**服务端在数**。
+    """
     fresh: dict[str, str] = {}
     _TURN_ARTIFACTS.set(fresh)
+    _TURN_BUDGET.set(budget)
+    _TURN_SAVES.set({})
     return fresh
+
+
+def turn_budget():
+    """当前回合的字数预算（没认出来就是 None）。"""
+    return _TURN_BUDGET.get()
+
+
+def turn_saves(kind: str) -> int:
+    """当前回合这个体裁已经存了几次。"""
+    return int((_TURN_SAVES.get() or {}).get(kind, 0))
 
 
 def take_tool_meta() -> dict | None:
@@ -156,9 +186,36 @@ async def _save_artifact(args: dict) -> str:
     if not content:
         return "[错误] content 不能为空"
 
-    from app.core.report import slug
-
     dest_dir_name, label = _ARTIFACT_KINDS[kind]
+
+    # ---- W4：长度约束的确定性执行 ----
+    # ① 先看这一轮的修订额度用完了没有。用完就直接拒绝，**不写盘**：这是「单次受限修订」
+    #    的硬上限。第三版必然是在猜字数，猜一次要用户付一次钱。
+    from app.core import length_budget as lb
+
+    done = turn_saves(kind)
+    if done >= MAX_SAVES_PER_KIND:
+        return (
+            f"[错误] 本回合「{label}」已经存过 {done} 次（1 次初稿 + 1 次修订），"
+            f"修订额度用完了 —— 现在这份就是你最新的一版，不要再重写。"
+            f"请直接给用户一句回执。"
+        )
+
+    # ② 预算：**服务端认出来的优先**（那是用户的原话），认不出才用工具参数里的数。
+    budget = turn_budget()
+    source = "ask" if budget is not None else ""
+    if budget is None:
+        raw = args.get("length_budget")
+        try:
+            n = int(raw) if raw not in (None, "") else 0
+        except (TypeError, ValueError):
+            n = 0
+        if lb.MIN_BUDGET <= n <= lb.MAX_BUDGET:
+            budget = lb.Budget(chars=n, hard=False, phrase=f"工具参数 {n}")
+            source = "tool"
+    length = lb.verdict(content, budget)
+
+    from app.core.report import slug
     dest_dir = (VAULT_DIR / dest_dir_name)
     dest_dir.mkdir(parents=True, exist_ok=True)
     from datetime import datetime
@@ -201,6 +258,10 @@ async def _save_artifact(args: dict) -> str:
 
     if turn is not None:
         turn[kind] = dest.relative_to(VAULT_DIR).as_posix()
+    # 这一轮的修订额度用掉一次（含「内容没变」那条路：它也是一次生成、一次调用）
+    counts = _TURN_SAVES.get()
+    if counts is not None:
+        counts[kind] = done + 1
 
     rel = dest.relative_to(VAULT_DIR).as_posix()
     if action == "更新" and _unchanged(dest):
@@ -223,6 +284,8 @@ async def _save_artifact(args: dict) -> str:
 
     # 回执**无条件**给出去，包括「内容没变」那条路：界面靠 meta 渲染那一行链接，
     # 少给一次就等于让「只存了产出、一个字没说」的那一轮整轮消失。
+    # W4：**实际字数由服务端报**（`chars`），超没超也是服务端判的（`over`）——
+    # 不让「超没超」留在模型的自我叙述里。
     _TOOL_META.set(
         {
             "artifact": {
@@ -233,15 +296,50 @@ async def _save_artifact(args: dict) -> str:
                 "href": f"/notes?path={quote_plus(rel)}",
                 "chunks": chunks,
                 "action": action,
+                "chars": length["chars"],
+                "budget": length["budget"],
+                "budget_source": source,
+                "hard": length["hard"],
+                "over": length["over"],
+                "over_by": length["over_by"],
+                "save_no": done + 1,
+                "revised": done > 0,
             }
         }
     )
+    left = max(0, MAX_SAVES_PER_KIND - (done + 1))
+    tail = _budget_tail(length, left)
     if action == "未变":
-        return f"{label}「{title or dest.stem}」和已存的那份一模一样，没有重复写 → {rel}"
+        return f"{label}「{title or dest.stem}」和已存的那份一模一样，没有重复写 → {rel}{tail}"
     verb = {"存为": "已存为", "更新": "已更新", "另存": "已另存为"}[action]
     return (
         f"{verb}{label}「{title or dest.stem}」→ {rel}"
-        f"（{len(content)} 字，{chunks} 段已索引）"
+        f"（{len(content)} 字，{chunks} 段已索引）{tail}"
+    )
+
+
+def _budget_tail(length: dict, left: int) -> str:
+    """字数那一段话。**服务端数的数**，并明确告诉它还剩几次修订额度。
+
+    为什么要把「还剩几次」写进工具返回：实测的失败形状是模型**反复重写重存**。以前它没有
+    任何关于「还能不能改」的信息，只能凭感觉再存一次；现在这句话直接摆在它眼前，
+    而真正的硬上限在 `_save_artifact` 开头（第三次直接拒绝、不写盘）。
+
+    **「按多少算超」也一起给**：预算 300 字左右 ≠ 300 字就超了（软约束按 1.2 倍算），
+    不说清这个数，它那一版就只能继续猜 —— 实测补跑的 3 版**都没落进预算**，
+    最可能的原因就是它不知道自己在瞄哪个数（n=3，这只是个假设，下一轮要量）。
+    """
+    if length.get("budget") is None:
+        return ""
+    limit_kind = "上限" if length.get("hard") else "左右"
+    limit = length.get("limit")
+    line = f"［服务端数过］{length['chars']} 字（预算 {length['budget']} 字{limit_kind}，按 {limit} 字算超没超）"
+    if not length["over"]:
+        return f"\n{line} —— 没超。不要再为字数重写一版；直接给用户一句回执。"
+    return (
+        f"\n{line} —— **超了 {length['over_by']} 字**。要改就再存一次（会覆盖同一份文件），"
+        f"目标 {length['budget']} 字左右，不要再新开文件；本回合还剩 {left} 次修订额度。"
+        f"已经够用就给一句回执收尾。"
     )
 
 
@@ -526,8 +624,9 @@ BUILTIN_TOOLS: list[dict] = [
             "把一份**写好的成品**存进 vault 的产出区，并让它在工作页的产出清单里出现。"
             "写周报、调研、方案、复盘、交付稿这类成篇的东西，一律用它存——**别把长文直接"
             "写在回复里**，长篇正文会淹掉对话。存完只回一句「已存入产出」，正文用户点链接看。"
-            "**一轮里同一个体裁只存一次**：写完直接存，不要先存一版、再改一版重存——"
-            "同一轮的第二次落盘会覆盖第一次，字数不对就直接在 content 里改好再存。"
+            "**一轮里同一个体裁最多存两次**（1 次初稿 + 1 次修订，第三次会被服务端拒绝）："
+            "写完直接存，字数不对就在 content 里改好再存一次（会覆盖同一份文件）；"
+            "返回里会告诉你**服务端数出来的实际字数**以及还剩几次修订额度，按那个来，别自己估。"
         ),
         "parameters": {
             "type": "object",
@@ -539,6 +638,13 @@ BUILTIN_TOOLS: list[dict] = [
                 },
                 "title": {"type": "string", "description": "标题，一句话说清这份东西是什么"},
                 "content": {"type": "string", "description": "成品正文（Markdown）"},
+                "length_budget": {
+                    "type": "integer",
+                    "description": (
+                        "可选：用户要的字数上限。用户在对话里说清了（如「300 字左右」）时"
+                        "**不必填**，服务端自己认；只有在服务端认不出、而你确实知道目标字数时才填。"
+                    ),
+                },
             },
             "required": ["title", "content"],
         },
