@@ -132,6 +132,28 @@ async def list_concepts():
     return {"concepts": await core.concepts()}
 
 
+class MergeIn(BaseModel):
+    source: str
+    into: str
+
+
+@router.post("/concepts/merge")
+async def merge_concepts(body: MergeIn):
+    """把「source」这个概念的历次记录并到「into」名下（**人工**，Q3.5）。
+
+    机器自己只在有量出来的余量的地方并（`core.tutor.CONCEPT_MERGE_SIM`，尺子在
+    `backend/smoke_concept.py`：零误并、余量 +0.10、并上 12/15）。**剩下的它分不开** ——
+    同领域的相邻概念（「SQLite 库级锁」/「SQLite 锁机制」）在向量空间里比某些该并的还近。
+    所以这条路是**指认**，不是「再调调阈值」。
+
+    只改 `concept` 与 `aliases` 两列：真值仍然只有 `tutor_sessions`，不新增表、可复算。
+    """
+    try:
+        return await core.merge_concepts(body.source, body.into)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @router.get("/map")
 async def get_map():
     """学习地图：已掌握 / 在学 / 卡住 / 未触及 四档，纯派生（未触及读的是

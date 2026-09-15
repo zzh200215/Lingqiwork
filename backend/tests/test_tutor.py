@@ -931,6 +931,7 @@ async def test_end_stores_the_triple(monkeypatch):
         "stuck": "以为 await 交给了操作系统",
         "transfer": "",
         "material_nearby": [],  # autouse fixture keeps the KB empty
+        "merged": None,  # 库里没有别的概念，没什么可归的
     }
     row = await core.detail(sid)
     assert row["verdict"] == "half" and row["concept"] == "asyncio 事件循环"
@@ -1168,6 +1169,196 @@ async def test_end_passes_the_transfer_question_through(monkeypatch):
     got = await core.end(sid, "got")
     assert got["transfer"] == "浏览器的事件循环会怎么调度？"
     assert "transfer" not in await core.detail(sid)  # 没落库：它是当场的一句话
+
+
+# ---------- 概念归一（Q3.5）：尺子在 smoke_concept.py，这里钉产品怎么用它 ----------
+#
+# 尺子（5 话题 × 3 次真实提取、15 对「该并」/ 90 对「不该并」）给出的三件事里有两件
+# 与直觉相反：**没有阈值能把该并的全分开**，而且**别名在这件事上是帮倒忙**。所以这里钉的
+# 不是「并得多」，是：确定性规则先走、向量只在有余量的地方用、原叫法必须留下来。
+
+
+def _fake_embed_at(cos: float):
+    """假 embedder：新名字的向量固定 [1,0]，已有名字与它成给定余弦。"""
+
+    async def fake(texts):
+        return [[1.0, 0.0]] + [[cos, (1 - cos * cos) ** 0.5] for _ in texts[1:]]
+
+    return fake
+
+
+def test_norm_concept_is_deterministic():
+    assert core.norm_concept("  SQLite  WAL 模式。") == core.norm_concept("sqlite wal 模式")
+    assert core.norm_concept("ＡＳＹＮＣＩＯ 事件循环") == core.norm_concept("asyncio事件循环")
+    assert core.norm_concept("") == ""
+    assert core.norm_concept("《闭包》") == core.norm_concept("闭包")
+
+
+def test_contains_only_counts_the_ends_and_needs_length():
+    """中间包含不算，太短的名字互相包含是巧合 —— 这两条挡住的是误并。"""
+    assert core._contains("CPython GIL 全局解释器锁", "CPython GIL") is True
+    assert core._contains("SQLite 库级锁", "SQLite 锁机制") is False  # 同领域相邻概念，实测最近
+    assert core._contains("GIL", "GIL 与自由线程") is False  # 短到没有信息量
+    assert core._contains("SQLite 的锁机制在 WAL 下", "SQLite 锁机制") is False  # 只在中间包含
+
+
+def test_add_alias_line_puts_the_raw_name_first_and_keeps_the_cap():
+    """归并之后原叫法最值钱（recall 就剩它这条路了），所以它排第一、名额照旧。"""
+    line = core.ALIAS_SEP.join(["a", "b", "c", "d"])
+    out = core._add_alias_line(line, "原来的叫法")
+    assert out.split(core.ALIAS_SEP)[0] == "原来的叫法"
+    assert len(out.split(core.ALIAS_SEP)) == core.ALIAS_MAX
+    # 已经在行里的不重复加，只是提到最前
+    assert core._add_alias_line(line, "b").split(core.ALIAS_SEP) == ["b", "a", "c", "d"]
+
+
+async def test_canonical_concept_prefers_the_free_rules():
+    """能靠「一字不差 / 一个包含另一个」认出来的，**一次向量都不算**。"""
+    await _reset()
+    await _seed("老一场", "CPython GIL", "half")
+
+    async def boom(texts):
+        raise AssertionError("确定性规则认出来了就不该去算向量")
+
+    core._embed, before = boom, core._embed
+    try:
+        assert (await core.canonical_concept("cpython gil"))["why"] == "一字不差"
+        assert (await core.canonical_concept("CPython GIL 全局解释器锁"))["why"] == "一个包含另一个"
+    finally:
+        core._embed = before
+
+
+async def test_canonical_concept_uses_the_calibrated_threshold(monkeypatch):
+    """0.80 那一档的余量只有 0.10（实测不该并最高 0.700），所以两边都钉住。"""
+    await _reset()
+    await _seed("老一场", "SQLite WAL 模式", "got")
+
+    monkeypatch.setattr(core, "_embed", _fake_embed_at(0.79))
+    assert (await core.canonical_concept("SQLite 的并发写"))["into"] == ""
+
+    monkeypatch.setattr(core, "_embed", _fake_embed_at(0.81))
+    got = await core.canonical_concept("SQLite 的并发写")
+    assert got["into"] == "SQLite WAL 模式" and got["why"] == "相似度 0.81"
+
+
+async def test_canonical_concept_survives_a_dead_embedder():
+    """归一是加分项：embedder 挂了就原样用这次的名字，不能挡自评落库。"""
+    await _reset()
+    await _seed("老一场", "SQLite WAL 模式", "got")
+
+    async def boom(texts):
+        raise RuntimeError("chroma 挂了")
+
+    core._embed, before = boom, core._embed
+    try:
+        got = await core.canonical_concept("SQLite 的并发写")
+    finally:
+        core._embed = before
+    assert got == {"name": "SQLite 的并发写", "into": "", "why": "", "score": 0.0}
+
+
+async def test_end_stores_a_contained_name_under_the_existing_one(monkeypatch):
+    """提取出「CPython GIL 全局解释器锁」，而库里已经有「CPython GIL」→ 写规范名。"""
+    await _reset()
+    await _seed("老一场", "CPython GIL", "half")
+    sid = await _live(monkeypatch, "GIL 再讲一遍")
+
+    async def fake_extract(session_id, topic, model_id):
+        return "CPython GIL 全局解释器锁", "线程为什么串行", "以为只在 IO 时放锁", "", "CPython"
+
+    monkeypatch.setattr(core, "_extract", fake_extract)
+    got = await core.end(sid, "got")
+
+    assert got["concept"] == "CPython GIL"  # 写的是规范名
+    assert got["merged"] == {
+        "from": "CPython GIL 全局解释器锁",
+        "into": "CPython GIL",
+        "why": "一个包含另一个",
+        "score": 1.0,
+    }
+    # 原叫法留在别名行最前面 —— 规范名替掉 concept 之后，召回只剩这条路
+    assert got["aliases"].split(core.ALIAS_SEP)[0] == "CPython GIL 全局解释器锁"
+
+
+async def test_a_merged_session_counts_toward_the_same_concept(monkeypatch):
+    """归一的目的就是这个：两次叫法不同，但「这个概念有两场说通了」——形态那根枝的前提。"""
+    await _reset()
+    await _seed("老一场", "CPython GIL", "got")
+    sid = await _live(monkeypatch, "GIL 再讲一遍")
+
+    async def fake_extract(session_id, topic, model_id):
+        return "CPython GIL 全局解释器锁", "", "", "", "CPython"
+
+    # 「第一次说通」的回执必须按**规范名**走：不然同一个概念会庆祝两次
+    seen: list[str] = []
+
+    async def spy(concept: str, mode: str = "socratic") -> None:
+        seen.append(concept)
+
+    monkeypatch.setattr(core, "_note_first_mastery", spy)
+    monkeypatch.setattr(core, "_extract", fake_extract)
+    await core.end(sid, "got")
+
+    cs = await core.concepts()
+    assert [c["concept"] for c in cs] == ["CPython GIL"]  # 一行，不再漂成两个
+    assert cs[0]["sessions"] == 2
+    assert core.is_mastered(cs[0]) is True
+    assert seen == ["CPython GIL"]
+
+
+async def test_end_does_not_merge_two_adjacent_concepts(monkeypatch):
+    """同领域的相邻概念不许并 —— 实测它们比某些该并的还近（0.700 vs 0.519），
+    所以这条**没有阈值可调**，只能靠「落在 0.80 以下」这一点守住。"""
+    await _reset()
+    await _seed("老一场", "SQLite WAL 模式", "got")
+    monkeypatch.setattr(core, "_embed", _fake_embed_at(0.70))  # 实测里那一对的位置
+    sid = await _live(monkeypatch, "SQLite 的锁")
+
+    async def fake_extract(session_id, topic, model_id):
+        return "SQLite 的并发写", "", "", "", "SQLite"
+
+    monkeypatch.setattr(core, "_extract", fake_extract)
+    got = await core.end(sid, "got")
+    assert got["merged"] is None
+    assert got["concept"] == "SQLite 的并发写"
+
+
+async def test_merge_concepts_is_the_manual_exit():
+    """机器分不开的那些（同领域相邻概念）由人指认：只动 concept 与 aliases，可复算。"""
+    await _reset()
+    keep = await _seed("a", "SQLite 库级锁", "got")
+    move = await _seed("b", "SQLite 锁机制", "got", aliases="SQLite 怎么加锁")
+    del keep
+
+    out = await core.merge_concepts("SQLite 锁机制", "SQLite 库级锁")
+    assert out == {"from": "SQLite 锁机制", "into": "SQLite 库级锁", "moved": 1}
+
+    cs = await core.concepts()
+    assert [c["concept"] for c in cs] == ["SQLite 库级锁"]
+    assert cs[0]["sessions"] == 2 and core.is_mastered(cs[0]) is True
+
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    async with SessionLocal() as db:
+        row = await db.get(TutorSession, move)
+    # 旧名字进别名（召回靠它），原来的别名一个不丢
+    assert row.aliases.split(core.ALIAS_SEP)[0] == "SQLite 锁机制"
+    assert "SQLite 怎么加锁" in row.aliases
+
+
+async def test_merge_concepts_refuses_what_it_can_not_check():
+    await _reset()
+    await _seed("a", "SQLite 库级锁", "got")
+    with pytest.raises(ValueError, match="同一个概念"):
+        await core.merge_concepts("SQLite 库级锁", "SQLite 库级锁")
+    with pytest.raises(ValueError, match="两个概念名"):
+        await core.merge_concepts("", "SQLite 库级锁")
+    with pytest.raises(ValueError, match="没有叫"):
+        await core.merge_concepts("不存在的东西", "SQLite 库级锁")
+    # 并到一个不存在的名字上会很意外：说清比默默建一个新概念好
+    with pytest.raises(ValueError, match="没有叫"):
+        await core.merge_concepts("SQLite 库级锁", "并不存在的目标")
 
 
 # ---------- 开场建议：记录的就近入口，不是队列 ----------

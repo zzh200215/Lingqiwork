@@ -817,6 +817,193 @@ async def mastery_events() -> dict:
     }
 
 
+# ---------- 概念归一（Q3.5）----------
+#
+# **为什么需要。** 形态（Q3）的第二个数是「这个领域搞懂过几个概念」，按 `concept`
+# **精确相等**分组 + `is_mastered`（不止一场）。而 `concept` 是模型每次现写的自由文本：
+# Q3 验收里两场**内容完全相同**的课给出了两个不同的名字（「HNSW 层级几何分布抽样」/
+# 「HNSW 分层近邻图」），那根枝就永远长不出来。
+#
+# **尺子是量出来的，不是猜的**：`smoke_concept.py`（2026-09-15，5 话题 × 3 次真实提取，
+# 15 对「该并」/ 90 对「不该并」，负样本里故意放了同领域的相邻概念）。它给出三件事，
+# 两件与直觉相反：
+#
+# 1. **「该并的全并上」不存在。** 两条分布重叠：只比 concept 时该并最低 0.519、不该并
+#    最高 0.700；所以目标不是全并，而是**只在有量出来的余量的地方并**。
+# 2. **别名在这件事上是帮倒忙。** 召回想接住「想不起术语」的说法，别名越多越好；判断
+#    「是不是同一个概念」时，别名反而把两个相邻概念拉到一起（同一批数据：0.85 上
+#    带别名误并 2 对，只比 concept 是 0 对）。**所以这里只比 concept 那一条。**
+# 3. 0.80 是零误并里收益最大的那一档：**并上 10/15，90 对不该并一对没动，余量 0.10**。
+#
+# 剩下那 5 对（含「SQLite 库级锁」⊘「SQLite 锁机制」这种同领域相邻概念）**机器分不开**，
+# 只能由人指认 —— 见 `merge_concepts()`，那是这条路的手动出口，不是兜底补丁。
+CONCEPT_MERGE_SIM = 0.80
+# 太短的名字互相包含是巧合（「GIL」⊂「GIL 与自由线程」），这条门槛把它挡在外面
+CONCEPT_MERGE_MIN_CHARS = 4
+CONCEPT_MERGE_CANDIDATES = 200  # 往回看多少个已有概念；再多也不值得一次会话结束时算
+
+_CONCEPT_PUNCT = "，。、；：！？,.，;:!?（）()《》<>「」『』\"'`~·-—_ 　"
+
+
+def norm_concept(text: str) -> str:
+    """概念名的确定性归一：全角→半角、去空白、小写 ASCII、去首尾标点。Pure.
+
+    这一半是**不需要任何模型或向量**的：「SQLite WAL 模式」和「sqlite wal 模式」本来就该是
+    同一个。`smoke_concept.py` 量的是**这个函数**，不是它自己另写一份 —— 尺子和产品必须
+    是同一把，否则量的是别的东西。
+    """
+    out = []
+    for ch in (text or "").strip():
+        code = ord(ch)
+        if code == 0x3000:  # 全角空格
+            out.append(" ")
+        elif 0xFF01 <= code <= 0xFF5E:  # 全角 ASCII
+            out.append(chr(code - 0xFEE0))
+        else:
+            out.append(ch)
+    return re.sub(r"\s+", "", "".join(out).lower()).strip(_CONCEPT_PUNCT)
+
+
+def _contains(a: str, b: str) -> bool:
+    """归一化后一个包含另一个，且都够长。Pure.
+
+    只认「开头包含」和「结尾包含」，不认任意位置的子串：中间包含的巧合太多
+    （「SQLite 锁机制」和「SQLite 的锁机制在 WAL 下」是两件事，但子串会把它并掉）。
+    """
+    x, y = norm_concept(a), norm_concept(b)
+    if len(x) < CONCEPT_MERGE_MIN_CHARS or len(y) < CONCEPT_MERGE_MIN_CHARS:
+        return False
+    return x.startswith(y) or y.startswith(x) or x.endswith(y) or y.endswith(x)
+
+
+def _add_alias_line(aliases: str, name: str) -> str:
+    """把一个叫法并进别名行（去重、占一个名额、超了就丢掉最后一个）。Pure.
+
+    归并之后**原叫法必须留下来**：这一行自己的 `concept` 已经换成规范名了，
+    不留下原来的写法，召回就再也接不住「他当初就是这么叫的」。
+    名额只有 `ALIAS_MAX` 个，所以原叫法插在最前面 —— 它是这一场最值钱的那条文本。
+    """
+    name = (name or "").strip()[:ALIAS_CHARS_EACH]
+    if not name:
+        return aliases
+    kept = [a for a in (aliases or "").split(ALIAS_SEP) if a.strip() and a.strip() != name]
+    return ALIAS_SEP.join([name, *kept][:ALIAS_MAX])
+
+
+async def canonical_concept(concept: str) -> dict:
+    """新提取的概念名 → 已有词汇里的规范名。
+
+    返回 `{"name", "into", "why", "score"}`：`name` 是这一行最终该写的名字；
+    `into` 非空 = 归并了，`why` 说清凭什么（「一字不差」/「一个包含另一个」/「相似度 0.83」）。
+
+    顺序是刻意的：**先用不花钱的确定性规则**（归一化相等、一个包含另一个），再谈向量 ——
+    向量那一档是唯一有残余风险的，能不用就不用。
+    """
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    raw = (concept or "").strip()
+    if not raw:
+        return {"name": "", "into": "", "why": "", "score": 0.0}
+
+    try:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TutorSession.concept)
+                    .where(TutorSession.concept != "")
+                    .order_by(TutorSession.id)
+                    .limit(CONCEPT_MERGE_CANDIDATES * 4)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 - 归一失败不该挡自评落库
+        log.warning("concept candidates query failed", exc_info=True)
+        return {"name": raw, "into": "", "why": "", "score": 0.0}
+
+    seen: list[str] = []
+    for c in rows:  # id 升序 = 先到先得，规范名不会因为后来的写法而漂
+        if c not in seen:
+            seen.append(c)
+        if len(seen) >= CONCEPT_MERGE_CANDIDATES:
+            break
+    if not seen:
+        return {"name": raw, "into": "", "why": "", "score": 0.0}
+
+    n = norm_concept(raw)
+    for c in seen:  # 1) 一字不差 —— 注意这包括「大小写/空白/全角不同」，那种也要归一
+        if norm_concept(c) == n:
+            # 和已有的写法**逐字相同**时不算归并（什么都没发生，没什么可说的）
+            return {"name": c, "into": c if c != raw else "", "why": "一字不差", "score": 1.0}
+    for c in seen:  # 2) 一个包含另一个（不花钱，不可能误并）
+        if _contains(raw, c):
+            return {"name": c, "into": c, "why": "一个包含另一个", "score": 1.0}
+
+    # 3) 向量：只比 concept 那一条，阈值有量出来的余量（见文件头）
+    try:
+        vecs = await _embed([raw, *seen])
+    except Exception:  # noqa: BLE001 - embedder 挂了就当没归并
+        log.warning("concept merge embedding failed", exc_info=True)
+        return {"name": raw, "into": "", "why": "", "score": 0.0}
+    q, rest = vecs[0], vecs[1:]
+    best_i, best_s = -1, 0.0
+    for i, v in enumerate(rest):
+        s = _cosine(q, v)
+        if s > best_s:
+            best_i, best_s = i, s
+    if best_i >= 0 and best_s >= CONCEPT_MERGE_SIM:
+        return {
+            "name": seen[best_i],
+            "into": seen[best_i],
+            "why": f"相似度 {best_s:.2f}",
+            "score": round(best_s, 3),
+        }
+    return {"name": raw, "into": "", "why": "", "score": round(best_s, 3)}
+
+
+async def merge_concepts(source: str, into: str) -> dict:
+    """把 `source` 这个概念的历次记录并到 `into` 名下（**人工**，Q3.5）。
+
+    机器只在有余量的地方自己并（`CONCEPT_MERGE_SIM = 0.80`）；**剩下的它分不开** ——
+    「SQLite 库级锁」和「SQLite 锁机制」在向量空间里比某些该并的还近（`smoke_concept.py`
+    的原始数据）。所以这条路必须有人工出口，而且是**指认**，不是「再调调阈值」。
+
+    只动两样：`concept` 那一列，和每行的 `aliases`（把 `source` 这个名字留着）。
+    真值仍然只有 `tutor_sessions`——不新增表、不新增状态、可复算。
+    """
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    src, dst = (source or "").strip(), (into or "").strip()
+    if not src or not dst:
+        raise ValueError("两个概念名都要给")
+    if src == dst:
+        raise ValueError("同一个概念，不用并")
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(select(TutorSession).where(TutorSession.concept == src))
+        ).scalars().all()
+        if not rows:
+            raise ValueError(f"没有叫「{src}」的概念")
+        exists = (
+            await db.execute(select(TutorSession).where(TutorSession.concept == dst))
+        ).scalars().first()
+        if exists is None:
+            raise ValueError(f"没有叫「{dst}」的概念（并到一个不存在的名字上会很意外）")
+        for r in rows:
+            r.concept = dst
+            r.aliases = _add_alias_line(r.aliases, src)
+        await db.commit()
+        moved = len(rows)
+
+    log.info("概念归并（人工）：%s → %s，%s 场", src, dst, moved)
+    return {"from": src, "into": dst, "moved": moved}
+
+
 async def concepts_by_domain() -> dict[str, dict]:
     """按领域分组的学习轨迹——Q3 形态的第二个数。
 
@@ -1660,12 +1847,28 @@ async def end(session_id: int, verdict: str) -> dict:
         mode = row.mode or "socratic"
 
     concept, aliases, stuck, transfer, domain = "", "", "", "", ""
+    merged: dict | None = None
     nearby: list[dict] = []
     # 未来会话不是教学：提取概念/卡点只会把「和未来的自己聊天」的内容污染进
     # 画像和召回——自评照存（记录是你的），提取跳过。
     if verdict != "useless" and model_id and mode != "future":
         concept, aliases, stuck, transfer, domain = await _extract(session_id, topic, model_id)
         if concept:  # a 卡点 with no concept is unrecallable, so both or neither
+            # 归一（Q3.5）：先在已有词汇里找这个叫法的规范名。找到了就写规范名，并把
+            # **这次的写法**并进别名行——规范名替掉 concept 之后，召回就只剩别名这条路。
+            # 找不到（或没有把握）就原样用：并错了比不并更贵（会污染「搞懂过几个概念」）。
+            canon = await canonical_concept(concept)
+            if canon["into"]:
+                merged = {
+                    "from": concept,
+                    "into": canon["into"],
+                    "why": canon["why"],
+                    "score": canon["score"],
+                }
+                # 只有**换了写法**才把原叫法留住（一字不差那种没有新东西可留）
+                if norm_concept(concept) != norm_concept(canon["into"]):
+                    aliases = _add_alias_line(aliases, concept)
+                concept = canon["name"]
             async with SessionLocal() as db:
                 row = await db.get(TutorSession, session_id)
                 if row is not None:
@@ -1676,6 +1879,7 @@ async def end(session_id: int, verdict: str) -> dict:
                     await db.commit()
             if verdict == "got":
                 # 「结束回写」：说通了这个概念，它到此为止的卡点一并关掉
+                # （用**规范名**：卡点挂在规范名上，用这次的写法就关不掉）
                 await _resolve_concept_stucks(concept, session_id)
                 await _note_first_mastery(concept, mode)
             nearby = await _nearby_material(concept, _SESSION_SOURCES.pop(session_id, None))
@@ -1689,6 +1893,9 @@ async def end(session_id: int, verdict: str) -> dict:
         "stuck": stuck,
         "transfer": transfer,
         "material_nearby": nearby,
+        # 这次归并了什么（没有就是 None）。界面上要说得出来，不然「它自己换了个名字」
+        # 就是一件用户看不见也查不到的事。
+        "merged": merged,
     }
 
 
