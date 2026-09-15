@@ -425,6 +425,59 @@ def test_feeding_cases_never_touches_the_prompt_itself(_restore_fixture):
     assert [(p.name, p.sha, p.content) for p in prompts.inventory()] == before
 
 
+# --- 领域：形态（Q3）的分组键，写 golden set 里 ---------------------------------
+
+
+def test_feynman_declares_a_domain():
+    """形态的第三个数按 golden set 的 `domain` 找卡——没标就等于这个领域没有技能。
+
+    所以这条不是格式检查，是**那条枝能不能长出来**的前提。
+    """
+    assert pe.fixtures()["FEYNMAN_PROMPT"]["domain"] != ""
+
+
+def test_set_domain_writes_it_canonically(_restore_fixture):
+    out = pe.set_domain("FEYNMAN_PROMPT", "教学")
+    assert out == {"key": "FEYNMAN_PROMPT", "domain": "教学"}
+    assert pe.fixtures()["FEYNMAN_PROMPT"]["domain"] == "教学"
+    text = _restore_fixture.read_text(encoding="utf-8")
+    assert pe.canonical_ok(text, json.loads(text))  # 仍是规范格式
+    # 用例一条都没动：改的是标签，不是集合
+    assert json.loads(text)["cases"] == pe.cases_for("FEYNMAN_PROMPT")["cases"]
+
+
+def test_set_domain_normalizes_and_never_touches_the_prompt(_restore_fixture):
+    before = [(p.name, p.sha, p.content) for p in prompts.inventory()]
+    assert pe.set_domain("FEYNMAN_PROMPT", "  法律  ")["domain"] == "法律"
+    assert len(pe.set_domain("FEYNMAN_PROMPT", "x" * 99)["domain"]) == 30
+    assert pe.set_domain("FEYNMAN_PROMPT", "")["domain"] == ""  # 空 = 还没归类，合法
+    assert [(p.name, p.sha, p.content) for p in prompts.inventory()] == before
+    with pytest.raises(ValueError, match="还没有 golden set"):
+        pe.set_domain("CHAT_SYSTEM", "教学")
+
+
+def test_a_bad_domain_shape_reads_as_unclassified():
+    """文件里把 domain 写成 null / 列表 / 数字都当空字符串。
+
+    它是分组用的标签：一种坏写法不该让整套 golden set 读不出来（那会把技能卡一起弄没）。
+    """
+    path = pe.FIXTURE_DIR / "zz-domain-shape-probe.json"
+    path.write_text(
+        json.dumps({"key": "ZZ_PROBE", "domain": ["法律"], "cases": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    try:
+        assert pe.fixtures()["ZZ_PROBE"]["domain"] == ""
+    finally:
+        path.unlink()
+
+
+def test_cards_carry_the_golden_set_domain():
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="card/model", generate=_gen()))
+    card = asyncio.run(pe.cards())[0]
+    assert card["domain"] == pe.fixtures()["FEYNMAN_PROMPT"]["domain"]
+
+
 # --- 技能卡：只有跑过对照的才进屋 ---------------------------------------------
 
 

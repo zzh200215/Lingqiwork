@@ -241,6 +241,12 @@ class EvalItem(Base):
     question: Mapped[str] = mapped_column(Text)
     expected_source: Mapped[str] = mapped_column(String(500), default="")  # vault-relative path
     note: Mapped[str] = mapped_column(Text, default="")
+    # 领域（Q3 形态）：这条题属于哪个领域。**空 = 还没归类**，不是「无领域」。
+    # 为什么是手写的一个词而不是从 vault 目录推：目录是笔记的组织方式，不是领域的
+    # 声明（实测那个库的顶层目录是 notes/sub/clippings，推出来的「领域」是文件系统，
+    # 不是他关心的东西）。同一个规矩见 `DecisionLog.topic`——那里也是手写一个词，
+    # 读的时候分组，样本不够就不给率。
+    domain: Mapped[str] = mapped_column(String(30), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -488,6 +494,11 @@ class TutorSession(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     topic: Mapped[str] = mapped_column(String(200))  # the user's own words
     concept: Mapped[str] = mapped_column(String(120), default="")  # normalized at end
+    # 领域（Q3 形态）：和 concept 一起从会话里提取，`_EXTRACT_PROMPT` 本来就要求
+    # concept 带领域限定词（「asyncio 事件循环」），这里只是把那个限定词**单独要一份
+    # 可机读的**——从 concept 里切词去猜（「Python 的 GIL」切成什么？）就是在生产逻辑
+    # 里猜文本，那是这个仓库明令不做的事。同领域必须同一个词，理由也一样：分组靠它。
+    domain: Mapped[str] = mapped_column(String(30), default="")
     verdict: Mapped[str] = mapped_column(String(10), default="")  # got | half | useless
     stuck: Mapped[str] = mapped_column(Text, default="")  # one line: where it broke down
     # 同一个概念的其他说法，结束时和 concept 一起提取。存在的唯一理由是召回：

@@ -1,6 +1,7 @@
 {
   "key": "FEYNMAN_PROMPT",
   "module": "app.core.tutor",
+  "domain": "教学",
   "_note": "费曼模式的 golden set（Q1 的第一条对照）。选它做第一条是有原因的：P2 那一轮想改它的语气，被『改提示词必须过验收 drill』挡住了，而那个 drill 一直是手写的。现在它可以被复算。每条用例的 checks 都是**这条提示词自己承诺过的行为**，why 在 core/prompt_eval.py 的 CHECKS 里逐条引原句。重放是空上下文（无召回/无材料/无画像）——上下文会显著改变行为（upgrade-plan 缺口五）。",
   "cases": [
     {

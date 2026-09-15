@@ -52,6 +52,7 @@ async def pet_room(limit: int = 8):
     from app.core import pet
     from app.core import pet_room as room
     from app.core import prompt_eval
+    from app.core import form as form_core
     from app.core import tutor
     from app.routers.work import list_outputs
 
@@ -64,6 +65,9 @@ async def pet_room(limit: int = 8):
     out["carried"] = room.carried(out.get("carried"), out["shelf"])
     # 技能卡（Q2）：**只有跑过对照的那些提示词**才进屋。没基线的不是技能，是还没验过的文本。
     out["skills"] = await prompt_eval.cards()
+    # 形态（Q3）：**只有长出枝的领域**进屋。三个数里差一样就不算枝，小屋不摆它——
+    # 「为什么这根枝还没长出来」在工作页那张诊断表里一次说清，不在这儿念（念出来就是催）。
+    out["form"] = [b for b in (await form_core.branches())["domains"] if b["grown"]]
     return out
 
 

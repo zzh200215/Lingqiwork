@@ -109,6 +109,8 @@ async def registry():
                 "drifted": p.content is None,
                 "cases": len((fixture or {}).get("cases") or []),
                 "fixture": (fixture or {}).get("file", ""),
+                # 领域（Q3 形态）：写在这条提示词的 golden set 里，没标就是 ""
+                "domain": (fixture or {}).get("domain", ""),
                 "baseline": (
                     {
                         "at": base["at"],
@@ -147,6 +149,7 @@ async def registry_entry(key: str):
         "content": entry.content,
         "fixture": fx.get("file", ""),
         "note": fx.get("_note", ""),
+        "domain": fx.get("domain", ""),
         "cases": [
             {"id": c.get("id"), "intent": c.get("intent", ""), "user": c.get("user", ""), "checks": c.get("checks") or []}
             for c in (fx.get("cases") or [])
@@ -187,6 +190,30 @@ async def remove_case(key: str, case_id: str):
 
     try:
         return prompt_eval.remove_case(key, case_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+class DomainIn(BaseModel):
+    domain: str = ""
+
+    @field_validator("domain")
+    @classmethod
+    def _d(cls, v: str) -> str:
+        return (v or "").strip()[:30]
+
+
+@router.post("/registry/{key}/domain")
+async def set_domain(key: str, body: DomainIn):
+    """给这套 golden set 标一个领域（Q3 形态的分组键）。
+
+    和喂用例一样**写的是 `backend/evals/prompts/*.json`**——领域是「这套用例在问什么」
+    的属性，跟用例该待在一起，也跟着进 git。提示词本身一个字节都不动。
+    """
+    from app.core import prompt_eval
+
+    try:
+        return prompt_eval.set_domain(key, body.domain)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 

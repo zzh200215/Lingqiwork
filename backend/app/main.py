@@ -36,6 +36,7 @@ from app.routers import (
     dirs,
     evals,
     feeds,
+    form,
     habits,
     health as health_router,
     images,
@@ -117,6 +118,9 @@ async def _migrate() -> None:
         ("tutor_sessions", "mode", "ALTER TABLE tutor_sessions ADD COLUMN mode VARCHAR(10) DEFAULT 'socratic'"),
         # 卡点清单：待解 / 已解（NULL = 待解）
         ("tutor_sessions", "stuck_resolved_at", "ALTER TABLE tutor_sessions ADD COLUMN stuck_resolved_at DATETIME"),
+        # 领域（Q3 形态）：三样证据各自的领域标签。空的含义是「还没归类」，不是「无领域」。
+        ("tutor_sessions", "domain", "ALTER TABLE tutor_sessions ADD COLUMN domain VARCHAR(30) DEFAULT ''"),
+        ("eval_items", "domain", "ALTER TABLE eval_items ADD COLUMN domain VARCHAR(30) DEFAULT ''"),
     ]
     async with engine.begin() as conn:
         for table, col, ddl in stmts:
@@ -230,6 +234,7 @@ app.include_router(arena.router)
 app.include_router(backup.router)
 app.include_router(tasks.router)
 app.include_router(evals.router)
+app.include_router(form.router)
 app.include_router(images.router)
 app.include_router(journal.router)
 app.include_router(ask.router)

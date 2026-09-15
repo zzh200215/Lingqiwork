@@ -130,6 +130,10 @@ def fixtures() -> dict[str, dict]:
 
     文件名不参与索引——**key 由文件内容说**，改名不会把用例弄丢。坏文件跳过并记日志：
     一个写坏的 JSON 不该让整个实验室打不开。
+
+    `domain`（Q3 形态）在这里**归一化**成字符串：文件里没写就是 `""`（= 还没归类）。
+    写成 null / 数组 / 数字都当空字符串——它是给分组用的标签，一种坏写法不该让整个
+    golden set 读不出来。
     """
     out: dict[str, dict] = {}
     if not FIXTURE_DIR.is_dir():
@@ -142,7 +146,9 @@ def fixtures() -> dict[str, dict]:
             continue
         key = str(data.get("key") or "").strip()
         if key:
-            out[key] = {**data, "file": p.name}
+            raw = data.get("domain")
+            domain = str(raw).strip()[:30] if isinstance(raw, str) else ""
+            out[key] = {**data, "file": p.name, "domain": domain}
     return out
 
 
@@ -237,6 +243,28 @@ def remove_case(key: str, case_id: str) -> dict:
     _fixture_path(fx["file"]).write_text(_canonical(data), encoding="utf-8")
     log.info("prompt golden set 删掉一条：%s/%s", key, case_id)
     return {"key": key, "removed": case_id, "left": len(cases)}
+
+
+def set_domain(key: str, domain: str) -> dict:
+    """给一套 golden set 标上它测的是哪个领域（Q3 形态的分组键）。
+
+    **写在用例文件里，不写在提示词上。** 领域是「这套用例在问什么」的属性，不是
+    「这段提示词是什么」的属性：同一条提示词换一套用例就是在测另一个领域了。写在这里
+    它也跟着进 git、可审、可回滚，和喂一条用例是同一条路。
+
+    只收一个短词（≤30 字，和 `DecisionLog.topic`、`EvalItem.domain` 同规矩）。空字符串
+    是合法值，含义是**还没归类**。同一个领域必须写成同一个词——分组按精确相等，写
+    「sqlite」和「SQLite」就是两个领域；这条也写在 `_EXTRACT_PROMPT` 里给模型看。
+    """
+    fx = cases_for(key)
+    if not fx:
+        raise ValueError(f"{key} 还没有 golden set（backend/evals/prompts/）")
+    d = (domain or "").strip()[:30]
+    data = {k: v for k, v in fx.items() if k != "file"}
+    data["domain"] = d
+    _fixture_path(fx["file"]).write_text(_canonical(data), encoding="utf-8")
+    log.info("prompt golden set 领域：%s → %r", key, d)
+    return {"key": key, "domain": d}
 
 
 # ---------- Wilson 区间 ----------
@@ -353,10 +381,14 @@ async def cards() -> list[dict]:
     「技能只有一个到手方式：它被证明有效过」——所以这里只收**有基线**的：没跑过的
     提示词不是技能，是一段还没验过的文本，宠物不展示它。`stale` 是诚实的一部分：
     基线跑完之后内容又改过（sha 变了），这张卡上的分数就不是现在这版的了。
+
+    注意它的成本：房间每 60 秒拉一次，所以分数走 `latest_baselines()` **一次查询**，
+    领域只读那个很小的 golden set 目录（同步、几个小 JSON），不按 key 各查一次。
     """
     from app.core import prompts
 
     base = await latest_baselines()
+    fx = fixtures()
     out: list[dict] = []
     for p in prompts.inventory():
         b = base.get(p.name)
@@ -369,6 +401,8 @@ async def cards() -> list[dict]:
                 "purpose": p.purpose,
                 "kind": p.kind,
                 "sha": p.sha,
+                # 领域（Q3 形态）：写在这条提示词的 golden set 里，没标就是 ""
+                "domain": str((fx.get(p.name) or {}).get("domain") or ""),
                 "passed": b["passed"],
                 "cases": b["cases"],
                 "rate": b["rate"],

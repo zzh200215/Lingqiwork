@@ -49,7 +49,7 @@ _SPECS: list[tuple[str, str, str, str]] = [
         "prompt",
     ),
     ("app.core.tutor", "FUTURE_PROMPT", "「未来的你」：以一年后的自己口吻与用户对话，讲经历不给建议", "prompt"),
-    ("app.core.tutor", "_EXTRACT_PROMPT", "教学会话收尾时提取 概念/自评/卡点（concept 必须带领域词）", "system"),
+    ("app.core.tutor", "_EXTRACT_PROMPT", "教学会话收尾时提取 概念/领域/自评/卡点（concept 必须带领域词，domain 就是那个限定词）", "system"),
     ("app.core.tutor", "_SUMMARY_SYSTEM", "教学会话中段压缩摘要（≤300 字，保概念/讲通点/卡点）", "system"),
     # ---- 研究（学习闭环：学 → 研究 → 产出）----
     ("app.core.research", "_PLAN_PROMPT", "研究规划：把话题拆成 2-4 个互补的检索式", "system"),

@@ -127,9 +127,11 @@ FUTURE_PROMPT = """你是用户一年后的自己，正在和今天的 TA 说话
 # 一个就少一条能接住重逢的文本。
 _EXTRACT_PROMPT = """你在读一段技术教学对话。只输出一个 JSON 对象，不要任何解释：
 
-{"concept": "这次谈的核心概念，10 字以内的名词短语", "aliases": ["同一个概念的另一种问法", "再一种"], "stuck": "他卡在哪，一句话，20 字以内；如果全程没卡住就给空字符串", "transfer": "一句把概念放进新场景的检验问题，30 字以内；教得不好就给空字符串"}
+{"concept": "这次谈的核心概念，10 字以内的名词短语", "domain": "领域限定词，2-8 字，说不准就给空字符串", "aliases": ["同一个概念的另一种问法", "再一种"], "stuck": "他卡在哪，一句话，20 字以内；如果全程没卡住就给空字符串", "transfer": "一句把概念放进新场景的检验问题，30 字以内；教得不好就给空字符串"}
 
 concept 用领域里的标准叫法（例如「asyncio 事件循环」而不是「那个循环的事」），并且必须带上领域限定词——框架、语言或库的名字。写「asyncio 事件循环」，不要只写「事件循环」；写「SQLite WAL 模式」，不要只写「WAL 模式」。没有这个名字，下次换个说法提起这个话题时就对不上。
+
+domain 就是这个限定词本身（「asyncio」「SQLite」「FastAPI」这种），写成 concept 里那几个字的**同一个词**，不要另起一个说法。同一个领域每次必须一模一样：这次写「SQLite」，下次就不要写「sqlite 数据库」或「数据库」——它只用来分组，换个写法就等于换了个领域（Q3 形态按它数「这个领域里搞懂过几个概念」）。拿不准属于哪个领域、或者这次谈的东西不落在某个具体技术领域上，就给空字符串。
 
 aliases 给 2-4 个，是同一个概念的**其他问法**：几个月后他又想起这个东西、但已经想不起标准术语时会怎么打字。所以要换词，不是换语序——用同义词、用大白话、用现象描述（写「协程什么时候切换」，不要写「事件循环的调度机制」）。每个都写成完整的一句问法、至少 4 个字：不要写「async」「GIL」「WAL」这种裸术语，也不要写纯英文短语，标准叫法已经在 concept 里了。不要把 concept 原样重复一遍，也不要写宽泛到能套任何概念的词（「并发」「性能」「原理」）。
 
@@ -419,35 +421,13 @@ async def profile() -> dict:
 CONCEPTS_CAP = 200  # 学习轨迹一屏放得下的量；超出按最近时间截断
 
 
-async def concepts() -> list[dict]:
-    """按概念分组的学习轨迹，**纯派生，不落库** —— 「我学到哪了」的真值。
+def _by_concept(rows) -> dict[str, dict]:
+    """同一概念的会话聚成一行：最近一次自评 / 卡点为准，会话数与召回数累加。Pure.
 
-    `profile()` 只回答「哪些说通了 / 半懂」（两个裸清单），够用来校准讲解，但答不了
-    「这个概念什么时候碰的、卡在哪、以前卡过的点接回来过几次」。这里补的就是这个切面：
-    一个概念一行 = 最近一次自评 + 那次的卡点（**以及解没解**）+ 最后一次时间 + 会话次数
-    + 召回触发次数。
-
-    与 `stuck_points` 的分工：那是**逐条卡点记录**（同一概念可能有多条），这是**按概念
-    收敛后的当前状态**。与 `profile()` 同一条线：useless 不算数（教学没成，证明不了
-    水平），每个概念取最近一次——说通了后来又卡住，以新的为准。
+    `concepts()`（全量）与 `mastered_by_domain()`（按领域）共用这一条——两处各写一遍
+    合计逻辑，迟早一处记得取最近、另一处忘了。调用方保证 rows 已按 id 升序。
     """
-    try:
-        from sqlalchemy import select
-
-        from app.db import SessionLocal
-        from app.models import TutorSession, iso_utc
-
-        async with SessionLocal() as db:
-            rows = (
-                await db.execute(
-                    select(TutorSession)
-                    .where(TutorSession.concept != "", TutorSession.verdict.in_(("got", "half")))
-                    .order_by(TutorSession.id)
-                )
-            ).scalars().all()
-    except Exception:  # noqa: BLE001 - 派生视图，坏了也不挡教学
-        log.warning("tutor concepts query failed", exc_info=True)
-        return []
+    from app.models import iso_utc
 
     agg: dict[str, dict] = {}
     for r in rows:  # id 升序遍历：后写覆盖，即最近一次为准
@@ -471,7 +451,45 @@ async def concepts() -> list[dict]:
         cur["last_session_id"] = r.id
         cur["sessions"] += 1
         cur["recalled"] += 1 if r.recalled else 0
-    ordered = sorted(agg.values(), key=lambda c: c["last_at"], reverse=True)
+    return agg
+
+
+async def _concept_rows() -> list:
+    """学习轨迹的原料：有概念、自评不是 useless 的会话，按 id 升序。"""
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    async with SessionLocal() as db:
+        return (
+            await db.execute(
+                select(TutorSession)
+                .where(TutorSession.concept != "", TutorSession.verdict.in_(("got", "half")))
+                .order_by(TutorSession.id)
+            )
+        ).scalars().all()
+
+
+async def concepts() -> list[dict]:
+    """按概念分组的学习轨迹，**纯派生，不落库** —— 「我学到哪了」的真值。
+
+    `profile()` 只回答「哪些说通了 / 半懂」（两个裸清单），够用来校准讲解，但答不了
+    「这个概念什么时候碰的、卡在哪、以前卡过的点接回来过几次」。这里补的就是这个切面：
+    一个概念一行 = 最近一次自评 + 那次的卡点（**以及解没解**）+ 最后一次时间 + 会话次数
+    + 召回触发次数。
+
+    与 `stuck_points` 的分工：那是**逐条卡点记录**（同一概念可能有多条），这是**按概念
+    收敛后的当前状态**。与 `profile()` 同一条线：useless 不算数（教学没成，证明不了
+    水平），每个概念取最近一次——说通了后来又卡住，以新的为准。
+    """
+    try:
+        rows = await _concept_rows()
+    except Exception:  # noqa: BLE001 - 派生视图，坏了也不挡教学
+        log.warning("tutor concepts query failed", exc_info=True)
+        return []
+
+    ordered = sorted(_by_concept(rows).values(), key=lambda c: c["last_at"], reverse=True)
     return ordered[:CONCEPTS_CAP]
 
 
@@ -481,9 +499,13 @@ UNTOUCHED_CAP = 50  # 「未触及」只列最近的这些；更早的靠重拆�
 MASTERY_MIN_SESSIONS = 2  # 一场是运气，两场才算学会——学习地图与零柒成长共用这一条
 
 
-def _mastered(c: dict) -> bool:
+def is_mastered(c: dict) -> bool:
     """一个概念「学会了」的唯一判定。学习地图的「已掌握」与零柒的成长事件共用它，
-    免得同一条规则在两地各写一半、日后各改一半。"""
+    免得同一条规则在两地各写一半、日后各改一半。
+
+    公开的（Q3 形态也要用这一条数「这个领域搞懂过几个概念」）：掌握这件事只有这一个
+    定义，形态那边不再自己写一遍「verdict == got and sessions >= 2」。
+    """
     return c["verdict"] == "got" and c["sessions"] >= MASTERY_MIN_SESSIONS
 
 
@@ -510,7 +532,7 @@ async def learning_map() -> dict:
     for c in cs:
         if c["concept"] in unresolved:
             stuck.append(c)
-        elif _mastered(c):
+        elif is_mastered(c):
             mastered.append(c)
         else:
             learning.append(c)
@@ -740,7 +762,7 @@ async def concept_neighbors(concept: str, limit: int = NEIGHBOR_LIMIT) -> list[d
 async def mastery_events() -> dict:
     """成长事件：一个概念「学会了」的那些时刻 —— 零柒成长模型的原料（A3）。
 
-    规则与学习地图「已掌握」**同一条**（`_mastered`）：最近一次自评说通了，且不止
+    规则与学习地图「已掌握」**同一条**（`is_mastered`）：最近一次自评说通了，且不止
     一场——一场是运气，两场才算学会。事件时间取**最近那次说通**的时刻。
 
     `from_half` 是这条路上值钱的那一格：这个概念以前半懂过、后来才说通。「从半懂到
@@ -749,7 +771,7 @@ async def mastery_events() -> dict:
     纯派生，不落库——真值仍然只有 `tutor_sessions`。坏掉也不挡教学，返回空表。
     """
     cs = await concepts()
-    mastered = [c for c in cs if _mastered(c)]
+    mastered = [c for c in cs if is_mastered(c)]
     if not mastered:
         return {"events": [], "mastered": 0, "learning": len(cs), "sessions": 0}
 
@@ -793,6 +815,39 @@ async def mastery_events() -> dict:
         "learning": len(cs) - len(events),
         "sessions": sum(c["sessions"] for c in cs),
     }
+
+
+async def concepts_by_domain() -> dict[str, dict]:
+    """按领域分组的学习轨迹——Q3 形态的第二个数。
+
+    每个领域给两样：`seen`（这个领域碰过、按 `concepts()` 同一条规矩收敛后的概念行）
+    与 `mastered`（其中 `is_mastered()` 认下来的）。只给 mastered 的话，界面上就没东西
+    解释「这个领域碰过东西、但还没学会」——而那句话恰恰是最该说得准的一句。
+
+    **一个领域 = 用这个领域自己的会话算出来的**，不是「这个概念挂在哪个领域」。
+    同一个概念可以在两个领域各学会一次，那是两件事：把两边的会话合起来数「不止一场」，
+    会让 A 领域的第二场替 B 领域的第一场背书，而「一场是运气」这条规矩存在的全部理由
+    就是不被这种事骗。
+
+    纯派生、不落库；坏掉返回空表——形态是派生视图，不该把教学或学习地图一起拖下水。
+    """
+    try:
+        rows = await _concept_rows()
+    except Exception:  # noqa: BLE001 - 派生视图，坏了不挡任何东西
+        log.warning("tutor concepts by domain query failed", exc_info=True)
+        return {}
+
+    buckets: dict[str, list] = {}
+    for r in rows:
+        d = (r.domain or "").strip()
+        if d:  # 没归类的会话不进任何领域——「说不出口属于哪」不是「属于全部」
+            buckets.setdefault(d, []).append(r)
+
+    out: dict[str, dict] = {}
+    for d, rs in buckets.items():
+        seen = sorted(_by_concept(rs).values(), key=lambda c: c["last_at"], reverse=True)
+        out[d] = {"seen": seen, "mastered": [c for c in seen if is_mastered(c)]}
+    return out
 
 
 PROFILE_LIST_CAP = 12  # 注入块里每个清单最多列这么多概念，全量在设置页看
@@ -1287,6 +1342,7 @@ class TutorExtract(BaseModel):
     """
 
     concept: str = ""
+    domain: str = ""
     aliases: list[str] = Field(default_factory=list)
     stuck: str = ""
     transfer: str = ""
@@ -1302,7 +1358,7 @@ class TutorExtract(BaseModel):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
 
-    @field_validator("concept", "stuck", "transfer", mode="before")
+    @field_validator("concept", "domain", "stuck", "transfer", mode="before")
     @classmethod
     def _as_text(cls, v):
         if v is None or isinstance(v, (list, dict)):
@@ -1465,17 +1521,20 @@ async def _remember_points(source: str, points: list[dict]) -> list[dict]:
         return [{"id": 0, "title": p.get("title", ""), "why": p.get("why", "")} for p in points]
 
 
-async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str, str, str]:
-    """One non-streaming call → (concept, aliases, stuck, transfer), all '' on failure.
+async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str, str, str, str]:
+    """One non-streaming call → (concept, aliases, stuck, transfer, domain), all '' on failure.
 
     transfer（Bjork 可取难度的会话内版）：一句把概念放进新场景的检验问题，
     只在 end() 的总结里出现一次——不是题库，不落库，没有第二次出现。
+
+    domain（Q3 形态）：分组用的领域词。它是这次提取**顺带**要的第四个字段，不是
+    第四次调用——同一次 JSON 里多一个短字段。
     Test seam: monkeypatch me.
     """
     try:
         rows = await turns(session_id)
         if not rows:
-            return "", "", "", ""
+            return "", "", "", "", ""
 
         from app.core.llm import ProviderInfo
         from app.core.structured import extract_json
@@ -1498,17 +1557,18 @@ async def _extract(session_id: int, topic: str, model_id: str) -> tuple[str, str
         )
         if obj is None:
             log.info("tutor extraction unavailable: %s", meta.error)
-            return "", "", "", ""
+            return "", "", "", "", ""
         concept = obj.concept[:120]
         return (
             concept,
             _clean_aliases(obj.aliases, concept),
             obj.stuck[:200],
             obj.transfer[:120],
+            obj.domain.strip()[:30],
         )
     except Exception:  # noqa: BLE001 - the verdict is already saved; this is the extra
         log.warning("tutor extraction failed", exc_info=True)
-        return "", "", "", ""
+        return "", "", "", "", ""
 
 
 async def _nearby_material(concept: str, exclude: set[str] | None = None) -> list[dict]:
@@ -1599,17 +1659,20 @@ async def end(session_id: int, verdict: str) -> dict:
         topic, model_id = row.topic, row.model_id
         mode = row.mode or "socratic"
 
-    concept, aliases, stuck, transfer = "", "", "", ""
+    concept, aliases, stuck, transfer, domain = "", "", "", "", ""
     nearby: list[dict] = []
     # 未来会话不是教学：提取概念/卡点只会把「和未来的自己聊天」的内容污染进
     # 画像和召回——自评照存（记录是你的），提取跳过。
     if verdict != "useless" and model_id and mode != "future":
-        concept, aliases, stuck, transfer = await _extract(session_id, topic, model_id)
+        concept, aliases, stuck, transfer, domain = await _extract(session_id, topic, model_id)
         if concept:  # a 卡点 with no concept is unrecallable, so both or neither
             async with SessionLocal() as db:
                 row = await db.get(TutorSession, session_id)
                 if row is not None:
                     row.concept, row.aliases, row.stuck = concept, aliases, stuck
+                    # 领域跟 concept 同进退：没有概念就没人读这个领域（形态数的是
+                    # 「这个领域搞懂过几个概念」），存下来只会是一条读不到的行。
+                    row.domain = domain
                     await db.commit()
             if verdict == "got":
                 # 「结束回写」：说通了这个概念，它到此为止的卡点一并关掉
@@ -1621,6 +1684,7 @@ async def end(session_id: int, verdict: str) -> dict:
         "id": session_id,
         "verdict": verdict,
         "concept": concept,
+        "domain": domain,
         "aliases": aliases,
         "stuck": stuck,
         "transfer": transfer,
@@ -1661,6 +1725,7 @@ async def sessions(limit: int = 50) -> list[dict]:
             "id": r.id,
             "topic": r.topic,
             "concept": r.concept,
+            "domain": r.domain,
             "verdict": r.verdict,
             "stuck": r.stuck,
             "recalled": bool(r.recalled),
@@ -1858,6 +1923,7 @@ async def detail(session_id: int) -> dict | None:
             "id": r.id,
             "topic": r.topic,
             "concept": r.concept,
+            "domain": r.domain,
             "verdict": r.verdict,
             "stuck": r.stuck,
             "recalled": bool(r.recalled),

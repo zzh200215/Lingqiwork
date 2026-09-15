@@ -893,7 +893,13 @@ async def test_say_sends_no_material_block_when_the_kb_has_nothing(monkeypatch):
 
 
 async def fake_extract_quad(session_id, topic, model_id):
-    return "asyncio 事件循环", "协程什么时候切换", "以为 await 交给了操作系统", "浏览器的事件循环会怎么调度？"
+    return (
+        "asyncio 事件循环",
+        "协程什么时候切换",
+        "以为 await 交给了操作系统",
+        "浏览器的事件循环会怎么调度？",
+        "asyncio",
+    )
 
 
 async def _live(monkeypatch, topic: str) -> int:
@@ -913,13 +919,14 @@ async def test_end_stores_the_triple(monkeypatch):
 
     async def fake_extract(session_id, topic, model_id):
         assert model_id == "p/m"
-        return "asyncio 事件循环", "协程什么时候切换", "以为 await 交给了操作系统", ""
+        return "asyncio 事件循环", "协程什么时候切换", "以为 await 交给了操作系统", "", "asyncio"
 
     monkeypatch.setattr(core, "_extract", fake_extract)
     assert await core.end(sid, "half") == {
         "id": sid,
         "verdict": "half",
         "concept": "asyncio 事件循环",
+        "domain": "asyncio",
         "aliases": "协程什么时候切换",
         "stuck": "以为 await 交给了操作系统",
         "transfer": "",
@@ -928,6 +935,12 @@ async def test_end_stores_the_triple(monkeypatch):
     row = await core.detail(sid)
     assert row["verdict"] == "half" and row["concept"] == "asyncio 事件循环"
     assert row["ended_at"] and len(row["turns"]) == 2
+    # 领域跟着 concept 一起落库（Q3 形态按它分组）
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    async with SessionLocal() as db:
+        assert (await db.get(TutorSession, sid)).domain == "asyncio"
     # the alias line has exactly one consumer, so this is where it is worth checking
     assert (await core.recall_hits("协程是在什么时机切换的"))[0]["via"] == "alias"
 
@@ -1036,7 +1049,7 @@ async def test_ending_got_writes_back_and_closes_earlier_stucks_on_the_concept(m
     sid = await _live(monkeypatch, "asyncio 再来一场")
 
     async def fake_extract(session_id, topic, model_id):
-        return "asyncio 事件循环", "", "这次没卡", ""
+        return "asyncio 事件循环", "", "这次没卡", "", "asyncio"
 
     monkeypatch.setattr(core, "_extract", fake_extract)
     await core.end(sid, "got")
@@ -1054,7 +1067,7 @@ async def test_ending_half_does_not_write_back(monkeypatch):
     sid = await _live(monkeypatch, "asyncio 再讲一遍")
 
     async def fake_extract(session_id, topic, model_id):
-        return "asyncio 事件循环", "", "还是卡在 await", ""
+        return "asyncio 事件循环", "", "还是卡在 await", "", "asyncio"
 
     monkeypatch.setattr(core, "_extract", fake_extract)
     await core.end(sid, "half")
@@ -1092,7 +1105,7 @@ async def test_end_keeps_the_verdict_when_extraction_comes_back_empty(monkeypatc
     monkeypatch.setattr(core, "_embed", _fake_embed)
 
     async def blank(session_id, topic, model_id):
-        return "", "", "", ""
+        return "", "", "", "", ""
 
     monkeypatch.setattr(core, "_extract", blank)
     got = await core.end(sid, "got")
@@ -1109,7 +1122,7 @@ async def test_end_skips_extraction_for_useless(monkeypatch):
 
     async def spy(session_id, topic, model_id):
         calls.append(session_id)
-        return "x", "y", "z", ""
+        return "x", "y", "z", "", ""
 
     monkeypatch.setattr(core, "_extract", spy)
     assert (await core.end(sid, "useless"))["concept"] == ""
@@ -1131,7 +1144,7 @@ async def test_end_is_re_callable(monkeypatch):
     sid = await _live(monkeypatch, "asyncio")
 
     async def fake_extract(session_id, topic, model_id):
-        return "asyncio 事件循环", "", "", ""
+        return "asyncio 事件循环", "", "", "", ""
 
     monkeypatch.setattr(core, "_extract", fake_extract)
     await core.end(sid, "half")
@@ -1142,7 +1155,7 @@ async def test_end_is_re_callable(monkeypatch):
 async def test_extract_with_an_empty_transcript_never_calls_the_model():
     await _reset()
     sid = await _seed("x", "", "")
-    assert await core._extract(sid, "x", "p/m") == ("", "", "", "")
+    assert await core._extract(sid, "x", "p/m") == ("", "", "", "", "")
 
 
 async def test_end_passes_the_transfer_question_through(monkeypatch):

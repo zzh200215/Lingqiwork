@@ -18,6 +18,7 @@ class ItemIn(BaseModel):
     question: str
     expected_source: str = ""
     note: str = ""
+    domain: str = ""
 
     @field_validator("question")
     @classmethod
@@ -26,11 +27,22 @@ class ItemIn(BaseModel):
             raise ValueError("问题不能为空")
         return v.strip()
 
+    @field_validator("domain")
+    @classmethod
+    def _d(cls, v: str) -> str:
+        return (v or "").strip()[:30]
+
 
 class ItemPatch(BaseModel):
     question: str | None = None
     expected_source: str | None = None
     note: str | None = None
+    domain: str | None = None
+
+    @field_validator("domain")
+    @classmethod
+    def _d(cls, v: str | None) -> str | None:
+        return None if v is None else (v or "").strip()[:30]
 
 
 class RunIn(BaseModel):
@@ -51,6 +63,8 @@ def _item_out(i: EvalItem) -> dict:
         "question": i.question,
         "expected_source": i.expected_source,
         "note": i.note,
+        # 领域（Q3 形态）：分组用的标签，空 = 还没归类
+        "domain": i.domain,
     }
 
 
@@ -94,6 +108,7 @@ async def create_item(body: ItemIn, db: AsyncSession = Depends(get_db)):
         question=body.question,
         expected_source=body.expected_source.strip(),
         note=body.note.strip(),
+        domain=body.domain,
     )
     db.add(item)
     await db.commit()
@@ -115,6 +130,8 @@ async def update_item(item_id: int, body: ItemPatch, db: AsyncSession = Depends(
         item.expected_source = (data["expected_source"] or "").strip()
     if "note" in data:
         item.note = (data["note"] or "").strip()
+    if "domain" in data:
+        item.domain = (data["domain"] or "").strip()[:30]
     await db.commit()
     await db.refresh(item)
     return _item_out(item)

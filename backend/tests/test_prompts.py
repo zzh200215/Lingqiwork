@@ -11,7 +11,7 @@ _FINGERPRINTS = [
     ("app.core.tutor", "SOCRATIC_PROMPT", "2628ed0ab564"),
     ("app.core.tutor", "FEYNMAN_PROMPT", "e9fd94ec9044"),
     ("app.core.tutor", "FUTURE_PROMPT", "bdca8ef795e4"),
-    ("app.core.tutor", "_EXTRACT_PROMPT", "8403f0e37c5d"),
+    ("app.core.tutor", "_EXTRACT_PROMPT", "27da8ab1904c"),
     ("app.core.tutor", "_SUMMARY_SYSTEM", "5618bcc46585"),
     ("app.core.research", "_PLAN_PROMPT", "b945ceb397e6"),
     ("app.core.research", "_SYNTH_PROMPT", "209cd89a1c70"),
