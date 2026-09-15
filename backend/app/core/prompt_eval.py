@@ -55,6 +55,80 @@ def _questions(text: str) -> int:
     return sum(text.count(m) for m in _QUESTION_MARKS)
 
 
+# 「用户要回答几个问题」的代理指标。**它不是数问号**：数问号会把「一个问题带一串选项」
+# 当成好几个问题（「你想听哪一块？——索引结构？B+ 树分裂？」）。
+#
+# 两条规则，各自对着一个**实测到的**形状（尺子与样本在 `backend/smoke_question.py`）：
+#
+# 1. **空行分段，一段至少算一个问题。** 「三个独立问题分三段抛出」是实测形状；
+#    而「空行」是这段话在视觉上换了话题的地方，比标点可靠。
+# 2. **同一段里，连着几个问号之间的文字若只是短的并列选项，算同一个问题。**
+#    「是任务？是代码片段？还是别的什么？」是一个问题带选项；而
+#    「让给谁？如果每个协程都有自己的线程，那这个线程去哪了？」是**两个**问题——
+#    区别就在两个问号之间那段字是「一个短名词」还是「一整句话」。
+OPTION_CHARS = 24  # 两个问号之间的文字短于这个长度 → 才有资格被当成「并列选项」
+# 长度只是**兜底**（别把一整段话当选项），真正在分「短选项」和「短问题」的是下面那层疑问词 ——
+# 「B+ 树的分裂」「Transformer架构」是选项，「为什么」「事件循环怎么调度」是问题，**
+# 它们一样短**。所以长度放到 24 是为了容得下「Transformer架构」这种词，而不会放走一个问题。
+_BREAK_CHARS = "，。；！,;!…【"  # 出现这些就不是「一个短选项」了
+# 紧跟在这些字符后面的问号**不是这一轮在问**：那是引用/举例里带出来的
+# （「你说『什么是闭包？』这个问题问反了」）。
+_CLOSERS = "」』”\"'）)】>》"
+# 「是 A？还是 B？」这类**并列选项**的起头词 —— 它们出现时，后面的疑问词不算新问题
+# （「还是别的什么？」里那个「什么」是选项的一部分，不是第二个问题）。
+_OPTION_LEAD = ("还是", "或者", "或是", "以及", "还有", "比如", "例如", "是", "或", "又")
+# 疑问词。**光看长度分不开「短选项」和「短问题」**（「B+ 树的分裂」 vs 「为什么」），
+# 这一层就是那个区分：短的、又不含疑问词的，才是选项。
+_INTERROGATIVE = ("什么", "为什么", "怎么", "怎样", "如何", "哪", "谁", "多少", "是否", "吗", "呢")
+_OPTION_DECOR = "*`\"'「」『』（）()《》 \t…-—、,，"
+
+
+def _is_option_segment(seg: str) -> bool:
+    """两个问号之间的那截文字，是不是「同一个问题的另一个选项」。Pure.
+
+    三层，顺序是刻意的：
+    1. **以并列连接词起头的，一律算选项**（不看长度）——「还是 `some_coro` 内部某行代码…」
+       可以很长，但它在语用上就是在接着上一个问题；
+    2. 太长的（> `OPTION_CHARS`）不算 —— 那是另一段话，不是选项；
+    3. 短的里面，**含疑问词的算新问题** —— 这是「短选项」与「短问题」唯一分得开的地方。
+    """
+    s = seg.strip().strip(_OPTION_DECOR)
+    if not s:
+        return False
+    if s.startswith(_OPTION_LEAD):
+        return True
+    if len(s) > OPTION_CHARS:
+        return False
+    if any(ch in s for ch in _BREAK_CHARS):
+        return False
+    return not any(w in s for w in _INTERROGATIVE)
+
+
+def question_count(text: str) -> int:
+    """这段回复里，用户大概要回答**几个**问题。Pure。
+
+    空 → 0。规则见文件上方那段注释：空行分段 + 段内并列选项合并 + 引号里的问号不算。
+    """
+    total = 0
+    for block in (text or "").split("\n\n"):
+        if not any(m in block for m in _QUESTION_MARKS):
+            continue  # 这一段没问问题
+        block_n = 0
+        seg_start = 0
+        for i, ch in enumerate(block):
+            if ch not in _QUESTION_MARKS:
+                continue
+            nxt = block[i + 1 : i + 2]
+            if nxt and nxt in _CLOSERS:
+                continue  # 引用里的问号
+            # 段内第一个问号总是算数；后面的要看它前面那截是不是只是并列选项
+            if block_n == 0 or not _is_option_segment(block[seg_start:i]):
+                block_n += 1
+            seg_start = i + 1
+        total += block_n
+    return total
+
+
 # ---------- 断言表：名字 → （判定, 「为什么」——引提示词自己的那句话） ----------
 #
 # 加断言的门槛：它必须能指着提示词里的**某一句话**。指不出来，就不该在这里——
@@ -65,8 +139,9 @@ CHECKS: dict[str, tuple[Callable[[str], bool], str]] = {
         "规则 1「像一个真诚困惑的学生那样提问」",
     ),
     "one_question_only": (
-        lambda t: _questions(t) == 1,
-        "规则 6「每轮只做一件事：提一个最好的问题」+ 不要做的事「不要一次抛三个问题」",
+        lambda t: question_count(t) == 1,
+        "规则 6「每轮只做一件事：提一个最好的问题」+ 不要做的事「不要一次抛三个问题」"
+        "（按**空行分段 + 段内并列选项合并**数，不是数问号：尺子与样本在 backend/smoke_question.py）",
     ),
     "no_list": (
         lambda t: not _LIST_RE.search(t),

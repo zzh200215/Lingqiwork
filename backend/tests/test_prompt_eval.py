@@ -478,6 +478,69 @@ def test_cards_carry_the_golden_set_domain():
     assert card["domain"] == pe.fixtures()["FEYNMAN_PROMPT"]["domain"]
 
 
+# --- one_question_only：尺子与样本在 backend/smoke_question.py -----------------
+
+
+def test_question_count_merges_an_option_menu():
+    """「一个问题 + 一串选项」是**一个**问题 —— 这是当初记下来的那个缺陷。
+
+    原来那条（数问号）在这里数出 4 个，把一次合格的回复判成失败。
+    """
+    assert pe.question_count("你想听我讲什么？…比如——注意力机制？梯度下降？Transformer架构？") == 1
+    assert pe.question_count("你想先听哪一块？比如——索引的结构？B+ 树的分裂？还是查询优化？") == 1
+
+
+def test_question_count_counts_a_blank_line_as_a_new_question():
+    """「三个独立问题分三段抛出」是实测形状 —— 空行比标点可靠。"""
+    assert pe.question_count("他说的调度是指什么？\n\n那个队列里排的是什么？\n\n谁来决定下一个跑谁？") == 3
+
+
+def test_question_count_is_not_fooled_by_a_short_question():
+    """**光看长度分不开「短选项」和「短问题」**（「B+ 树的分裂」 vs 「为什么」）。
+
+    这一条就是那个区分：短的、又不含疑问词的，才是选项。少了这层，
+    「然后呢？为什么？怎么办？」会被并成一个问题 —— 那是拿一个错换另一个错。
+    """
+    assert pe.question_count("然后呢？为什么？怎么办？") == 3
+    assert pe.question_count("你说 await 让出去——让给谁？那个线程去哪了？事件循环怎么调度？") == 3
+
+
+def test_question_count_ignores_a_question_mark_in_quotes():
+    """引号里的问号不是这一轮在问。"""
+    assert pe.question_count("你说「什么是闭包？」这个问题问反了。") == 0
+    assert pe.question_count("我讲讲我的理解。") == 0
+    assert pe.question_count("") == 0
+
+
+def test_one_question_only_agrees_with_every_labelled_example():
+    """线上那条必须与**每一条**人工判过的样本一致。
+
+    样本（真实回复 + 文档里那条 + 构造的）住在 `smoke_question.py` 里：**只有一份**，
+    所以它不可能悄悄和测试分叉。这条测试的作用是让「哪天有人再动这把尺子」当场变红。
+    """
+    import smoke_question as sq
+
+    assert sq.SAMPLE, "金标不能是空的"
+    wrong = [s["id"] for s in sq.SAMPLE if pe.question_count(s["reply"]) != s["want"]]
+    assert wrong == [], f"与人工标签不一致：{wrong}"
+
+
+def test_the_new_rule_beats_the_old_one_on_the_labelled_set():
+    """改这把尺子要有证据：它在金标上必须**比原来那条准**，而且不许把原来判对的弄错。"""
+    import smoke_question as sq
+
+    names = {name: fn for name, fn in sq.RULES}
+    old = names["A 数问号（原来那条）"]
+    new = names[sq.SHIPPED]
+    old_wrong = {s["id"] for s in sq.SAMPLE if old(s["reply"]) != (s["want"] == 1)}
+    new_wrong = {s["id"] for s in sq.SAMPLE if new(s["reply"]) != (s["want"] == 1)}
+    assert new_wrong < old_wrong, f"没有更准，或者把原来判对的弄错了：{new_wrong - old_wrong}"
+    # 计划里建议的那版（数空行分段）量下来**更差** —— 它会把一段里的两个问题放过去
+    blocks = names["B 数空行分隔的疑问段"]
+    blocks_wrong = {s["id"] for s in sq.SAMPLE if blocks(s["reply"]) != (s["want"] == 1)}
+    assert blocks_wrong == {"vague-analogy", "wrong-causal-claim", "three-short-questions-in-one-block", "quoted-question-mark"}
+
+
 # --- 技能卡：只有跑过对照的才进屋 ---------------------------------------------
 
 
