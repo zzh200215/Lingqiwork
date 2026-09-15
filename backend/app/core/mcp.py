@@ -213,7 +213,11 @@ async def _save_artifact(args: dict) -> str:
         try:
             from app.core import indexer
 
-            chunks = await asyncio.to_thread(indexer.index_file, dest)
+            # **把 root 显式传进去**：`index_file` 的 root 默认值是在模块导入时绑死的
+            # （`root: Path = VAULT_DIR`），所以任何临时换过 `VAULT_DIR` 的调用方
+            # （评测的临时 vault、恢复演练）都会在这里拿到一句
+            # 「not in the subpath of ...」——产出照样落盘，但索引白跑一趟还刷一屏日志。
+            chunks = await asyncio.to_thread(indexer.index_file, dest, VAULT_DIR)
         except Exception:  # noqa: BLE001
             log.warning("artifact saved but indexing failed: %s", rel, exc_info=True)
 

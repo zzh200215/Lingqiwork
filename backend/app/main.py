@@ -13,8 +13,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import BASE_DIR, settings
 from app.core import auth, mcp_server  # mount 在模块级跑，必须先于 lifespan 导入
-from app.db import engine
-from app.models import Base
 from app.routers import (
     agents,
     arena,
@@ -75,27 +73,20 @@ log = logging.getLogger(__name__)
 
 
 async def _migrate() -> None:
-    """结构迁移（W6）：现在是**有版本、可 dry-run、迁移前自动备份**的。
+    """结构迁移（W6）：**有版本、可 dry-run、迁移前自动备份**。
 
-    那张写死的列表搬到了 `core/migrations.py`，成了 v1 基线；这张表 `schema_migrations`
-    记着这个库跑过哪几版。原来那个版本每次启动全表重放 —— 能用（`PRAGMA` 自检所以幂等），
-    但没人知道库里是哪一版、下一步该跑什么，也没法先看看再跑。
+    真正的活都在 `core/bootstrap.py` 与 `core/migrations.py` —— 这里只留一个名字给
+    `lifespan` 用，好让「启动时做了什么」在这份文件里仍然读得出来。
     """
-    from app.core import migrations
+    from app.core import bootstrap
 
-    done = await migrations.run()
-    if done["applied"]:
-        log.info(
-            "应用了 %s 个迁移：%s",
-            len(done["applied"]),
-            "、".join(f"v{m['version']}" for m in done["applied"]),
-        )
+    await bootstrap.ensure_schema()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # 建表 + 迁移走同一个入口（`core/bootstrap.py`）——CLI 与 drill 也走它，
+    # 于是「库没初始化过」不会再以一个语焉不详的 SQLite 错出现在别处。
     await _migrate()
     # One-time, idempotent: seal any secret still sitting in plaintext (config.json
     # and provider api_key rows) so existing installs inherit the encryption.

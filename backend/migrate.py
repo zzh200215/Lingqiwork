@@ -19,7 +19,7 @@ except Exception:  # noqa: BLE001 - 老 Python 或被重定向时无所谓
 
 async def main() -> int:
     from app.config import settings
-    from app.core import migrations
+    from app.core import bootstrap, migrations
 
     print(f"库：{settings.db_path}")
     if "--status" in sys.argv:
@@ -33,16 +33,24 @@ async def main() -> int:
             print("  没有待跑的迁移")
         return 0
 
-    dry = "--dry-run" in sys.argv
-    out = await migrations.run(dry_run=dry)
+    if "--dry-run" in sys.argv:
+        out = await migrations.run(dry_run=True)
+        if not out["applied"]:
+            print("没有待跑的迁移，什么都没做（dry-run）")
+            return 0
+        for m in out["applied"]:
+            print(f"  会跑 v{m['version']}  {m['name']}")
+        print("dry-run：一个字节都没写")
+        return 0
+
+    # 建表 + 迁移走同一个入口：老库可能连表都没建全，而独立入口以前各漏一半（实测咬过）
+    out = await bootstrap.ensure_schema()
     if not out["applied"]:
-        print("没有待跑的迁移，什么都没做" + ("（dry-run）" if dry else ""))
+        print("没有待跑的迁移，什么都没做")
         return 0
     for m in out["applied"]:
-        print(f"  {'会跑' if dry else '已跑'} v{m['version']}  {m['name']}")
-    if dry:
-        print("dry-run：一个字节都没写")
-    elif out["backup"]:
+        print(f"  已跑 v{m['version']}  {m['name']}")
+    if out["backup"]:
         print(f"迁移前备份：{out['backup']}")
     return 0
 

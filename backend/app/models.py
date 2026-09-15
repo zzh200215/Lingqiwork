@@ -600,6 +600,38 @@ class ArtifactFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TurnEvalRun(Base):
+    """一次「聊天回合行为」的回归跑（W1）。
+
+    和 `EngineEvalRun` 同形，但量的是**另一条路**：成文引擎测的是「一次生成一份东西」，
+    这一张测的是**聊天那条工具循环**——模型有没有真的把东西存下来、有没有说谎、一轮存了
+    几份、正文有没有被回填进对话。upgrade-plan 的缺口一就是「这条路一层都没盖」，
+    而且当轮所有结论都是临时脚本量出来、量完就散。
+
+    `scenario_sha` 是那套用例的指纹（用例改了要能看出来），`prompt_sha` 与
+    `ArtifactFeedback` 同一个算法（与 `_OUTPUT_RULE` 对齐）——自动分和人点的满意率
+    落在同一把 key 上。
+
+    `deterministic` 是「一个 finding 都没有」的用例占比（确定性判分，零模型成本）；
+    `judged` 是 LLM 判分那半（回执是不是一行话）的均值，没跑就是 NULL。
+    **报告必须带样本量与 Wilson 区间**：裸比例会让人把噪声当结论（upgrade-plan §8）。
+    """
+
+    __tablename__ = "turn_eval_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    scenario: Mapped[str] = mapped_column(String(40), index=True)
+    scenario_sha: Mapped[str] = mapped_column(String(12), index=True)
+    prompt_sha: Mapped[str] = mapped_column(String(12), index=True)
+    model_id: Mapped[str] = mapped_column(String(120), default="")
+    total: Mapped[int] = mapped_column(Integer, default=0)  # 跑了多少个回合（用例 × 重复）
+    deterministic: Mapped[float] = mapped_column(Float, default=0.0)  # 无 finding 的占比
+    judged: Mapped[float | None] = mapped_column(Float, nullable=True)  # LLM 判分均值 0-5
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐回合的 findings / 回复 / 回执
+
+
 class EngineEvalRun(Base):
     """某个成文引擎跑一遍 golden set 的自动得分。
 

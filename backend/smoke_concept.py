@@ -571,17 +571,11 @@ async def gen() -> int:
         print("  拒绝生成：库看起来不是副本（--gen 会建会话、花调用）—— 先设 WB_DATA_DIR")
         return 2
 
-    from app.core import providers, tutor
-    from app.db import engine
-    from app.models import Base
+    from app.core import bootstrap, providers, tutor
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
     # 副本是从真库拷的，`create_all` **不给老表加列** —— 必须走应用自己那条迁移。
-    # 现在那条路有版本、能 dry-run、迁移前自动备份（`core/migrations.py`，W6）。
-    from app.core import migrations
-
-    await migrations.run()
+    # 入口只有一处（`core/bootstrap.py`）：建表 + 跑没跑过的迁移（W6）。
+    await bootstrap.ensure_schema()
 
     model = providers.default_model_id() or ""
     print(f"  模型 {model}")
