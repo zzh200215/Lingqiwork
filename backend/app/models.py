@@ -657,6 +657,21 @@ class PromptEvalRun(Base):
     detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐用例：断言、回复、耗时
 
 
+class SchemaMigration(Base):
+    """已应用的迁移（W6）。一行一版，**只增不删**。
+
+    没有它的时候，`main.py` 靠一张写死的列表每次启动全表重放：能用、幂等，但没人知道
+    这个库是哪一版、下一步该跑什么、能不能先看看再跑。这张表就是那份记录 ——
+    `core/migrations.py` 只跑 `version` 不在里面的那些。
+    """
+
+    __tablename__ = "schema_migrations"
+
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class DecisionLog(Base):
     """一条「判断 + 依据 + 信心」，以及事后回看的应验结果（校准分）。
 

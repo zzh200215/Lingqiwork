@@ -70,63 +70,25 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message
 
 STATIC_DIR = BASE_DIR / "frontend" / "dist"
 
+log = logging.getLogger(__name__)
+
 
 async def _migrate() -> None:
-    """Tiny idempotent column migrations for existing SQLite tables."""
-    from sqlalchemy import text
+    """结构迁移（W6）：现在是**有版本、可 dry-run、迁移前自动备份**的。
 
-    stmts = [
-        ("conversations", "pinned", "ALTER TABLE conversations ADD COLUMN pinned BOOLEAN DEFAULT 0"),
-        ("conversations", "folder", "ALTER TABLE conversations ADD COLUMN folder VARCHAR(100) DEFAULT ''"),
-        ("messages", "feedback", "ALTER TABLE messages ADD COLUMN feedback VARCHAR(4)"),
-        # V2.3 agent orchestration columns (tasks table)
-        ("tasks", "mode", "ALTER TABLE tasks ADD COLUMN mode VARCHAR(10) DEFAULT 'simple'"),
-        ("tasks", "tool_whitelist", "ALTER TABLE tasks ADD COLUMN tool_whitelist TEXT DEFAULT ''"),
-        ("tasks", "max_rounds", "ALTER TABLE tasks ADD COLUMN max_rounds INTEGER DEFAULT 12"),
-        ("tasks", "retry", "ALTER TABLE tasks ADD COLUMN retry INTEGER DEFAULT 1"),
-        ("tasks", "notify_on_error", "ALTER TABLE tasks ADD COLUMN notify_on_error BOOLEAN DEFAULT 0"),
-        ("tasks", "trigger_kind", "ALTER TABLE tasks ADD COLUMN trigger_kind VARCHAR(10) DEFAULT 'cron'"),
-        ("tasks", "watch_path", "ALTER TABLE tasks ADD COLUMN watch_path VARCHAR(500) DEFAULT ''"),
-        ("tasks", "chain_next_id", "ALTER TABLE tasks ADD COLUMN chain_next_id INTEGER"),
-        # 人工卡点（§4-12）：这一步等人点头才触发下游
-        ("tasks", "require_approval", "ALTER TABLE tasks ADD COLUMN require_approval BOOLEAN DEFAULT 0"),
-        # 会议闭环（§4-13）：转写步骤 + 共享落点目录
-        ("tasks", "action", "ALTER TABLE tasks ADD COLUMN action VARCHAR(12) DEFAULT 'prompt'"),
-        ("tasks", "landing_dir", "ALTER TABLE tasks ADD COLUMN landing_dir VARCHAR(300) DEFAULT ''"),
-        # V1.4 memory upgrade
-        ("memories", "source", "ALTER TABLE memories ADD COLUMN source VARCHAR(10) DEFAULT 'manual'"),
-        ("memories", "kind", "ALTER TABLE memories ADD COLUMN kind VARCHAR(10) DEFAULT 'fact'"),
-        # 记忆证据链（DeepTutor 参考项：可检视记忆）
-        ("memories", "evidence_json", "ALTER TABLE memories ADD COLUMN evidence_json TEXT DEFAULT '[]'"),
-        # V6.2 observability: per-message / per-run token usage
-        ("messages", "tokens_in", "ALTER TABLE messages ADD COLUMN tokens_in INTEGER"),
-        ("messages", "tokens_out", "ALTER TABLE messages ADD COLUMN tokens_out INTEGER"),
-        # 产出回执落库（P1）：正文可能空着，回执不能丢
-        ("messages", "artifacts_json", "ALTER TABLE messages ADD COLUMN artifacts_json TEXT"),
-        ("task_runs", "tokens_in", "ALTER TABLE task_runs ADD COLUMN tokens_in INTEGER"),
-        ("task_runs", "tokens_out", "ALTER TABLE task_runs ADD COLUMN tokens_out INTEGER"),
-        # 工作流运行的尺子（§4-10）：接地分 0-5 + 一句话理由
-        ("task_runs", "grounded", "ALTER TABLE task_runs ADD COLUMN grounded INTEGER"),
-        ("task_runs", "judge_reason", "ALTER TABLE task_runs ADD COLUMN judge_reason TEXT DEFAULT ''"),
-        ("task_runs", "run_dir", "ALTER TABLE task_runs ADD COLUMN run_dir VARCHAR(300) DEFAULT ''"),
-        # 用量按事记（§4-16）
-        ("model_usage", "thread_id", "ALTER TABLE model_usage ADD COLUMN thread_id INTEGER"),
-        # tutor history compression (maple-os 参考项：长会话中段压缩)
-        ("tutor_sessions", "summary", "ALTER TABLE tutor_sessions ADD COLUMN summary TEXT DEFAULT ''"),
-        ("tutor_sessions", "summary_upto", "ALTER TABLE tutor_sessions ADD COLUMN summary_upto INTEGER DEFAULT 0"),
-        ("tutor_sessions", "repo", "ALTER TABLE tutor_sessions ADD COLUMN repo VARCHAR(100) DEFAULT ''"),
-        ("tutor_sessions", "mode", "ALTER TABLE tutor_sessions ADD COLUMN mode VARCHAR(10) DEFAULT 'socratic'"),
-        # 卡点清单：待解 / 已解（NULL = 待解）
-        ("tutor_sessions", "stuck_resolved_at", "ALTER TABLE tutor_sessions ADD COLUMN stuck_resolved_at DATETIME"),
-        # 领域（Q3 形态）：三样证据各自的领域标签。空的含义是「还没归类」，不是「无领域」。
-        ("tutor_sessions", "domain", "ALTER TABLE tutor_sessions ADD COLUMN domain VARCHAR(30) DEFAULT ''"),
-        ("eval_items", "domain", "ALTER TABLE eval_items ADD COLUMN domain VARCHAR(30) DEFAULT ''"),
-    ]
-    async with engine.begin() as conn:
-        for table, col, ddl in stmts:
-            cols = (await conn.execute(text(f"PRAGMA table_info({table})"))).mappings().all()
-            if cols and not any(c["name"] == col for c in cols):
-                await conn.execute(text(ddl))
+    那张写死的列表搬到了 `core/migrations.py`，成了 v1 基线；这张表 `schema_migrations`
+    记着这个库跑过哪几版。原来那个版本每次启动全表重放 —— 能用（`PRAGMA` 自检所以幂等），
+    但没人知道库里是哪一版、下一步该跑什么，也没法先看看再跑。
+    """
+    from app.core import migrations
+
+    done = await migrations.run()
+    if done["applied"]:
+        log.info(
+            "应用了 %s 个迁移：%s",
+            len(done["applied"]),
+            "、".join(f"v{m['version']}" for m in done["applied"]),
+        )
 
 
 @asynccontextmanager

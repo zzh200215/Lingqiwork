@@ -578,10 +578,10 @@ async def gen() -> int:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # 副本是从真库拷的，`create_all` **不给老表加列** —— 必须走应用自己那条迁移。
-    # 这条裂缝（迁移无版本）就是 upgrade-plan 的 P0；这里只是不重复一份 DDL。
-    from app.main import _migrate  # noqa: SLF001
+    # 现在那条路有版本、能 dry-run、迁移前自动备份（`core/migrations.py`，W6）。
+    from app.core import migrations
 
-    await _migrate()
+    await migrations.run()
 
     model = providers.default_model_id() or ""
     print(f"  模型 {model}")

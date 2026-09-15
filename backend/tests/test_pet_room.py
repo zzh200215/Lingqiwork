@@ -19,27 +19,20 @@ import pytest
 
 sys.path.insert(0, ".")
 
-# 项目内 scratch（系统 temp 在某些沙箱里写不了），跑完自己删
-_TMP = Path(tempfile.mkdtemp(prefix="wb-room-", dir=Path(".").resolve()))
-_DB = _TMP / "room.db"
-_VAULT = _TMP / "vault"
-
-
-def _cleanup() -> None:
-    shutil.rmtree(_TMP, ignore_errors=True)
-
-
-atexit.register(_cleanup)
-
-# 必须在 app.* 导入之前：app.config 在导入时就把这些读成常量了
-os.environ["WB_DB_PATH"] = str(_DB)
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
-os.environ["WB_VAULT_DIR"] = str(_VAULT)
-os.environ["WB_DATA_DIR"] = str(_TMP / "data")
-
-from app.config import settings  # noqa: E402
+from app.config import VAULT_DIR, settings  # noqa: E402
 from app.core import pet  # noqa: E402
 from app.core import pet_room as pr  # noqa: E402
+
+# **跟着应用走**，不自己开一个库/一个 vault。
+#
+# 原来这个模块在 import 时写 `WB_DB_PATH = 自己的 room.db`，再用 `sqlite3` 直接往那儿写，
+# 而 `pet_room.room()` 读的是**应用引擎**指的那个库 —— 每文件一进程时两者恰好是同一个，
+# 所以 CI 一直绿；单进程里模块 import 早于任何测试，env 被前一个模块写的值占着，
+# 于是「写 A 读 B」，**12 条断言当场全错**。也就是说：它在 CI 里是**因为错误的原因**过的。
+#
+# 隔离现在由 `conftest._clean_sandbox`（每个模块开始时清空沙箱）提供。
+_DB = Path(settings.db_path)
+_VAULT = VAULT_DIR
 
 TZ = timezone(timedelta(hours=8))  # 本机偏移；测试里一律显式传，不依赖系统
 
@@ -55,6 +48,25 @@ _DDL = (
 )
 
 _TABLES = ("task_runs", "card_reviews", "habit_logs", "tutor_sessions", "pet_events")
+
+# 全量 schema 里「NOT NULL、没有**服务端**默认值、又不是主键」的列 —— 这个模块不关心它们，
+# 但必须给值。**从模型里推**而不是手写：手写就会一个一个撞（`card_id`、`grade`、`seconds`…）。
+#
+# 只看 `server_default`：`mapped_column(default=…)` 是 **Python 侧**默认值，**根本不进 DDL**，
+# 所以裸 sqlite3 INSERT 不给它照样 IntegrityError —— `card_reviews.seconds` 就是这么撞上的。
+def _required_for(table: str) -> dict:
+    from app.models import Base
+
+    out: dict[str, object] = {}
+    for col in Base.metadata.tables[table].columns:
+        if col.primary_key or col.nullable or col.server_default is not None:
+            continue
+        kind = str(col.type).upper()
+        out[col.name] = 0 if "INT" in kind else (0.0 if "FLOAT" in kind or "REAL" in kind else "")
+    return out
+
+
+_REQUIRED: dict[str, dict] = {t: _required_for(t) for t in _TABLES}
 
 
 def _db():
@@ -88,12 +100,23 @@ def _output(name: str, when: datetime, d: str = "deliver") -> Path:
 
 
 def _insert(table: str, **cols) -> None:
+    """插一行。**补上全量 schema 里 NOT NULL、又没默认值的那些列。**
+
+    这个模块以前自己造一份最小的表（`card_reviews (id, reviewed_at)` 之类），所以只给
+    关心的列就够。现在它跟应用共用沙箱库，表是**全量 schema**：缺 `card_id` / `grade` /
+    `task_id` / `topic` / `text` 会当场 IntegrityError。这里统一补最小必需值，免得每个
+    调用点各写一遍。顺带一提：以前那个 IntegrityError 会把连接连事务一起留在打开状态，
+    后面每条都变成「database is locked」（15 秒超时 × 若干条），所以下面用 try/finally。
+    """
+    cols = {**_REQUIRED.get(table, {}), **cols}
     conn = _db()
-    names = ", ".join(cols)
-    marks = ", ".join("?" for _ in cols)
-    conn.execute(f"INSERT INTO {table} ({names}) VALUES ({marks})", tuple(cols.values()))  # noqa: S608
-    conn.commit()
-    conn.close()
+    try:
+        names = ", ".join(cols)
+        marks = ", ".join("?" for _ in cols)
+        conn.execute(f"INSERT INTO {table} ({names}) VALUES ({marks})", tuple(cols.values()))  # noqa: S608
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # --- 门槛表本身：它是一份声明，改坏了要在这里被拦下 ------------------------------
@@ -355,15 +378,15 @@ def test_an_empty_room_says_empty_and_owns_nothing():
 
 
 def test_the_room_survives_a_database_with_no_tables(monkeypatch):
-    # 不用 pytest 的 tmp_path：那是系统 temp，本机沙箱里写不了（见文件头注释）
-    monkeypatch.setattr(settings, "db_path", _TMP / "brand-new.db")
+    # 用沙箱目录下一个**不存在**的库名就够，不用另开 scratch（系统 temp 本机写不了）
+    monkeypatch.setattr(settings, "db_path", _DB.parent / "brand-new.db")
     out = pr.room(now=datetime(2026, 9, 14, 12, 0, tzinfo=TZ), tz=TZ)
     assert out["empty"] is True
     assert pr.things() == []
 
 
 def test_the_room_survives_a_missing_vault(monkeypatch):
-    monkeypatch.setattr(pr, "VAULT_DIR", _TMP / "no-such-vault")
+    monkeypatch.setattr(pr, "VAULT_DIR", _VAULT.parent / "no-such-vault")
     assert pr.things() == []
 
 
