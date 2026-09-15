@@ -435,3 +435,98 @@ DONE problems=0
 （`qwen3.7-plus` 免费额度用完 403，以及脚本一开始没给 model_id）。模型
 `sensenova/sensenova-6.8-flash-lite`。
 
+---
+
+## 11. 实施记录 · P1 织网（W1，已完成）
+
+### 交付物
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/core/turn_eval.py`（新，~560 行） | 回合行为标尺：用例装载、`CHECKS` 确定性判分（8 类）、LLM 判分（回执是不是一行话）、跑一轮、`k/n` + Wilson、历史对比 |
+| `backend/evals/turns/deliver_report.json`（新） | 6 条用例，每条对着一个**实测到的缺陷**，且**每条都声明 vault 条件** |
+| `backend/app/models.py` | `TurnEvalRun`（scenario / scenario_sha / prompt_sha / total / deterministic / judged / seconds） |
+| `backend/app/eval_turns.py`（新） | CLI：`--list` / `--repeat` / `--no-judge` / `--max-calls`（上界超了就拒绝开跑） |
+| `backend/app/core/bootstrap.py`（新） | **建表 + 迁移的唯一入口**——见下面那条真缺口 |
+| `backend/tests/test_turn_eval.py`（新，23 条） | 判分逐条、阈值、`k/n` 与区间、vault 上下文隔离、清索引的闸 |
+
+### 它量的是什么（缺口一）
+
+`engine_eval` 盖「一次生成一份成文」，`evals` 盖「检索准不准」，而**用户每天真正在用的
+那条路——聊天的工具循环——一层都没盖**。八条确定性判分，每一条都对着一个实测到的缺陷：
+
+| 判分 | 对着的那个缺陷 |
+|---|---|
+| `not_saved` | 该落盘的回合一份都没落（22 轮里 2 轮声称存了却一次没调） |
+| `claims_a_save_without_one` | 说了「已存入产出」却没有回执（判定仍只有 `chat` 里那一份实现） |
+| `too_many_per_kind` | 一轮存 4 份（带「300 字左右」时 20 轮里 5 轮 ≥2 次 save） |
+| `receipt_path_missing` | 编造一个盘上不存在的回执路径（点开即 404） |
+| `duplicate_paths` | 同一个文件给两个链接（点开内容一样，多出来那条是谎话） |
+| `body_in_reply` | 落盘那轮的正文又摊回对话里（同一篇正文的第二份拷贝） |
+| `saved_when_asked_nothing` | 普通提问被塞成产出 |
+| `placeholder_reply` | 整条回复是一个空占位串 |
+
+**判定不重写**：`claims_a_save_without_one` 与 `_PLACEHOLDER_ONLY` 都直接调 `routers/chat`
+里那一份 —— 两份实现分叉的那天，「谎报率」这个数就没人敢信了。
+
+**统计出口是硬要求**：`k/n` + **Wilson 区间**，n 小的时候报告自己说「下不了结论」。
+
+### 第一次真跑就撞出三件事（全是真的）
+
+**一、用例必须声明 vault 条件（缺口五）。** 第一趟 `weekly-report` 没过，模型的回复是
+**正确的拒绝**：
+
+> 我这边没有这周的素材可以直接整理：知识库里搜「本周进展/周报/工作」都是空的……
+> 我不想凭空编一份周报给你——那东西进了产出区反而更难收拾。
+
+这正是 §2.2 缺口五量到的那件事（空 vault 0/4、有素材 15/16）。所以用例现在**每条都声明
+`vault`**，并且专门加了一条 `empty-vault-must-not-invent`（空 vault 下**不许编**）。
+不带上下文条件的「遵守率 X%」是误导——这一条现在写进了 fixture 的 `note` 里。
+
+**二、光在盘上放文件不算「有素材」。** 模型找材料走的是**产品自己的检索**，铺进 vault
+但不进索引，一个「有素材」的回合在它眼里仍然是空的。所以评测会**建一个临时向量库**、
+把铺进去的材料真的索引一遍（本地 embedder，不花钱）。修完之后 `weekly-report` 过了、
+判分 5/5。
+
+**三、清 vault 不够，还得清索引（我自己埋的 bug）。** 第二条修好之后
+`empty-vault-must-not-invent` 反而栽了：文件删了，但它的 chunk 还在向量库里，模型检索得到，
+于是照实存了一份周报——**而那条用例声明的上下文是「什么都没有」**。现在每条用例开跑前
+vault 和索引都重置。清索引**带一道闸**（认不出临时库就绝不下手）：误清用户自己的索引是
+不可恢复的，只能重建。
+
+### 一条真缺口：独立入口从来没有「把库弄到可用状态」
+
+第一次跑 CLI 报的是「`messages` 没有 artifacts_json」「没有 `turn_eval_runs` 这张表」——
+而真正的原因只是**这个库还没被初始化过**。`main.lifespan` 会做（建表 + 迁移），
+`migrate.py` 只做一半（只跑迁移），CLI 与 drill 两件都不做。现在收敛成
+`core/bootstrap.ensure_schema()` 一处，四个入口都走它。
+
+顺带修掉一处：`mcp` 保存产出后调 `indexer.index_file(dest)` 没传 `root`，而
+`index_file(root=VAULT_DIR)` 的默认值是**模块导入时绑死**的——任何临时换过 `VAULT_DIR`
+的调用方（评测、以后的恢复演练）都会拿到一句「not in the subpath of …」。现在显式传。
+
+### 验收：一条命令
+
+```
+$ python -m app.eval_turns deliver_report --model sensenova/sensenova-6.8-flash-lite
+
+deliver_report：6 条用例 × 1 遍 = 6 个回合
+上界估算：约 30 次模型调用（一条用例最多 4 轮 + 判分）
+
+回合 6 个 ｜ 一个 finding 都没有的 6 个
+确定性判分 6/6 = 100%   95% Wilson 61%–100%
+  区间太宽：这个样本量下**下不了结论**（要下结论得加用例或加 --repeat）
+回执一行话（LLM 判分）：5.0/5（n=1）
+耗时 203.1s ｜ 模型 sensenova/sensenova-6.8-flash-lite
+用例指纹 6f0309a4780f ｜ 输出规矩指纹 d583da7e7f2f
+```
+
+**这条基线要连它的上下文一起读**：6 条用例、一遍、单个模型。**100% 不等于「没问题」**——
+区间 61%–100%，它排除的是「几乎不可能」，没有排除「四分之三」。要下结论得加用例或加
+`--repeat`（区间随 n 变窄这条性质有测试钉着）。
+
+> 成本交代：这一轮真调约 **90 次**（4 次完整跑：第一趟 30 次撞出「用例没声明上下文」，
+> 第二趟 30 次撞出「没建索引」，第三趟 30 次撞出「没清索引」，最后一次 30 次通过）。
+> 三次白跑全部是**产品/测试契约的问题**被验收抓出来，不是脚本手滑 —— 这正是「先织网」
+> 这一轮的价值。模型 `sensenova/sensenova-6.8-flash-lite`。
+
