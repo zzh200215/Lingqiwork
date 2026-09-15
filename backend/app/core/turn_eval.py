@@ -482,7 +482,6 @@ def _scratch_index():
     下一次取就是一个全新的库；跑完还原、临时目录删掉。
     **不碰用户自己的索引**：那些 chunk 一旦进去就再也分不出是评测的还是真的了。
     """
-    import shutil
     import tempfile
 
     from app.config import settings
@@ -495,9 +494,28 @@ def _scratch_index():
     try:
         yield tmp
     finally:
-        indexer._client = None  # noqa: SLF001 - 先把临时 client 丢掉，再删目录
+        indexer._client = None  # noqa: SLF001 - 先把临时 client 丢掉
         indexer._client, settings.chroma_path = old  # noqa: SLF001
-        shutil.rmtree(tmp, ignore_errors=True)
+        _rmtree_retry(tmp)
+
+
+def _rmtree_retry(path: Path, tries: int = 3) -> None:
+    """删临时目录，带重试。**Windows 上 chroma 会多握一会儿文件句柄**。
+
+    不重试的话每跑一次评测就在系统 temp 里留一个几十 MB 的库（实测留下了 29 个）。
+    删不掉也不报错 —— 一个留在 temp 里的目录不值得让评测失败，但会记一条 debug。
+    """
+    import gc
+    import shutil
+
+    for i in range(max(1, tries)):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError:
+            gc.collect()
+            if i == tries - 1:
+                log.debug("turn eval: 临时向量库没删掉（留在 %s）", path)
 
 
 @contextmanager

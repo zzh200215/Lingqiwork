@@ -23,24 +23,37 @@ except Exception:  # noqa: BLE001 - 老 Python 或被重定向时无所谓
 CALLS_PER_CASE = 4
 
 
-async def _main(args) -> int:
-    from app.core import bootstrap, turn_eval
+async def _list() -> int:
+    """列出有哪些场景。**只读用例文件，不碰数据库、不碰 vault、不花一分钱。**"""
+    from app.core import turn_eval
 
-    # 独立入口先保证库是能用的：建表 + 迁移。少了这一步，报出来的会是一句
-    # 「messages 没有 artifacts_json」——而真正的原因只是库没初始化过（实测就是这么栽的）。
-    await bootstrap.ensure_schema()
+    names = turn_eval.scenarios()
+    if not names:
+        print("没有回合用例（backend/evals/turns/*.json）")
+        return 0
+    for k in names:
+        fx = turn_eval.load_scenario(k)
+        print(f"{k}  {len(fx['cases'])} 条用例  sha {fx['sha']}")
+        if fx["note"]:
+            print(f"  {fx['note'][:160]}")
+    return 0
+
+
+async def _main(args) -> int:
+    from app.core import turn_eval
 
     if args.list:
-        names = turn_eval.scenarios()
-        if not names:
-            print("没有回合用例（backend/evals/turns/*.json）")
-            return 0
-        for k in names:
-            fx = turn_eval.load_scenario(k)
-            print(f"{k}  {len(fx['cases'])} 条用例  sha {fx['sha']}")
-            if fx["note"]:
-                print(f"  {fx['note'][:160]}")
-        return 0
+        # **`--list` 不碰库**：它只读用例文件。原来这里先跑 `ensure_schema()` —— 而 CLI 默认
+        # 数据目录就是**真库**，于是「列一下有哪些用例」这个只读动作顺手把真库初始化了
+        # （实测就这么发生过一次：schema_migrations 多了一行、几列被补上）。
+        # 只加列不动数据，但那是**未声明的写**，不该由一条读命令触发。
+        return await _list()
+
+    # 真要跑了才保证库可用（建表 + 迁移）。少了这一步，报出来的会是一句
+    # 「messages 没有 artifacts_json」——而真正的原因只是库没初始化过。
+    from app.core import bootstrap
+
+    await bootstrap.ensure_schema()
 
     if not args.scenario:
         print("要给一个场景名（用 --list 看有哪些）")

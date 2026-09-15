@@ -339,6 +339,28 @@ def test_reset_index_refuses_to_touch_the_real_store(monkeypatch):
     te._reset_index()  # 当前 chroma 路径不是评测的临时库 → 必须在拿到 client 之前就返回
 
 
+async def test_the_list_command_never_touches_the_database(monkeypatch):
+    """`--list` 是只读命令：它只读用例文件。
+
+    这条盯的是一次**真发生过**的事故：CLI 默认数据目录就是真库，而 `--main` 原来一进来
+    就 `ensure_schema()` —— 于是「列一下有哪些用例」顺手把真库初始化了（schema_migrations
+    多一行、几列被补上）。只加列不动数据行，但那是**未声明的写**，不该由一条读命令触发。
+    """
+    import argparse
+
+    from app import eval_turns
+    from app.core import bootstrap
+
+    async def boom() -> None:
+        raise AssertionError("只读命令不该初始化数据库")
+
+    monkeypatch.setattr(bootstrap, "ensure_schema", boom)
+    args = argparse.Namespace(
+        list=True, scenario="", model="", repeat=1, no_judge=False, max_calls=200
+    )
+    assert await eval_turns._main(args) == 0
+
+
 def test_the_run_model_has_the_columns_the_plan_asked_for():
     cols = set(TurnEvalRun.__table__.columns.keys())
     for c in ("scenario_sha", "prompt_sha", "model_id", "total", "deterministic", "judged", "seconds", "detail_json"):
