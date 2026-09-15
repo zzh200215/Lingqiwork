@@ -235,6 +235,8 @@ export interface PromptRegistryEntry {
   /** golden set 有几条用例；0 = 还没接线，跑不了对照 */
   cases: number
   fixture: string
+  /** 领域（Q3 形态）：写在这条提示词的 golden set 里，没标就是 '' */
+  domain: string
   /** 已登记内容最近一次跑出的成绩；null = 没有基线 */
   baseline: {
     at: string
@@ -277,6 +279,8 @@ export interface PromptRegistryEntryDetail {
   content: string
   fixture: string
   note: string
+  /** 领域（Q3 形态）：'教学' 这种短词，空 = 还没归类 */
+  domain: string
   cases: PromptCaseSpec[]
   checks: PromptCheckSpec[]
   runs: PromptCheckRun[]
@@ -608,6 +612,8 @@ export interface EvalItem {
   question: string
   expected_source: string
   note: string
+  /** 领域（Q3 形态）：分组用的标签，'' = 还没归类 */
+  domain: string
 }
 
 export interface EvalCaseResult {
@@ -1112,6 +1118,8 @@ export interface TutorEndResult {
   id: number
   verdict: string
   concept: string
+  /** 领域（Q3 形态）：和概念一起提取的分组词，'' = 没归到某个领域 */
+  domain: string
   aliases: string
   stuck: string
   transfer: string
@@ -1233,6 +1241,8 @@ export interface TutorSessionRow {
   id: number
   topic: string
   concept: string
+  /** 领域（Q3 形态）：这场会话归一到的短词，'' = 没归到某个领域 */
+  domain: string
   verdict: '' | 'got' | 'half' | 'useless'
   stuck: string
   recalled: boolean
@@ -1454,6 +1464,8 @@ export interface PetSkillCard {
   purpose: string
   kind: string
   sha: string
+  /** 领域（Q3 形态）：卡片按它进对应那根枝；'' = 这套用例还没归类 */
+  domain: string
   passed: number
   cases: number
   rate: number
@@ -1462,6 +1474,67 @@ export interface PetSkillCard {
   at: string
   model_id: string
   stale: boolean
+}
+
+/** 形态（Q3）：一个领域的三个数。三样都够 → `grown`。
+ *
+ *  **只由可验证的能力算**：检索质量、已掌握的概念数、技能卡的通过率。**不是**上传量——
+ *  这个仓库不微调，堆文件只改变检索覆盖，堆出来的形态是纯装饰。
+ *
+ *  `enough === false` 的那一样只说「样本不足」，界面上**不许写成「还差 N」**：那正是
+ *  这个项目一直在躲的欠账口吻。 */
+export interface FormRetrieval {
+  enough: boolean
+  /** 这次真的算进去的题数（最近一次覆盖够的评测里，这个领域的那几条） */
+  cases: number
+  /** 这个领域一共标了多少条源（`cases` 可能更少：评测是过去跑的） */
+  labelled: number
+  hits: number
+  hit_rate: number | null
+  ci_low: number | null
+  ci_high: number | null
+  faithfulness: number | null
+  /** 忠实度是判过几条算出来的——只判了 1 条时，那个平均不是「平均水平」 */
+  judged: number
+  run_id: number | null
+  at: string | null
+  note: string
+}
+
+export interface FormConcepts {
+  enough: boolean
+  mastered: number
+  seen: number
+  names: string[]
+  at: string
+}
+
+export interface FormSkill {
+  name: string
+  purpose: string
+  passed: number
+  cases: number
+  rate: number
+  ci_low: number
+  ci_high: number
+  at: string
+  stale: boolean
+  enough: boolean
+}
+
+export interface FormDomain {
+  domain: string
+  retrieval: FormRetrieval
+  concepts: FormConcepts
+  skills: FormSkill[]
+  /** 三样都够。小屋只摆长出来的那些 */
+  grown: boolean
+}
+
+export interface FormReport {
+  domains: FormDomain[]
+  min_cases: number
+  min_concepts: number
 }
 
 /** 零柒的小屋：攒下的东西（道具 / 徽章）、架上的真产出、今天喂了什么、学会的技能。
@@ -1477,6 +1550,8 @@ export interface PetRoom {
   today: { meals: PetMeal[]; date: string }
   /** 它学会的技能（Q2）：只收跑过对照的提示词 */
   skills: PetSkillCard[]
+  /** 它长出的枝（Q3）：**只收三样都够的领域**。少了哪一样都不进屋 */
+  form: FormDomain[]
   empty: boolean
 }
 
@@ -1596,6 +1671,16 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       `/api/prompts/registry/${encodeURIComponent(key)}/cases/${encodeURIComponent(caseId)}`,
       { method: 'DELETE' }
     ),
+  /** 给一套 golden set 标一个领域（Q3 形态的分组键；写的是用例文件，不是提示词）。 */
+  setPromptDomain: (key: string, domain: string) =>
+    request<{ key: string; domain: string }>(
+      `/api/prompts/registry/${encodeURIComponent(key)}/domain`,
+      { method: 'POST', body: JSON.stringify({ domain }) }
+    ),
+
+  // ---------- 形态（Q3）----------
+  /** 全部领域 + 各自的三个数（只读）。小屋只要长出来的，工作页要全部。 */
+  form: () => request<FormReport>('/api/form'),
 
   listSkills: () => request<{ dir: string; skills: SkillItem[] }>('/api/skills'),
   installSkill: (url: string, name = '', overwrite = false) =>

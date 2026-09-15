@@ -22,6 +22,7 @@ vi.mock('./api', () => ({
       shelf: [],
       today: { meals: [], date: '2026-09-14' },
       skills: [],
+      form: [],
       empty: true,
     }),
   },
@@ -110,6 +111,7 @@ beforeEach(() => {
     id: 1,
     verdict: 'got',
     concept: 'asyncio 事件循环',
+    domain: 'asyncio',
     aliases: '',
     stuck: '',
     transfer: '',
@@ -122,6 +124,7 @@ beforeEach(() => {
     shelf: [],
     today: { meals: [], date: '2026-09-14' },
     skills: [],
+    form: [],
     empty: true,
   })
   // 一轮完整的 SSE：delta 然后 done。少了 done 帧，`streamTutorSay` 会判定

@@ -8,7 +8,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import RoomPane from './RoomPane'
-import type { PetMeal, PetRoom, PetSkillCard, PetThing, WorkOutput } from './api'
+import type { FormDomain, PetMeal, PetRoom, PetSkillCard, PetThing, WorkOutput } from './api'
 
 vi.mock('./api', () => ({ api: { petRoom: vi.fn() } }))
 import { api } from './api'
@@ -59,6 +59,7 @@ const SKILL: PetSkillCard = {
   purpose: '费曼反转教学：用户讲，模型当那个没搞懂的学生 + 考官',
   kind: 'prompt',
   sha: 'e9fd94ec9044',
+  domain: '教学',
   passed: 2,
   cases: 8,
   rate: 0.25,
@@ -69,12 +70,48 @@ const SKILL: PetSkillCard = {
   stale: false,
 }
 
+/** 一根枝（Q3）：三样都站住的领域。 */
+const BRANCH: FormDomain = {
+  domain: '教学',
+  retrieval: {
+    enough: true,
+    cases: 3,
+    labelled: 3,
+    hits: 3,
+    hit_rate: 1.0,
+    ci_low: 0.44,
+    ci_high: 1.0,
+    faithfulness: 4.5,
+    judged: 3,
+    run_id: 7,
+    at: '2026-09-15T10:00:00+00:00',
+    note: '',
+  },
+  concepts: { enough: true, mastered: 2, seen: 3, names: ['asyncio 事件循环'], at: '2026-09-15T10:00:00+00:00' },
+  skills: [
+    {
+      name: 'FEYNMAN_PROMPT',
+      purpose: '费曼反转教学',
+      passed: 3,
+      cases: 8,
+      rate: 0.375,
+      ci_low: 0.14,
+      ci_high: 0.69,
+      at: '2026-09-15T10:00:00+00:00',
+      stale: false,
+      enough: true,
+    },
+  ],
+  grown: true,
+}
+
 const ROOM: PetRoom = {
   things: [STACK, thing({})],
   carried: STACK,
   shelf: SHELF,
   today: { meals: [MEAL], date: '2026-09-14' },
   skills: [SKILL],
+  form: [BRANCH],
   empty: false,
 }
 
@@ -84,6 +121,7 @@ const EMPTY: PetRoom = {
   shelf: [],
   today: { meals: [], date: '2026-09-14' },
   skills: [],
+  form: [],
   empty: true,
 }
 
@@ -224,5 +262,43 @@ describe('RoomPane · 它学会的技能', () => {
     const { container } = renderPane()
     await waitFor(() => expect(container.querySelector('[data-room-skill]')).toBeTruthy())
     expect(screen.getByText('基线过期')).toBeTruthy()
+  })
+})
+
+// Q3 · 形态：一根枝要三样可验证的东西在**同一个领域**里都站得住。
+describe('RoomPane · 它长出的枝', () => {
+  it('摆出那个领域和三个数，并**写明它没学会它**', async () => {
+    const { container } = renderPane()
+    const branch = await waitFor(() => {
+      const el = container.querySelector('[data-room-form="教学"]')
+      if (!el) throw new Error('还没有长出枝')
+      return el as HTMLElement
+    })
+    expect(branch.textContent).toContain('教学')
+    expect(branch.textContent).toContain('检索 3/3') // 命中 + 样本量
+    expect(branch.textContent).toContain('44–100%') // 区间照直写
+    expect(branch.textContent).toContain('忠实度 4.5/5')
+    expect(branch.textContent).toContain('搞懂 2 个概念')
+    expect(branch.textContent).toContain('技能卡 3/8')
+    // 最要紧的一句：「检索得住」不是「学会了」
+    expect(branch.textContent).toContain('它没有学会教学')
+    expect(branch.textContent).toContain('没有一样测过它对你这类问题的判断')
+  })
+
+  it('没有枝的时候说清楚路径：领域是你在证据上写的一个短词', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue(EMPTY)
+    renderPane()
+    expect(await screen.findByText('它长出的枝')).toBeTruthy()
+    expect(screen.getByText(/还没有长出枝/)).toBeTruthy()
+    expect(screen.getByText(/领域是你在证据上自己写的一个短词/)).toBeTruthy()
+    expect(screen.queryByText(/还差/)).toBeNull()
+  })
+
+  it('只摆长出来的那几根——没长成的领域不进屋', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue({ ...ROOM, form: [] })
+    const { container } = renderPane()
+    await screen.findByText('它长出的枝')
+    expect(container.querySelector('[data-room-form]')).toBeNull()
+    expect(screen.getByText(/还没有长出枝/)).toBeTruthy()
   })
 })

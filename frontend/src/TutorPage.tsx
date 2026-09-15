@@ -183,7 +183,7 @@ export default function TutorPage() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [verdict, setVerdict] = useState<'' | 'got' | 'half' | 'useless'>('')
-  const [ended, setEnded] = useState<{ concept: string; stuck: string; transfer: string; nearby: TutorEndResult['material_nearby'] } | null>(null)
+  const [ended, setEnded] = useState<{ concept: string; domain: string; stuck: string; transfer: string; nearby: TutorEndResult['material_nearby'] } | null>(null)
   const [rows, setRows] = useState<TutorSessionRow[]>([])
   const [learnMap, setLearnMap] = useState<TutorLearningMap | null>(null)
   // 展开中的概念（看它历次自评与卡点的演进）；一次只展开一个，右栏窄
@@ -869,7 +869,7 @@ export default function TutorPage() {
       try {
         const got = await api.tutorEnd(sid, v)
         setVerdict(v)
-        setEnded({ concept: got.concept, stuck: got.stuck, transfer: got.transfer ?? '', nearby: got.material_nearby ?? [] })
+        setEnded({ concept: got.concept, domain: got.domain ?? '', stuck: got.stuck, transfer: got.transfer ?? '', nearby: got.material_nearby ?? [] })
         refreshRail()
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e))
@@ -892,7 +892,7 @@ export default function TutorPage() {
       setTurns(d.turns)
       setHits([])
       setVerdict(d.verdict)
-      setEnded(d.verdict ? { concept: d.concept, stuck: d.stuck, transfer: '', nearby: [] } : null)
+      setEnded(d.verdict ? { concept: d.concept, domain: d.domain ?? '', stuck: d.stuck, transfer: '', nearby: [] } : null)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
@@ -2428,6 +2428,7 @@ export default function TutorPage() {
                   {ended?.concept ? (
                     <p className="truncate text-[11px] text-neutral-500">
                       {ended.concept}
+                      {ended.domain ? ` · 领域：${ended.domain}` : ''}
                       {ended.stuck ? ` · 卡点：${ended.stuck}` : ''}
                     </p>
                   ) : null}

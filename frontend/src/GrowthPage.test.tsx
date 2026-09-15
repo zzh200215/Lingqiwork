@@ -51,6 +51,7 @@ const MILESTONE: PetRoom = {
   shelf: [],
   today: { meals: [], date: '2026-09-14' },
   skills: [],
+  form: [],
   empty: false,
 }
 
@@ -60,6 +61,7 @@ const NO_ROOM: PetRoom = {
   shelf: [],
   today: { meals: [], date: '2026-09-14' },
   skills: [],
+  form: [],
   empty: true,
 }
 

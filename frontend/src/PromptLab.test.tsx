@@ -18,6 +18,7 @@ vi.mock('./api', () => ({
     checkPrompt: vi.fn(),
     addPromptCase: vi.fn(),
     removePromptCase: vi.fn(),
+    setPromptDomain: vi.fn(),
   },
 }))
 import { api } from './api'
@@ -33,6 +34,7 @@ function entry(patch: Partial<PromptRegistryEntry> = {}): PromptRegistryEntry {
     drifted: false,
     cases: 8,
     fixture: 'feynman.json',
+    domain: '',
     baseline: {
       at: '2026-09-15T10:00:00',
       passed: 6,
@@ -56,6 +58,7 @@ const DETAIL: PromptRegistryEntryDetail = {
   content: '你在「费曼模式」里扮演一个聪明但没搞懂的 学生 + 考官。',
   fixture: 'feynman.json',
   note: '第一条对照',
+  domain: '教学',
   cases: [
     {
       id: 'term-dropping',
@@ -386,5 +389,47 @@ describe('PromptLab · 喂食', () => {
     fireEvent.click(container.querySelector('[data-lab-feed-check="no_list"]') as HTMLElement)
     fireEvent.click(container.querySelector('[data-lab-feed-save]') as HTMLElement)
     expect(await screen.findByText(/至少勾一条断言/)).toBeTruthy()
+  })
+})
+
+// Q3 · 领域：技能那一边**唯一**标领域的地方。
+//
+// 形态（`/work?tab=form`）按 golden set 的 `domain` 把这套用例算进对应那根枝；这里写空
+// 就等于这个领域没有技能。和喂食一样，写的是**用例文件**，提示词一个字节都不动。
+describe('PromptLab · 领域', () => {
+  /** 领域框（golden set 表头上那个）。等它真的出来再返回，别拿 null 去断言。 */
+  async function domainBox(container: HTMLElement) {
+    fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
+    await screen.findByText('golden set 2 条')
+    return (await waitFor(() => {
+      const el = container.querySelector('[data-lab-domain]')
+      if (!el) throw new Error('领域框还没出来')
+      return el as HTMLInputElement
+    })) as HTMLInputElement
+  }
+
+  it('显示这套 golden set 的领域，改了就写回用例文件', async () => {
+    vi.mocked(api.setPromptDomain).mockResolvedValue({ key: 'FEYNMAN_PROMPT', domain: '法律' })
+    const { container } = renderLab()
+    const input = await domainBox(container)
+    await waitFor(() => expect(input.value).toBe('教学'))
+
+    fireEvent.change(input, { target: { value: '法律' } })
+    fireEvent.blur(input)
+    await waitFor(() =>
+      expect(api.setPromptDomain).toHaveBeenCalledWith('FEYNMAN_PROMPT', '法律')
+    )
+  })
+
+  it('没改就不写盘——只是点进点出不该动文件', async () => {
+    const { container } = renderLab()
+    const input = await domainBox(container)
+    await waitFor(() => expect(input.value).toBe('教学'))
+
+    // 比的是**这次 blur 前后**的调用数，所以上一个用例留下了什么记录都不影响结论
+    const before = vi.mocked(api.setPromptDomain).mock.calls.length
+    fireEvent.blur(input)
+    await Promise.resolve()
+    expect(vi.mocked(api.setPromptDomain).mock.calls.length).toBe(before)
   })
 })

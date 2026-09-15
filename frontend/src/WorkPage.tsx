@@ -25,6 +25,7 @@ import {
 import AttachToThread from './AttachToThread'
 import EmptyHint from './EmptyHint'
 import FeedbackButtons from './FeedbackButtons'
+import FormPane from './FormPane'
 import { useDeepLink } from './deeplink'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
 import { KIND_BADGE } from './OutputCard'
@@ -223,17 +224,17 @@ export default function WorkPage() {
 
   // 标签挂在 ?tab= 上：/threads 的旧链接重定向过来带的就是 tab=follow；
   // 工作流深链 ?task=7 没写 tab，直接落「引擎」才对得上。
-  // `lab`（Q1 的提示词对照台）刻意放在**工作模块**里：提示词工程、数据集、编排都是
-  // 「非编程的那部分工作」，它们和产出、工作流是同一张桌子上的事。
+  // `lab`（Q1 的提示词对照台）和 `form`（Q3 的形态）刻意放在**工作模块**里：
+  // 提示词工程、数据集、编排都是「非编程的那部分工作」，它们和产出、工作流是同一张桌子上的事。
   const [params, setParams] = useSearchParams()
   const tabParam = params.get('tab')
-  const tab: 'output' | 'engine' | 'follow' | 'lab' =
-    tabParam === 'engine' || tabParam === 'follow' || tabParam === 'lab'
+  const tab: 'output' | 'engine' | 'follow' | 'lab' | 'form' =
+    tabParam === 'engine' || tabParam === 'follow' || tabParam === 'lab' || tabParam === 'form'
       ? tabParam
       : params.get('task')
         ? 'engine'
         : 'output'
-  const setTab = (t: 'output' | 'engine' | 'follow' | 'lab') =>
+  const setTab = (t: 'output' | 'engine' | 'follow' | 'lab' | 'form') =>
     setParams(
       (p) => {
         const n = new URLSearchParams(p)
@@ -551,6 +552,7 @@ export default function WorkPage() {
             ['output', '产出'],
             ['engine', '引擎'],
             ['lab', '实验室'],
+            ['form', '形态'],
             ['follow', '跟进'],
           ] as const
         ).map(([k, label]) => (
@@ -954,6 +956,7 @@ export default function WorkPage() {
 
       {tab === 'follow' ? <ThreadsPage chromeless /> : null}
       {tab === 'lab' ? <PromptLab /> : null}
+      {tab === 'form' ? <FormPane /> : null}
     </PageShell>
   )
 }

@@ -12,7 +12,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { api, type PetMeal, type PetRoom, type PetSkillCard, type PetThing } from './api'
+import { api, type FormDomain, type PetMeal, type PetRoom, type PetSkillCard, type PetThing } from './api'
 import EmptyHint from './EmptyHint'
 import { ago, isFresh } from './reltime'
 
@@ -88,6 +88,59 @@ function Skill({ s, now }: { s: PetSkillCard; now: number }) {
         )}
       </div>
     </Link>
+  )
+}
+
+/** 一根枝（Q3 形态）：三样可验证的东西都站住的领域。
+ *
+ *  卡上只有三个数和它们的样本量。**必须写出「它没学会它」**——「检索得住」和「懂了」
+ *  是两件事，把前者讲成后者是这个功能最容易撒的那个谎。这句话写在这里、不写在后端，
+ *  是因为它是一句人话，而事实（几条命中、区间多宽）已经由 `/api/form` 给全了。 */
+function Branch({ b }: { b: FormDomain }) {
+  const r = b.retrieval
+  const parts = [
+    r.hit_rate == null
+      ? `检索 ${r.hits}/${r.cases}`
+      : `检索 ${r.hits}/${r.cases}（${Math.round(r.hit_rate * 100)}%，区间 ${Math.round(
+          (r.ci_low ?? 0) * 100
+        )}–${Math.round((r.ci_high ?? 1) * 100)}%）`,
+    `搞懂 ${b.concepts.mastered} 个概念`,
+    b.skills.length > 0
+      ? `技能卡 ${b.skills.map((s) => `${s.passed}/${s.cases}`).join('、')}`
+      : '',
+  ].filter(Boolean)
+
+  return (
+    <div
+      data-room-form={b.domain}
+      className="rounded-xl border border-emerald-200 bg-emerald-50/40 px-3 py-2.5 dark:border-emerald-500/30 dark:bg-emerald-500/5"
+    >
+      <div className="flex items-baseline gap-2">
+        <span className="text-lg leading-none">🌿</span>
+        <span className="truncate text-sm font-medium text-neutral-700 dark:text-neutral-200">
+          {b.domain}
+        </span>
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+        {parts.map((p) => (
+          <span key={p}>{p}</span>
+        ))}
+      </div>
+      {r.faithfulness != null && r.judged > 0 ? (
+        <div className="mt-0.5 text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+          忠实度 {r.faithfulness}/5（判过 {r.judged} 条）
+        </div>
+      ) : null}
+      <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+        它没有学会{b.domain}。这三个数说的是「在你的材料里找得到、讲得有据、这一条跑通过」
+        ——没有一样测过它对你这类问题的判断。
+      </p>
+      {b.concepts.names.length > 0 ? (
+        <div className="mt-1 truncate text-[10px] text-neutral-400 dark:text-neutral-500">
+          搞懂的是：{b.concepts.names.join('、')}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -225,6 +278,32 @@ export default function RoomPane() {
           <div data-room-skills className="grid gap-2 sm:grid-cols-2">
             {room.skills.map((s) => (
               <Skill key={s.name} s={s} now={now} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 它长出的枝（Q3 形态）：三样都够的领域。**差一样就不长**——一个数好看不算能力。 */}
+      <section>
+        <div className="mb-2 flex items-baseline gap-2">
+          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+            它长出的枝
+          </h2>
+          <div className="flex-1" />
+          <Link to="/work?tab=form" className="text-xs text-violet-500 hover:underline">
+            看全部领域
+          </Link>
+        </div>
+        {room.form.length === 0 ? (
+          <p className="text-sm text-neutral-400 dark:text-neutral-500">
+            还没有长出枝。一根枝要三样在同一个领域里都有足够的证据：检索得住的命中率、
+            搞懂过的概念、跑通过的技能卡。领域是你在证据上自己写的一个短词——样例题上、
+            教学会话上、实验室那套用例上，只写在一个地方还不算。
+          </p>
+        ) : (
+          <div data-room-form-list className="grid gap-2 sm:grid-cols-2">
+            {room.form.map((b) => (
+              <Branch key={b.domain} b={b} />
             ))}
           </div>
         )}

@@ -83,6 +83,10 @@ export default function PromptLab() {
     { open: false, user: '', intent: '', checks: [] }
   )
   const [feedMsg, setFeedMsg] = useState('')
+  // 领域（Q3 形态）：这套用例测的是哪个领域。写进 golden set 文件（跟着进 git），
+  // 技能卡按它进对应的枝——所以这里是**唯一**给技能那一边标领域的地方。
+  const [domain, setDomain] = useState('')
+  const [domainMsg, setDomainMsg] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -117,6 +121,26 @@ export default function PromptLab() {
   useEffect(() => {
     if (wantKey && list && !key) void openKey(wantKey)
   }, [wantKey, list, key, openKey])
+
+  // 换一条提示词 / 重跑之后，领域框跟着那套 golden set 走
+  useEffect(() => {
+    setDomain(detail?.domain ?? '')
+    setDomainMsg('')
+  }, [detail])
+
+  /** 给这套 golden set 标领域（写的是用例文件，提示词一个字节都不动）。 */
+  const saveDomain = useCallback(async () => {
+    if (!key) return
+    setErr(null)
+    try {
+      const r = await api.setPromptDomain(key, domain)
+      setDomainMsg(r.domain ? `领域：${r.domain}` : '已清掉领域')
+      setDetail(await api.promptEntry(key))
+      await load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [key, domain, load])
 
   /** 喂一条用例：改动落在 `backend/evals/prompts/*.json` 里，所以界面明说要提交。 */
   const submitFeed = useCallback(async () => {
@@ -282,6 +306,25 @@ export default function PromptLab() {
                 <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
                   golden set {detail.cases.length} 条
                 </span>
+                <input
+                  data-lab-domain
+                  value={domain}
+                  onChange={(e) => setDomain(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void saveDomain()
+                  }}
+                  onBlur={() => {
+                    if (domain !== (detail.domain ?? '')) void saveDomain()
+                  }}
+                  placeholder="领域"
+                  title="这套用例测的是哪个领域。形态（工作页「形态」标签）按它把这套用例算进对应的枝——空 = 还没归类。同一个领域要写同一个词。"
+                  className="w-20 rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-[10px] text-neutral-600 outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
+                />
+                {domainMsg ? (
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                    {domainMsg}
+                  </span>
+                ) : null}
                 <div className="flex-1" />
                 <span className="text-[10px] text-neutral-400">{detail.fixture}</span>
                 <button
@@ -302,7 +345,7 @@ export default function PromptLab() {
                   className="space-y-2 border-b border-neutral-100 bg-violet-50/40 px-3 py-2.5 dark:border-neutral-800 dark:bg-violet-500/5"
                 >
                   <p className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
-                    喂的是**用例**：一次真实输入 + 一句「它当时应该怎样」+ 它必须满足的断言。
+                    喂的是用例：一次真实输入 + 一句「它当时应该怎样」+ 它必须满足的断言。
                     改动写进 <span className="font-mono">{detail.fixture}</span>（进 git，可审可回滚）
                     ——提示词本身一个字节都不动。
                   </p>
