@@ -13,6 +13,8 @@ vault/
 wb-*/
 .smoke*/
 .playwright-mcp/
+# 一次性的验证脚本与截图（每轮的 scratch；留作证据，但不进版本库）
+.tmp-*/
 
 # Node handled by frontend/.gitignore
 
