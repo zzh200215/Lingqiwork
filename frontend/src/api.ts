@@ -200,6 +200,44 @@ export interface AgentPreset {
   enabled: boolean
 }
 
+/** Q4 调度台：一步的状态与它能点的动作。**状态与动作都由后端算**（界面不自己推）。 */
+export interface DispatchStep {
+  index: number
+  task_id: number
+  name: string
+  /** running / awaiting / ok / error / rejected / idle / blocked / off */
+  state: string
+  state_label: string
+  blocked_by?: number | null
+  who: string
+  model_id: string
+  mode: string
+  run_id?: number | null
+  error?: string
+  grounded?: number | null
+  require_approval?: boolean
+  next_task_id?: number | null
+  /** 这一步能点的按钮（**由后端算**：awaiting 给 approve+reject，其余给 run）。 */
+  actions?: { kind: 'run' | 'approve' | 'reject'; task_id?: number; run_id?: number; label: string }[]
+}
+
+export interface DispatchChain {
+  root_id: number
+  name: string
+  length: number
+  steps: DispatchStep[]
+  stuck_at?: DispatchStep | null
+  needs_attention: boolean
+  enabled: boolean
+}
+
+export interface DispatchBoard {
+  chains: DispatchChain[]
+  counts: { chains: number; steps: number; needs_attention: number; running: number }
+  states: Record<string, string>
+  broadcast: string
+}
+
 export interface Message {
   id: number
   role: 'user' | 'assistant' | 'system'
@@ -2000,6 +2038,8 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     ),
   listTaskTools: () => request<TaskTool[]>('/api/tasks/tools'),
   listTaskRuns: (id: number) => request<TaskRunItem[]>(`/api/tasks/${id}/runs`),
+  /** Q4 调度台：确定性编排的看板（状态全部由后端从 tasks/task_runs 算出来） */
+  dispatch: (limit = 20) => request<DispatchBoard>(`/api/dispatch?limit=${limit}`),
   parseTask: (text: string) =>
     request<{ cron: string; name: string; prompt: string }>('/api/tasks/parse', {
       method: 'POST',
