@@ -255,6 +255,8 @@
 
 ### W7. 模型画像与 per-model 策略
 
+> **W7 已完成**，实施记录见 **§15**（含「没有基线的画像不生效」这条纪律怎么落成代码）。
+
 **问题**：同一个提示词喂所有模型，但实测行为差异巨大：flash-lite 需要把规矩提到 system 层
 且仍会谎报/循环;deepseek-v4-pro 限流且输出不完整;qwen 另配一套。
 
@@ -856,4 +858,80 @@ plan 给了三条：服务端裁剪 / 单次受限修订 / 预算内生成。**�
 cosine 自然全是 0.00（我当场把那 11 条含糊用例的相似度打出来，全是 0.000，才看出不对）。
 修法是：**注入进来的 `embed_fn` 一律不缓存**，并加一条回归测试钉住。
 教训与 §11 / §12 两条同源：**「量出来一个不好看的数」之前，先怀疑尺子。**
+
+
+---
+
+## 15. 实施记录 · P3 优化之 W7（已完成）
+
+### 交付物
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/models.py` | `ModelProfile`（per-model 策略 + 它被认可时的那条基线）、`ModelProfileChange`（**append-only** 的改动记录） |
+| `backend/app/core/migrations.py` | **迁移 v3**：两张新表（`create` + `checkfirst`，老库补齐、新库空操作，但**照样记版本号**） |
+| `backend/app/core/model_profiles.py`（新） | 默认值 / 字段校验 / `effective_from` / `effective` / `in_use` / `save` / `bless` / `baseline_status` / `history` |
+| `backend/app/routers/profiles.py`（新） | `GET /api/model-profiles`、`PUT /{model}`、`POST /{model}/baseline`、`GET /{model}/history` |
+| `backend/app/model_check.py`（新 CLI） | `--list`（**只读**）/ `--set` / `--bless` / `--history` |
+| `backend/app/core/llm.py` | 每轮的 temperature 走 contextvar（见下面那条教训）；可选参数被 provider 拒了就逐个丢掉重试 |
+| `backend/app/routers/chat.py` | 画像决定 `give_output_rule` / `max_rounds` / `temperature`，并把「用的是哪份策略、生不生效」记进 `quality.profile` |
+| 测试 | `test_model_profiles.py`（新，17 条）、`test_turn_repair.py` +2（画像真的接上了） |
+
+### 核心纪律：**没有基线的画像不生效**
+
+plan 的原话是「每个画像必须有一条 W1 跑出来的行为基线，否则不许上线」。这一条翻译成代码时
+要选一个可执行的意思，我选的是：
+
+> `effective()` 发现 `baseline_run_id` 为空 → **回落默认策略**，并把原因写进返回值；
+> 聊天把这句话记进账本，界面上看得见「这份画像没被采纳」。
+
+**为什么不是「不许用这个模型」**：把模型从产品里挡掉，代价立刻落在用户头上（聊天直接不能用），
+而一个没量过的 `temperature` 只是让行为回到默认。**纪律要拦的是「凭手感改策略」，不是「用这个模型」。**
+
+### 一行画像记什么
+
+| 字段 | 含义 |
+|---|---|
+| `temperature` / `max_rounds` / `tool_choice` | 采样温度 / 工具循环轮数上限 / 工具选择策略（空 = 调用默认） |
+| `give_output_rule` | 这一轮给不给那条输出规矩（实测有些模型不吃这套，但要**量过**才敢关） |
+| `force_structure` + `supports_structure` | **想**走强制结构化（W2b）与**量过** provider 支持它。两者分开：生效要求**两个都成立**，而 `supports_structure` 默认 False（还没量过任何 provider，不假设） |
+| `length_policy` | 长度处理策略（W4 的三选一，目前只实现 revise） |
+| `baseline_*` | 基线三项：**分数**（k/n + Wilson 区间）、**成本**（每轮输出 token 均值）、**延迟**（秒），外加判分与人读的时间 |
+| `notes` | 一句话说明为什么这么配 |
+
+**「改画像有前后对照」** 落在 `model_profile_changes`：每次改动一条 `{字段: [旧, 新]}` + 改完的
+整份快照 + 当时的基线 id。旧数值不会因为改动而消失 —— 这是那条验收要的东西。
+
+### 验收
+
+- **命令**：`python -m app.model_check --list` 打印每个在用模型的画像、基线三项、
+  以及「画像生效 / 回落默认（为什么）」，**没有基线的模型退出码 1**（可以直接当 CI 的闸）。
+- **两个真回合**（写死的模型剧本、真 `_generate`）：
+  - 没基线的画像：那一轮**照旧**带输出规矩，账本里写着「还没有 W1 基线」；
+  - 挂上基线之后：`give_output_rule=False` 真的不给规矩，`max_rounds=1` 真的只跑一轮。
+- **基线从哪来**：`bless()` 只认 `TurnEvalRun`（W1 的跑分），把 k/n、区间、判分、秒数、
+  每轮输出 token 一起记下来；拿别的模型的跑分来挂会被拒（有测试）。
+- 单测 17 条：校验（越界、枚举、空值语义）、纪律（没基线不生效、想≠能）、
+  改动历史（append-only、无变化不写）、`bless`（挂上、拒绝、没有跑分时说清怎么办）、
+  `in_use`（只认启用的 provider，不猜）、CLI（`--list` 只读、退出码当闸）。
+
+### 我自己搞出来的两件事
+
+**一、把 temperature 加进 `_openai_round` 的签名，当场弄坏了 6 个测试文件。** 那个签名是测试的
+接缝 —— 每个测试文件都塞了自己的假 `round`，多一个位置参数就意味着每一处都得跟着改，而它们
+关心的东西毫不相关。改成挂在 `_CALL_TEMPERATURE` 这个 contextvar 上：假 round 一个字节都不用动。
+教训：**接缝的签名是契约，加参数前先数一下谁在实现它。**
+
+**二、画像漏进了同一个文件里后面的测试。** W7 的测试会写一份带基线的画像（`give_output_rule=False`、
+`max_rounds=1`），而 conftest 的隔离是**每模块一次、不是每条测试一次** —— 于是同一文件里后面的
+「回执半路没了」那条用例被它改成只跑一轮，当场失败。修法是测试的 `_prepare_db` 里把两张画像表
+清掉。这与 §10 记的那类串味是同一件事：**模块级隔离不等于用例级隔离，写 durable state 的测试
+要自己收尾。**
+
+### 还没做的
+
+- **W2b 的强制结构化**：字段（`force_structure` / `supports_structure`）已经就位，但**还没量过
+  任何 provider 支不支持**，所以默认关着 —— 这正是 plan 说的「按 provider 灰度」的第一步。
+- **W7 的界面**：现在是 CLI + API（账本里能看到每一轮用的是哪份策略、生不生效）。要不要在
+  设置页做一栏「模型画像」，等 W2b 落地后一起看 —— 那时候它会多出一个「支持/不支持结构化」的列。
 
