@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
-from app.core import indexer, turn_quality
+from app.core import indexer, structured_turn, turn_quality
 from app.core.llm import MAX_TOOL_ROUNDS, ProviderInfo, run_agentic_chat
 from app.core.mcp import begin_turn, mcp_manager
 from app.core.prefs import load_config
@@ -572,8 +572,11 @@ async def _generate(req: ChatRequest):
 
         usage: dict = {}
 
-        async def one_pass(extra: str) -> str:
-            """跑一遍工具循环。`extra` 非空 = 这是修复那一轮，多带一句指名道姓的话。"""
+        async def one_pass(extra: str, tools: list | None = None) -> str:
+            """跑一遍工具循环。`extra` 非空 = 这是修复那一轮，多带一句指名道姓的话。
+
+            `tools` 给了就用它（W2b 的结构化那一轮会**去掉 `save_artifact`**：落盘交给服务端）。
+            """
             msgs = llm_messages
             if extra:
                 msgs = [*llm_messages, {"role": "system", "content": extra}]
@@ -581,7 +584,7 @@ async def _generate(req: ChatRequest):
                 ProviderInfo(kind=r.provider.kind, base_url=r.provider.base_url, api_key=r.provider.api_key),
                 r.model,
                 msgs,
-                tool_specs,
+                tool_specs if tools is None else tools,
                 mcp_manager.call_tool,
                 on_delta,
                 on_tool,
@@ -593,7 +596,57 @@ async def _generate(req: ChatRequest):
                 temperature=profile["temperature"],
             )
 
-        final = await one_pass("")
+        # ---- W2b：交付型回合走强制结构化（正文由结构承载，回执由服务端生成）----
+        # 走不走由 W7 的画像决定（`force_structure` **且** 量过 `supports_structure`），
+        # 而「是不是交付型」由 W3 的路由决定。不满足就还走工具循环 ——
+        # 这条结构化路径不会让任何模型失去能力，它只给量过能走的模型多一条更结实的路。
+        structured_on, structured_why = structured_turn.enabled(profile, route_decision)
+        if structured_on:
+            # **读/搜/列照旧，只是不给 `save_artifact`**（落盘交给服务端）。第一版把工具全撤了，
+            # 实测模型当场回「我读不到 notes/本周进展.md」并交了空结构 —— 那不是它不听话，
+            # 是我们把它的手绑上了：结构化要换掉的是**交付那一步**，不是「能不能找材料」。
+            no_save = [
+                s for s in tool_specs
+                if (s.get("function") or {}).get("name") != "save_artifact"
+            ]
+            raw = await one_pass(structured_turn.INSTRUCTION, tools=no_save)
+            obj = structured_turn.parse(raw)
+            if obj is not None:
+                applied = await structured_turn.apply(obj)
+                for art in applied["artifacts"]:
+                    why = turn_quality.receipt_problem(art)
+                    if why:
+                        quality.setdefault("dropped_receipts", []).append(
+                            {"path": str(art.get("path") or ""), "why": why}
+                        )
+                        continue
+                    bucket = saved_by_uid.setdefault(uid, [])
+                    bucket[:] = [a for a in bucket if a.get("path") != art.get("path")]
+                    bucket.append(art)
+                    q.put_nowait(("tool_result", {"name": "save_artifact", "meta": {"artifact": art}}, uid))
+                if applied["dropped"]:
+                    quality["structured_dropped"] = applied["dropped"]
+                turn_traces[uid]["mode"] = "structured"
+                quality["structured"] = {
+                    "drafts": len(obj.artifacts or []),
+                    "saved": len(applied["artifacts"]),
+                    "dropped": len(applied["dropped"]),
+                }
+                # 结构化那一轮**不流式**（要完整 JSON 才算数），所以正文在这一刻才出现
+                if applied["reply"]:
+                    on_delta(applied["reply"])
+                final = applied["reply"]
+            else:
+                # 拿不到结构（模型没照形状回、被截断、provider 不认）→ **回落 W2a 那条路**：
+                # `raw` 就是这一轮已经生成的答复，交给下面那套判据处理（该补跑就补跑），
+                # 并如实记下「这一轮本来是要走结构化的」。
+                quality["structured"] = {"fell_back": True, "why": "最后一条不是可解析的结构"}
+                turn_traces[uid]["mode"] = "structured-fallback"
+                log.info("uid=%s 结构化没拿到 → 回落（按普通答复处理）", uid)
+                final = raw
+        else:
+            quality["structured"] = {"off": True, "why": structured_why}
+            final = await one_pass("")
         # 正文那头怎么定：
         # - 模型最后说了话（`final` 非空）→ 用它。
         # - 一个字没说，但**这一轮落了产出** → 就用空的。正文在 vault 文件里，
@@ -925,6 +978,36 @@ def _length_note(budget, trace: dict, artifacts: list | None) -> dict:
         "over": any(bool(a.get("over")) for a in (artifacts or []) if isinstance(a, dict)),
         "saves": saves,
     }
+
+
+async def _structured_round(resolved: ResolvedModel, messages: list[dict]) -> tuple[object | None, str]:
+    """W2b：一次性拿回 `{reply, artifacts[]}`。**不流式**（结构要完整才算数）。
+
+    `extract_json` 自带两级：provider 原生 JSON（`response_format` / 强制 tool_choice）→
+    失败就「提示词约束 + 清洗提取」。**两个都不幸失败时返回 None**，调用方回落 W2a 的工具循环 ——
+    所以「provider 不支持」不会变成一轮空回答。Test seam: monkeypatch `app.core.structured.extract_json`.
+
+    **一处还没接好的账**：`extract_json` 不收 `usage`，所以结构化这一轮的 token **没记进
+    `tokens_out`** —— 账本上这类回合的输出 token 是 0，别当成免费（`mode=structured` 会标出来）。
+    """
+    from app.core import structured as structured_mod
+
+    info = ProviderInfo(
+        kind=resolved.provider.kind,
+        base_url=resolved.provider.base_url,
+        api_key=resolved.provider.api_key,
+    )
+    msgs = [*messages, {"role": "system", "content": structured_turn.INSTRUCTION}]
+    try:
+        obj, meta = await structured_mod.extract_json(
+            info, resolved.model, msgs, structured_turn.StructuredTurn
+        )
+    except Exception as e:  # noqa: BLE001 - 结构化拿不到就该回落，不该让这一轮炸掉
+        log.warning("structured turn failed", exc_info=True)
+        return None, f"{type(e).__name__}: {e}"
+    if obj is None:
+        return None, str(getattr(meta, "error", "") or "没有拿到符合形状的 JSON")
+    return obj, ""
 
 
 async def _save_assistant_message(

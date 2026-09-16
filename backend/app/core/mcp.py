@@ -101,6 +101,16 @@ def turn_saves(kind: str) -> int:
     return int((_TURN_SAVES.get() or {}).get(kind, 0))
 
 
+def turn_open() -> bool:
+    """这一轮开过没有（`begin_turn` 调过了）。
+
+    给**别的调用方**一个安全的判断：结构化那一轮（W2b）由服务端直接落盘，它不该假设
+    「聊天已经把这一轮开了」，但更不该在已经开着的时候再开一次 —— 那会把字数预算与
+    修订额度一起抹掉。
+    """
+    return _TURN_ARTIFACTS.get() is not None
+
+
 def take_tool_meta() -> dict | None:
     """取走当前调用攒下的结构化结果（读完即清，避免串到下一个工具）。"""
     meta = _TOOL_META.get()

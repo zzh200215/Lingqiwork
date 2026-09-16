@@ -27,6 +27,20 @@ LONG_BODY_CHARS = 400
 # 且至少两段——「注意/这一点」这种中文斜杠不会被当成路径。
 _PATH_RE = re.compile(r"[A-Za-z0-9_\u4e00-\u9fff-]+(?:/[A-Za-z0-9_\u4e00-\u9fff.-]+)+\.(?:md|txt|markdown)")
 
+# 「这里就是我存下来的东西」的说法。**路径必须贴着它才算「报了回执」** ——
+# 这一条是被真数据打出来的：结构化那一轮（W2b）的回复是
+# 「已按 notes/本周进展.md 的四条要点扩写成约 800 字复盘」，它提的是**材料来源**，
+# 不是产出落点，而第一版判据把任何 vault 形状的路径都算进去 → 当场一次误报。
+# 判据的本意是「报了一个不存在的**回执**路径」（点开即 404），所以只在存/落盘这类字眼
+# 附近出现的路径才算数。
+_LANDED_MARKERS = (
+    "已存入", "已存为", "已另存为", "已更新", "存入产出", "存进产出", "存到", "存在了",
+    "保存在", "落盘到", "产出在", "路径是", "写进", "写到了",
+    # 实测模型很爱说的几种「存好了」的口吻（它们后面跟的路径就是它声称的落点）
+    "已经存好", "存好了", "存下了", "归档到",
+)
+_MARKER_WINDOW = 14  # 路径往前看这么多字找那个字眼
+
 
 def _norm(path: str) -> str:
     return (path or "").strip().replace("\\", "/").lstrip("./").lower()
@@ -49,15 +63,23 @@ def long_body_without_a_receipt(reply: str, artifacts: list | None) -> bool:
 def invented_path_in_reply(reply: str, artifacts: list | None) -> str:
     """回复里报了一个**不在本次回执里**的 vault 路径；没有就返回 ""。Pure。
 
-    这是「编造路径」那条缺陷的确定性版本：模型在正文里写下一个看起来像产出路径的东西，
-    而这一轮真正落盘的产出里没有它 —— 用户点开就是 404。
-    只报第一个（一条就够触发拦截；全列出来只会把日志淹掉）。
+    这是「编造路径」那条缺陷的确定性版本：模型说「存到 X 了」，而这一轮真正落盘的产出里
+    没有 X —— 用户点开就是 404。只报第一个（一条就够触发拦截；全列出来只会把日志淹掉）。
+
+    **两条收窄，都是被真数据逼出来的**：
+    - 只认「目录/文件名.md」形状（中文斜杠、裸文件名不算）；
+    - 路径必须贴着「已存入 / 存到 / 落盘到 / 产出在」这类字眼（`_LANDED_MARKERS`）——
+      否则「照着 notes/本周进展.md 写的」这种**材料来源**会被当成编造的回执（W2b 那一轮实测到了）。
     """
+    text = reply or ""
     known = {_norm(a.get("path")) for a in (artifacts or []) if isinstance(a, dict)}
     known.discard("")
-    for m in _PATH_RE.finditer(reply or ""):
+    for m in _PATH_RE.finditer(text):
         p = _norm(m.group(0))
-        if p and p not in known:
+        if not p or p in known:
+            continue
+        window = text[max(0, m.start() - _MARKER_WINDOW) : m.start()]
+        if any(marker in window for marker in _LANDED_MARKERS):
             return m.group(0)
     return ""
 

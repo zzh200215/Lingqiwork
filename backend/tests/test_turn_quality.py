@@ -84,7 +84,7 @@ def test_case_and_leading_dot_slash_do_not_create_a_false_alarm():
 
 def test_only_the_first_invented_path_is_reported():
     """一条就够触发拦截；全列出来只会把日志和界面淹掉。"""
-    out = tq.invented_path_in_reply("见 recap/a.md 和 notes/b.md", [])
+    out = tq.invented_path_in_reply("已存入产出：recap/a.md 和 notes/b.md", [])
     assert out == "recap/a.md"
 
 
@@ -158,9 +158,20 @@ def test_an_invented_path_is_never_retried():
 
 
 def test_an_invented_path_plus_a_long_body_still_does_not_retry_without_a_save_ask():
-    bad = tq.findings(LONG + "\n见 recap/x.md", [])
+    bad = tq.findings(LONG + "\n落盘到 recap/x.md", [])
     assert {f["code"] for f in bad} == {"long_body_without_a_receipt", "invented_path"}
     assert tq.should_retry(bad, "写一份周报") is False
+
+
+def test_a_path_that_is_only_material_is_not_a_fabricated_receipt():
+    """**被真数据打出来的一条**：结构化那一轮（W2b）的回复是「已按 notes/本周进展.md 的四条
+    要点扩写成约 800 字复盘」—— 它提的是**材料来源**，不是产出落点。第一版判据把任何 vault
+    形状的路径都算进去，当场误报。现在只有贴着「已存入 / 落盘到 / 产出在 / 存好了」这类字眼的
+    路径才算「报了回执」。"""
+    real = "已按 notes/本周进展.md 的四条要点扩写成约 800 字复盘，未编造具体数字。"
+    assert tq.invented_path_in_reply(real, []) == ""
+    # 同一个路径，只要它被说成「落点」就要报
+    assert tq.invented_path_in_reply("已存入产出：notes/本周进展.md", []) == "notes/本周进展.md"
 
 
 def test_a_claim_without_a_receipt_and_no_long_body_is_not_retried():
