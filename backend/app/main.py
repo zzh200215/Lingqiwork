@@ -32,6 +32,7 @@ from app.routers import (
     decisions,
     deliver,
     dirs,
+    dispatch,
     evals,
     feeds,
     form,
@@ -166,6 +167,7 @@ app.add_middleware(
 
 app.include_router(settings_router.router)
 app.include_router(profiles.router)
+app.include_router(dispatch.router)
 app.include_router(agents.router)
 app.include_router(conversations.router)
 app.include_router(chat.router)
