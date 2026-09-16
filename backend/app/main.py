@@ -45,6 +45,7 @@ from app.routers import (
     outputs,
     pet,
     podcast,
+    profiles,
     prompts,
     quality,
     recap,
@@ -164,6 +165,7 @@ app.add_middleware(
 )
 
 app.include_router(settings_router.router)
+app.include_router(profiles.router)
 app.include_router(agents.router)
 app.include_router(conversations.router)
 app.include_router(chat.router)

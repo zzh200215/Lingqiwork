@@ -18,7 +18,7 @@ import json
 import sys
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 sys.path.insert(0, ".")
 
@@ -49,6 +49,15 @@ async def _prepare_db(conv_id: int) -> None:
         if await db.get(Conversation, conv_id) is None:
             db.add(Conversation(id=conv_id, title="t", model_id="stub/m"))
             await db.commit()
+        # **模型画像要清掉**：W7 的测试会写一份带基线的画像（`give_output_rule=False`、
+        # `max_rounds=1`），而 conftest 的隔离是**每模块**一次、不是每条测试一次 ——
+        # 不清的话它会漏进同一个文件里后面的测试（实测：那条「回执半路没了」的用例当场被它
+        # 改成只跑一轮，于是断言失败）。这与 §10 记的那种串味是同一类问题。
+        from app.models import ModelProfile, ModelProfileChange
+
+        await db.execute(delete(ModelProfileChange))
+        await db.execute(delete(ModelProfile))
+        await db.commit()
 
 
 async def _no_followups(*_a, **_k):
@@ -341,6 +350,67 @@ def test_a_chat_turn_records_the_route_and_is_not_retried(monkeypatch):
     assert trace["retried"] == 0
     assert trace["quality"]["route"]["delivery"] is False
     assert trace["route_kind"] == ""
+
+
+# ---------- W7：画像有没有真的接上 ----------
+
+
+def _sys_blocks(seen: list) -> str:
+    return "\n".join(str(m.get("content") or "") for m in (seen[0] if seen else []) if m.get("role") == "system")
+
+
+def test_a_profile_without_a_baseline_changes_nothing(monkeypatch):
+    """W7 的纪律：没有基线的画像**不生效** —— 那一轮照旧带输出规矩，账本里写明原因。"""
+    from app.core import model_profiles as mp
+
+    asyncio.run(_prepare_db(9111))
+    asyncio.run(mp.save("stub/m", {"give_output_rule": False, "max_rounds": 3}, note="没基线"))
+    seen: list = []
+    _stub_turn(monkeypatch, [("答完了", [])], seen=seen)
+    _drive(9111, "随便说说")
+
+    assert "save_artifact" in _sys_blocks(seen), "画像没基线就不该生效，规矩照给"
+    trace = _trace(9111)
+    assert trace["quality"]["profile"]["source"] == "default"
+    assert "还没有 W1 基线" in trace["quality"]["profile"]["why"]
+
+
+def test_a_blessed_profile_really_takes_effect(monkeypatch):
+    """挂上基线之后：`give_output_rule=False` 真的不给规矩，`max_rounds=1` 真的只跑一轮。"""
+    from app.core import model_profiles as mp
+    from app.db import SessionLocal
+    from app.models import TurnEvalRun
+
+    asyncio.run(_prepare_db(9112))
+
+    async def _baseline_and_profile():
+        async with SessionLocal() as db:
+            db.add(
+                TurnEvalRun(
+                    scenario="deliver_report", scenario_sha="a", prompt_sha="b", model_id="stub/m",
+                    total=6, deterministic=1.0, judged=5.0, seconds=10.0, detail_json="[]",
+                )
+            )
+            await db.commit()
+        await mp.save("stub/m", {"give_output_rule": False, "max_rounds": 1})
+        await mp.bless("stub/m")
+
+    asyncio.run(_baseline_and_profile())
+
+    seen: list = []
+    _stub_turn(
+        monkeypatch,
+        [("", [ToolCall("1", "kb_search", {"q": "x"})]), ("本不该跑到这里", [])],
+        seen=seen,
+    )
+    _drive(9112, "随便说说")
+
+    assert "save_artifact" not in _sys_blocks(seen), "画像生效之后不许再给输出规矩"
+    assert len(seen) == 1, "max_rounds=1：只许跑一轮"
+    trace = _trace(9112)
+    assert trace["quality"]["profile"]["source"] == "profile"
+    assert trace["quality"]["profile"]["max_rounds"] == 1
+    assert trace["quality"]["profile"]["give_output_rule"] is False
 
 
 # ---------- 白名单：回执指向的文件在半路没了 ----------

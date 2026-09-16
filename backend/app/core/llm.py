@@ -12,6 +12,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
@@ -22,6 +23,14 @@ from app.core.mcp import take_tool_meta
 log = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
+
+# 这一轮要用的 temperature（W7 的模型画像给的）。
+#
+# **为什么用 contextvar 而不是往 `_openai_round` 加参数**：那个签名是测试的接缝 ——
+# 六七个测试文件都塞了自己的假 round（`fake_round(client, model, messages, tools, emit_text,
+# usage_out)`）。为一个可选旋钮改签名，等于让每一处都跟着改一遍，而它们关心的东西毫不相关。
+# 上下文变量随调用走，假 round 一个字节都不用动。
+_CALL_TEMPERATURE: ContextVar[float | None] = ContextVar("llm_call_temperature", default=None)
 
 
 def _flatten_tool_spec(spec: dict) -> dict:
@@ -96,21 +105,33 @@ async def _openai_round(
     emit_text: Callable[[str], None],
     usage_out: dict | None = None,
 ) -> tuple[str, list[ToolCall]]:
-    """One model round: stream text via emit_text; return (text, tool_calls)."""
+    """One model round: stream text via emit_text; return (text, tool_calls).
+
+    `temperature` 从下面那个 contextvar 读（W7 的模型画像给的）：**不往这个签名里加参数** ——
+    它是测试的接缝，六七个测试文件都塞了自己的假 round；为一个可选旋钮改签名，等于让每个人
+    都被迫改一遍。Provider 不认这个参数时会被丢掉重试一次（与 `stream_options` 同一招）。
+    """
     kwargs: dict = dict(model=model, messages=messages, tools=tools or None, stream=True)
+    temperature = _CALL_TEMPERATURE.get()
+    if temperature is not None:
+        kwargs["temperature"] = temperature
     from app.core import usage_ledger
 
     # 有账本要填才要 usage：兼容流式响应默认不回 usage 字段
     if usage_out is not None or usage_ledger.active():
         kwargs["stream_options"] = {"include_usage": True}
-    try:
-        stream = await client.chat.completions.create(**kwargs)
-    except Exception:
-        if "stream_options" in kwargs:  # provider rejects the param — retry plain
-            kwargs.pop("stream_options")
+    # 两个可选参数，谁被 provider 拒了就丢谁再试一次；都不是原因才算真失败。
+    for _attempt in range(3):
+        try:
             stream = await client.chat.completions.create(**kwargs)
-        else:
-            raise
+            break
+        except Exception:
+            for opt in ("temperature", "stream_options"):
+                if opt in kwargs:
+                    kwargs.pop(opt)
+                    break
+            else:
+                raise
     calls_by_index: dict[int, dict] = {}
     text_parts: list[str] = []
     finish_reason = None
@@ -169,12 +190,15 @@ async def _anthropic_round(
     system_parts = [m["content"] for m in messages if m["role"] == "system"]
     chat = [m for m in messages if m["role"] != "system"]
 
+    temperature = _CALL_TEMPERATURE.get()
+    extra = {"temperature": temperature} if temperature is not None else {}
     async with client.messages.stream(
         model=model,
         max_tokens=8192,
         system="\n\n".join(system_parts) or None,
         messages=chat,
         tools=tools or None,
+        **extra,
     ) as stream:
         text_parts: list[str] = []
         async for part in stream.text_stream:
@@ -256,6 +280,7 @@ async def run_agentic_chat(
     parallel_tools: bool = True,
     emit_tool_result: Callable[[str, dict, dict], None] | None = None,
     trace: dict | None = None,
+    temperature: float | None = None,
 ) -> str:
     """Chat with optional tool calling. Returns the final assistant text.
 
@@ -278,7 +303,11 @@ async def run_agentic_chat(
 
     If the model refuses `tools` (e.g. an Ollama model without tool support),
     the first round is retried once without tools so chat still works.
+
+    `temperature`（W7）：这一轮的采样温度，来自模型画像。挂在 `_CALL_TEMPERATURE` 上给
+    各家的 round 读（见那里的注释：不改 round 的签名，因为那是测试的接缝）。
     """
+    _CALL_TEMPERATURE.set(temperature)
     msgs = [dict(m) for m in messages]
     use_tools = bool(tools)
     tool_param = tools if use_tools else None

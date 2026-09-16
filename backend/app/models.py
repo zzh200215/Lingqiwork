@@ -739,6 +739,64 @@ class TurnTrace(Base):
     error: Mapped[str] = mapped_column(Text, default="")
 
 
+class ModelProfile(Base):
+    """一个模型该被怎么用（W7）：per-model 的策略，**外加它被认可时的那条 W1 基线**。
+
+    **为什么要有它。** 同一个提示词喂所有模型，而实测行为差异巨大：flash-lite 需要把规矩提到
+    system 层且仍会谎报/循环；deepseek-v4-pro 限流且输出不完整；qwen 另配一套。以前这些差别
+    只存在于我的记忆和临时脚本里 —— 换模型靠「看起来还行」。
+
+    **核心纪律：没有基线的画像不生效。** `baseline_run_id` 为空 = 这份策略还没被 W1 量过，
+    于是 `core/model_profiles.effective()` 会回落成默认值并在账本里写明原因。不这么做的话，
+    「per-model 策略」会变成另一种手感。
+
+    只有**声明**没有测量的字段（如 `supports_structure`）也在这一行里，如实标 False ——
+    默认不能假设任何 provider 支持强制结构化（W2b 要按 provider 灰度）。
+    """
+
+    __tablename__ = "model_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_rounds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_choice: Mapped[str] = mapped_column(String(20), default="")
+    # 想不想走强制结构化（W2b），以及**量过没有**这个能力。两者分开：想 ≠ 能。
+    force_structure: Mapped[bool] = mapped_column(Boolean, default=False)
+    supports_structure: Mapped[bool] = mapped_column(Boolean, default=False)
+    length_policy: Mapped[str] = mapped_column(String(20), default="")  # "" | revise | truncate
+    give_output_rule: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    # —— 基线：三项记录 = 分数（k/n + 区间）、成本（输出 token）、延迟（秒）——
+    baseline_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    baseline_pass: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    baseline_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    baseline_ci_low: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_ci_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_judged: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_tokens_out: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ModelProfileChange(Base):
+    """画像的每一次改动（W7）：改了什么、改成什么、当时挂的是哪条基线。**append-only。**
+
+    「改画像有前后对照」这句验收要的就是这张表：改之前那一版的数值不会因为改动而消失。
+    """
+
+    __tablename__ = "model_profile_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    model_id: Mapped[str] = mapped_column(String(120), index=True)
+    changed_json: Mapped[str] = mapped_column(Text, default="{}")  # {字段: [旧, 新]}
+    profile_json: Mapped[str] = mapped_column(Text, default="{}")  # 改完之后的整份快照
+    baseline_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
 class SchemaMigration(Base):
     """已应用的迁移（W6）。一行一版，**只增不删**。
 

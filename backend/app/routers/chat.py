@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from app.core import indexer, turn_quality
-from app.core.llm import ProviderInfo, run_agentic_chat
+from app.core.llm import MAX_TOOL_ROUNDS, ProviderInfo, run_agentic_chat
 from app.core.mcp import begin_turn, mcp_manager
 from app.core.prefs import load_config
 from app.db import SessionLocal
@@ -392,10 +392,15 @@ async def _generate(req: ChatRequest):
     # user's global system prompt (settings page), if configured
     prefs = load_config()
     tools_on = agent.tools_enabled if agent is not None else True
+    # ---- W7：这个模型该被怎么用（画像）。**没有基线的画像不生效**（回落默认，原因记在账本）
+    from app.core import model_profiles
+
+    profile = await model_profiles.effective(model_id)
     system_blocks: list[str] = []
     # 规矩排在一切之前：它是这一轮「怎么回答」的基准，不该被人设/记忆挤到后面去。
     # 工具关掉时不能说——那会指使模型去调一个它根本没有的工具。
-    if tools_on:
+    # W7 的 `give_output_rule=False` 也是这个意思：这个模型不吃这套规矩（实测过才敢关）。
+    if tools_on and profile["give_output_rule"]:
         system_blocks.append(_OUTPUT_RULE)
     if summary_block:
         system_blocks.append(
@@ -583,6 +588,9 @@ async def _generate(req: ChatRequest):
                 usage=usage,
                 emit_tool_result=on_tool_result,
                 trace=turn_traces[uid],
+                # W7：轮数上限与温度按模型配（没基线就回落 `MAX_TOOL_ROUNDS` / provider 默认）
+                max_rounds=profile["max_rounds"] or MAX_TOOL_ROUNDS,
+                temperature=profile["temperature"],
             )
 
         final = await one_pass("")
@@ -603,6 +611,14 @@ async def _generate(req: ChatRequest):
         # 「该不该补跑」还要看**用户有没有明说要落盘**：判断「这算不算一份成品」是 W3 的活，
         # 在这里猜错的代价是把闲聊变成产出（见 turn_quality.should_retry）。
         quality["asked_to_save"] = turn_quality.asked_to_save(req.content or query_text)
+        # W7：这一轮用的是谁的策略、有没有生效 —— 与 W3 的路由结论一样，都是**事实**。
+        quality["profile"] = {
+            "source": profile["source"],
+            "why": profile["why"],
+            "max_rounds": profile["max_rounds"],
+            "temperature": profile["temperature"],
+            "give_output_rule": profile["give_output_rule"],
+        }
         quality["route"] = {
             "delivery": route_decision.delivery,
             "kind": route_decision.kind,

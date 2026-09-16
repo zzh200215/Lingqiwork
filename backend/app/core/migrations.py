@@ -126,10 +126,24 @@ async def _m002_turn_quality(conn) -> None:
         log.info("迁移 v2：turn_traces 补上 quality_json")
 
 
+async def _m003_model_profiles(conn) -> None:
+    """v3：模型画像两张表（W7）。
+
+    新表用 `create` + `checkfirst=True`，所以老库会补上、新库（`create_all` 已经建过）是空操作 ——
+    与 `_ensure_table` 同一招。**仍然要记一个版本号**：没有记录的话，没人知道这个库有没有这两张表。
+    """
+    from app.models import ModelProfile, ModelProfileChange
+
+    for table in (ModelProfile.__table__, ModelProfileChange.__table__):
+        await conn.run_sync(lambda sync_conn, t=table: t.create(sync_conn, checkfirst=True))
+    log.info("迁移 v3：model_profiles / model_profile_changes 就位")
+
+
 # 有序。**只增不改**：已经发出去的版本号不许改内容（谁跑过就永远跑过了）。
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline：补齐历史列（改动前那张写死的列表）", _m001_baseline),
     Migration(2, "W2a：回合账本加 quality_json（两条底线校验的结论）", _m002_turn_quality),
+    Migration(3, "W7：模型画像与它的基线（model_profiles / model_profile_changes）", _m003_model_profiles),
 ]
 
 
