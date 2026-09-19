@@ -50,6 +50,47 @@ def test_compose_task_failed_mentions_failure():
     assert len(line) < 200  # error text is capped
 
 
+def test_compose_gate_lines_say_what_you_did():
+    """Z2（PLAN4）：点头 / 驳回各一句，主语是「你」——那是你做的一个动作。
+
+    驳回那句必须**中性**：不打趣、不「哼」、不劝你再想想。驳回一步是正常操作，
+    不是犯错；这里多带一个字的情绪，都会变成一笔「你否决了它」的账。
+    """
+    ok = pet.compose("gate_ok", name="周报")
+    no = pet.compose("gate_rejected", name="周报")
+    assert "周报" in ok and "点了头" in ok
+    assert "周报" in no and "驳回" in no
+    for word in ("哼", "可惜", "确定吗", "再想想", "错误", "失败", "又"):
+        assert word not in no, word
+
+
+def test_gate_kinds_are_registered():
+    assert {"gate_ok", "gate_rejected"} <= pet.KINDS
+
+
+def test_gate_lines_do_not_toast(monkeypatch):
+    """Z2：这是**事件**不是提醒——你刚亲手点了那个按钮，不该再被系统吼一声。
+
+    `emit` 的 frugal 名单只有失败 / 问候 / 到期卡 / 习惯那几种；这两个 kind 不在里面，
+    所以这条测试钉的是「以后有人顺手把它们加进名单」。
+    """
+    import app.core.notify as notify_mod
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(notify_mod, "desktop", lambda *a, **kw: calls.append(a))
+    pet.emit("gate_ok", name="周报")
+    pet.emit("gate_rejected", name="周报")
+    assert calls == []
+
+
+def test_gate_lines_go_through_the_privacy_gate():
+    """任务名照旧过 `sanitize`：卡点那句也**不许把路径念出来**（三闸门不是只在老 kind 上）。"""
+    pet.emit("gate_ok", name=r"D:\private\tasks\周报")
+    line = pet.feed(limit=5)[0]
+    assert line["kind"] == "gate_ok"
+    assert "private" not in line["text"] and "[路径]" in line["text"]
+
+
 def test_compose_counts():
     assert "7" in pet.compose("digest", count=7)
     assert "5" in pet.compose("feeds", count=5)
@@ -70,8 +111,149 @@ def test_compose_greeting_by_hour():
     assert "盯着" in pet.compose("greeting")
 
 
+# --- Z3（PLAN4）：台词池轮换 ------------------------------------------------------
+
+
+def test_pools_cover_the_high_frequency_kinds_only():
+    """只给高频那几种备说法，每种 2–3 句（计划的范围就是这五个）。"""
+    assert set(pet.POOLS) == {"task_done", "task_failed", "cards_done", "output", "mastered"}
+    for kind, pool in pet.POOLS.items():
+        assert 2 <= len(pool) <= 3, kind
+        assert len(set(pool)) == len(pool), f"{kind} 的池子里有重复句"
+
+
+def test_the_first_line_of_every_pool_is_the_old_line():
+    """第 0 句 = 原话。所以 `compose(kind, ...)` 不传 `n` 时，一个字节都没变
+    （老测试、`cards.py` 那处直接调用都还是原来那句）。"""
+    samples = {
+        "task_done": dict(name="T", detail="3 条要点"),
+        "task_failed": dict(name="T", detail="boom"),
+        "cards_done": dict(count=7, detail="3"),
+        "output": dict(name="周报", count=3),
+        "mastered": dict(name="闭包"),
+    }
+    for kind, kw in samples.items():
+        assert pet.compose(kind, **kw, n=0) == pet.compose(kind, **kw), kind
+        # 绕一圈回到第一句（确定性轮换，不是随机）
+        assert pet.compose(kind, **kw, n=len(pet.POOLS[kind])) == pet.compose(kind, **kw), kind
+
+
+def test_rotation_is_deterministic_and_covers_the_whole_pool():
+    kw = dict(name="每日摘要", detail="3 条要点")
+    lines = [pet.compose("task_done", **kw, n=i) for i in range(len(pet.POOLS["task_done"]))]
+    assert len(set(lines)) == len(lines)  # 每一句都不同——轮换真的在轮
+    for i in range(10):  # 同一个 n 永远同一句
+        assert pet.compose("task_done", **kw, n=i) == lines[i % len(lines)]
+
+
+def test_every_variant_still_spells_the_facts_out():
+    """**只换说法，不换事实**：占位符（名字 / 数字 / 缺口 / 连着几天）逐句都得拼对。"""
+    for i in range(3):
+        done = pet.compose("task_done", name="每日摘要", detail="3 条要点", n=i)
+        assert "每日摘要" in done and "3 条要点" in done, done
+        failed = pet.compose("task_failed", name="爬虫", detail="TimeoutError", n=i)
+        assert "爬虫" in failed and "TimeoutError" in failed, failed
+        cards = pet.compose("cards_done", count=7, detail="3", n=i)
+        assert "7" in cards and "连着 3 天" in cards, cards
+        out3 = pet.compose("output", name="周报", count=3, n=i)
+        assert "周报" in out3 and "第 3 份" in out3, out3
+        plain = pet.compose("mastered", name="闭包", n=i)
+        assert "闭包" in plain, plain
+
+
+def test_the_milestone_half_never_rotates():
+    """里程碑的那半句**逐字保留**——只换主句，不换事实。
+
+    `taught`（你把它讲明白了）整句就是那个语义，一个字都不轮；「连着第二次」「第一份」
+    「这是第 N 份」这些半句在每一句变体里都得原样出现。轮换只发生在主句上。
+    """
+    taught = {pet.compose("mastered", name="闭包", detail="taught", n=i) for i in range(6)}
+    assert len(taught) == 1 and "讲明白" in taught.pop()
+
+    for kind, kw, must in (
+        ("mastered", dict(name="闭包", detail="twice"), "，这次是连着第二次说通。"),
+        ("output", dict(name="周报", count=1), "第一份。"),
+        ("output", dict(name="周报", count=5), "这是第 5 份。"),
+    ):
+        for i in range(6):
+            assert must in pet.compose(kind, **kw, n=i), (kind, kw, i)
+
+
+def test_output_without_a_count_does_not_invent_one():
+    """数不出来（0）就不提第几份——也不许轮换出别的数字。"""
+    for i in range(3):
+        line = pet.compose("output", name="周报", count=0, n=i)
+        assert "周报" in line and "第" not in line, line
+
+
+def test_compose_survives_a_junk_rotation_index():
+    for junk in (None, "不是数", -1, 3.7):
+        assert pet.compose("task_done", name="T", n=junk) == pet.compose("task_done", name="T")
+
+
+def test_emit_rotates_through_the_pool():
+    """真行：同一个 kind 连着说，句子轮着变，绕一圈回到第一句（`feed` 是最新的在前）。"""
+    pool = pet.POOLS["task_done"]
+    for _ in range(len(pool)):
+        pet.emit("task_done", name="轮换", detail="ok")
+    got = [e["text"] for e in pet.feed(limit=len(pool))][::-1]  # 摆回说的顺序
+    assert len(set(got)) == len(pool)
+    assert got == [pet.compose("task_done", name="轮换", detail="ok", n=i) for i in range(len(pool))]
+
+
 def test_compose_unknown_kind_falls_back():
     assert pet.compose("whatever", detail="兜底") == "兜底"
+
+
+def test_compose_output_reads_the_shelf_count():
+    """成品那句：主语是「你交出去的」（B1），数字是**读出来的**架子上有几份。
+
+    「第 N 份」不是宠物发的奖，也不是它记的账——它与成长值读的是同一批目录
+    （`_OUTPUT_DIRS`）。数不出来（0）就只留前半句：宁可少说一句，也不编一个数。
+    """
+    line = pet.compose("output", name="周报", count=3)
+    assert "周报" in line and "交出去了" in line and "第 3 份" in line
+    assert "第一份" in pet.compose("output", name="周报", count=1)
+    bare = pet.compose("output", name="周报", count=0)
+    assert "交出去了" in bare and "份" not in bare
+
+
+# --- 环二表达层：成品落盘才开口（`docs/loops.md` §2）-----------------------------
+
+
+def test_note_output_speaks_only_for_products(monkeypatch):
+    """**「算不算成品」只有一个答案**：`is_output_path`。
+
+    `tasks/` 的运行留痕、`notes/` 的成文都不是交出去的东西（与成长值、小屋架子同一口径），
+    所以它们在零柒这里一个字都不该有——不然「你交出 N 份」和它嘴里的话会对不上。
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="wb-pet-out-", dir=Path(__file__).parent))
+    monkeypatch.setattr(pet, "VAULT_DIR", scratch)
+    try:
+        assert pet.note_output("周报", "deliver/2026-09-16-周报.md") is not None
+        assert pet.note_output("留痕", "tasks/每日摘要-2026-09-16-0900.md") is None
+        assert pet.note_output("成文", "notes/2026-09-16-随手记.md") is None
+        assert pet.note_output("空", "") is None
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    lines = [e for e in pet.feed(limit=20) if e["kind"] == "output"]
+    assert len(lines) == 1 and "周报" in lines[0]["text"]
+
+
+def test_note_output_count_is_the_real_shelf(monkeypatch):
+    """台词的数是**数出来的**，而且与成长值同一份目录清单：两份成品 → 「第 2 份」。"""
+    scratch = Path(tempfile.mkdtemp(prefix="wb-pet-out-", dir=Path(__file__).parent))
+    monkeypatch.setattr(pet, "VAULT_DIR", scratch)
+    try:
+        for rel in ("deliver/a.md", "research/b.md", "tasks/留痕.md", "notes/随手记.md"):
+            p = scratch / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("# x\n", encoding="utf-8")
+        pet.note_output("第二份", "research/b.md")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    line = next(e for e in pet.feed(limit=20) if e["kind"] == "output")
+    assert "第 2 份" in line["text"]  # 两份成品；`tasks/` 与 `notes/` 不算
 
 
 # --- emit + feed roundtrip -----------------------------------------------------
@@ -585,3 +767,37 @@ def test_builtin_plugins_only_declare_known_permissions():
     for name, spec in pp.BUILTINS.items():
         assert set(spec["permissions"]) <= set(pp.PERMISSIONS), name
         assert spec["commands"], name  # 每个内置插件至少要能被命令驱动
+
+
+# --- 聊天落库（P5 · 加深脑子）：它记得你 ----------------------------------------
+
+
+def test_chat_turn_roundtrip():
+    """一问一答落进去，`recent_chats` 旧 → 新原样吐出来，回执跟着走。"""
+    pet.save_chat_turn("在吗", "在。")
+    pet.save_chat_turn(
+        "开始专注",
+        "开着了。",
+        tools=[{"tool": "pet_focus_start", "plugin": "focus", "command": "start", "panel": {}, "said": None}],
+    )
+    chats = pet.recent_chats(4)
+    assert [c["role"] for c in chats] == ["user", "pet", "user", "pet"]
+    assert chats[0]["text"] == "在吗"
+    assert chats[-1]["text"] == "开着了。"
+    assert chats[-1]["tools"][0]["plugin"] == "focus"
+
+
+def test_chat_turn_skips_incomplete_rounds():
+    """报错/中断的那轮不落：只问没答、只答没问、两头全空，一个字都不进记忆。"""
+    n = len(pet.recent_chats(100))
+    pet.save_chat_turn("只有问", "")
+    pet.save_chat_turn("", "只有答")
+    pet.save_chat_turn("", "")
+    assert len(pet.recent_chats(100)) == n
+
+
+def test_recent_chats_survives_a_broken_db(monkeypatch, tmp_path):
+    """读不出来就空表——记忆是增强项，聊天绝不因此挂掉。"""
+    monkeypatch.setattr(pet.settings, "db_path", tmp_path / "no-such-dir" / "x.db")
+    assert pet.recent_chats(10) == []
+    pet.save_chat_turn("在吗", "在。")  # 写不进去也不能抛

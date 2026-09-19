@@ -384,12 +384,20 @@ async def run(
         "web": sum(1 for s in sources if s.get("kind") == "web"),
     }
 
+    # S1 引擎吃 skill：匹配键是**这次要决定的那件事**（`frame.decision`）——
+    # 方案引擎的话题本来就是它，不是用户最初那句话。
+    from app.core import skill_match
+
+    inj = skill_match.injection(frame.decision)
+    if inj["names"]:
+        yield "skills", skill_match.event_data(inj)
+
     yield "writing", {}
     rep = None
     async for _ev, _payload in _report.synthesize_streaming(
         frame.decision,
         sources,
-        _SYNTH_PROMPT,
+        skill_match.with_skills(_SYNTH_PROMPT, inj),
         model_id,
         stream_fn=stream_fn,
         native_fn=native_fn,

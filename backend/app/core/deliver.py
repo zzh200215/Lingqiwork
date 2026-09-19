@@ -181,9 +181,30 @@ def merge_pinned(pinned: list[dict], gathered: list[dict]) -> list[dict]:
 # ---------- save ----------
 
 
-async def save(rep: Report, sources: list[dict]) -> dict:
-    """落 `vault/deliver/` 并进索引——成品因此能被下一次取材捞回来。"""
-    return await _report.save(rep, sources, DELIVER_DIR, "交付")
+async def save(rep: Report, sources: list[dict], genre: str = "", audience: str = "") -> dict:
+    """落 `vault/deliver/` 并进索引——成品因此能被下一次取材捞回来。
+
+    **体裁与读者一起写进文件头**（M5）：这两个值本来就随 `run()` 的 payload 回来，可在这之前
+    存完就丢了——「这份是给谁写的」只剩文件名。交付的事后见证靠的就是文件本身
+    （`core/delivery.py`：mtime = 交出去的时刻，frontmatter = 给谁写的），所以它必须落盘。
+    """
+    return await _report.save(
+        rep,
+        sources,
+        DELIVER_DIR,
+        "交付",
+        front={"genre": _label(GENRES, genre), "audience": _label(AUDIENCES, audience)},
+    )
+
+
+def _label(table: dict[str, dict], key: str) -> str:
+    """体裁 / 读者的**界面名**（写进文件的是「周报」「领导」，不是 `weekly` / `leader`）。Pure.
+
+    文件是给人读的（Obsidian 里打开就能看懂）；机器那边要的是 id，而 id 早就钉在
+    `prompt_sha` 上了（质量闭环按它分组）——两处各取所需，不混。
+    """
+    row = table.get((key or "").strip())
+    return str((row or {}).get("label") or (key or "")).strip()
 
 
 # ---------- orchestration ----------
@@ -238,12 +259,20 @@ async def run(
         "kb": sum(1 for s in sources if s.get("kind") == "kb"),
     }
 
+    # S1 引擎吃 skill：匹配键 = 这次的话题（体裁与读者已经在 `prompt` 里了，
+    # 所以「给领导写汇报要结论先行」这类技能是能被命中的）。没命中就一个字都不多。
+    from app.core import skill_match
+
+    inj = skill_match.injection(topic)
+    if inj["names"]:
+        yield "skills", skill_match.event_data(inj)
+
     yield "writing", {}
     rep = None
     async for _ev, _payload in _report.synthesize_streaming(
         topic,
         sources,
-        prompt,
+        skill_match.with_skills(prompt, inj),
         model_id,
         stream_fn=stream_fn,
         native_fn=native_fn,

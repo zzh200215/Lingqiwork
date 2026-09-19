@@ -4,13 +4,31 @@
 // 1. 每件东西标的是「到手那天」，不是「最近更新」；
 // 2. 屋里空着 / 今天没吃东西时，说的是实话，**没有「还差 N 件」「它饿了」这种欠账口吻**。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import RoomPane from './RoomPane'
-import type { FormDomain, PetMeal, PetRoom, PetSkillCard, PetThing, WorkOutput } from './api'
+import type {
+  FormDomain,
+  PetConceptCard,
+  PetMeal,
+  PetRoom,
+  PetSkillCard,
+  PetState,
+  PetThing,
+  PodcastEntry,
+  WeeklyReport,
+  WorkOutput,
+} from './api'
 
-vi.mock('./api', () => ({ api: { petRoom: vi.fn() } }))
+vi.mock('./api', () => ({
+  api: {
+    petRoom: vi.fn(),
+    petState: vi.fn(),
+    weeklyReport: vi.fn(),
+    weeklyPodcast: vi.fn(),
+  },
+}))
 import { api } from './api'
 
 function thing(patch: Partial<PetThing>): PetThing {
@@ -70,6 +88,22 @@ const SKILL: PetSkillCard = {
   stale: false,
 }
 
+/** 一张概念卡（P2 · F13）：学习地图在小屋里的镜子。档位就是地图那一档。 */
+function concept(patch: Partial<PetConceptCard>): PetConceptCard {
+  return {
+    id: 'concept:asyncio 事件循环',
+    name: 'asyncio 事件循环',
+    state: 'mastered',
+    sessions: 3,
+    stuck: '',
+    at: '2026-09-14T09:00:00',
+    at_ts: Date.now() / 1000 - 2 * 86400,
+    ...patch,
+  }
+}
+
+const CONCEPT = concept({})
+
 /** 一根枝（Q3）：三样都站住的领域。 */
 const BRANCH: FormDomain = {
   domain: '教学',
@@ -112,6 +146,8 @@ const ROOM: PetRoom = {
   today: { meals: [MEAL], date: '2026-09-14' },
   skills: [SKILL],
   form: [BRANCH],
+  concepts: { cards: [CONCEPT], total: 1 },
+  flavor: '这阵子喂它最多的是「检索」（3 个概念）。',
   empty: false,
 }
 
@@ -122,7 +158,29 @@ const EMPTY: PetRoom = {
   today: { meals: [], date: '2026-09-14' },
   skills: [],
   form: [],
+  concepts: { cards: [], total: 0 },
+  flavor: '',
   empty: true,
+}
+
+/** 这一周（M4 · G4）：全部读出来的事实 + **它说的那一句**（`weekly.text()` 出来的）。 */
+const WEEK: WeeklyReport = {
+  week: { start: '2026-09-14', end: '2026-09-16' },
+  facts: { sources: 2, points: 5, got: 3, half: 1, outputs: 2, recurring: ['闭包'] },
+  text: '这周你消化了 2 份材料（拆出 5 个点）、说通了 3 个概念、交出 2 份成品。有 1 个概念停在半懂，「闭包」还是没走通。',
+  empty: false,
+}
+
+const POD: PodcastEntry = {
+  id: 'pod-x',
+  title: '周报 09-14–09-16',
+  sources: [],
+  turns: 2,
+  duration_sec: 12.3,
+  file: 'pod-x.wav',
+  script: [],
+  created_at: '2026-09-16T21:00:00',
+  ok: true,
 }
 
 function renderPane() {
@@ -133,8 +191,15 @@ function renderPane() {
   )
 }
 
+/** 一个「此刻」：默认待机、没话说。 */
+function petState(patch: Partial<PetState> = {}): PetState {
+  return { mode: 'idle', action: 'idle', energy: 80, line: '', path: '', ...patch }
+}
+
 beforeEach(() => {
   vi.mocked(api.petRoom).mockResolvedValue(ROOM)
+  vi.mocked(api.petState).mockResolvedValue(petState())
+  vi.mocked(api.weeklyReport).mockResolvedValue(WEEK)
 })
 
 afterEach(cleanup)
@@ -222,6 +287,18 @@ describe('RoomPane', () => {
     expect(screen.queryByText(/还差/)).toBeNull()
   })
 
+  it('Z4：小屋顶上那一行喂养风味与成长页同源；数不出来就不摆', async () => {
+    const { container } = renderPane()
+    expect(await screen.findByText(/这阵子喂它最多的是「检索」/)).toBeTruthy()
+    expect(container.querySelector('[data-room-flavor]')).toBeTruthy()
+
+    cleanup()
+    vi.mocked(api.petRoom).mockResolvedValue({ ...ROOM, flavor: '' })
+    const second = renderPane()
+    await screen.findByText('屋里摆着')
+    expect(second.container.querySelector('[data-room-flavor]')).toBeNull()
+  })
+
   it('读出错给一句话，不是空白页', async () => {
     vi.mocked(api.petRoom).mockRejectedValue(new Error('后端不在'))
     renderPane()
@@ -229,7 +306,238 @@ describe('RoomPane', () => {
   })
 })
 
+// 屋子里的零柒：**它是一只宠物，两处画它就该是同一个姿势**（与悬浮那个读同一个接口）。
+describe('RoomPane · 屋里的零柒', () => {
+  it('摆的是此刻的姿势，不是写死的待机', async () => {
+    vi.mocked(api.petState).mockResolvedValue(
+      petState({ mode: 'busy', action: 'running-right', line: '复盘正在跑，我去盯着。' })
+    )
+    const { container } = renderPane()
+    const pet = await waitFor(() => {
+      const el = container.querySelector('[data-room-pet]') as HTMLImageElement | null
+      if (!el) throw new Error('还没有宠物')
+      return el
+    })
+    expect(pet.getAttribute('src')).toBe('/pet/running-right.webp')
+    expect(pet.getAttribute('data-room-action')).toBe('running-right')
+    expect(screen.getByText('复盘正在跑，我去盯着。')).toBeTruthy()
+  })
+
+  it('刚交出一份成品 → 它在屋里跳一下', async () => {
+    vi.mocked(api.petState).mockResolvedValue(
+      petState({ mode: 'celebrating', action: 'jumping', line: '交出去一份。收着。' })
+    )
+    const { container } = renderPane()
+    await screen.findByText('交出去一份。收着。')
+    expect(
+      container.querySelector('[data-room-pet]')?.getAttribute('data-room-action')
+    ).toBe('jumping')
+  })
+
+  it('没话说时一个字都不摆（安静是默认）', async () => {
+    const { container } = renderPane()
+    await screen.findAllByText('一摞成果')
+    expect(container.querySelector('[data-room-line]')).toBeNull()
+  })
+
+  it('它叼着的那份在架上也标得出来——两处指的是同一件东西', async () => {
+    const fresh: PetThing = {
+      id: 'file:deliver/a.md',
+      ref: 'deliver/a.md',
+      kind: 'output',
+      module: 'work',
+      module_label: '工作',
+      icon: '📄',
+      label: '给领导的汇报',
+      detail: '交付 · 2026-09-12',
+      at: '2026-09-12T10:00:00',
+      at_ts: Date.now() / 1000 - 60,
+      count: 1,
+    }
+    vi.mocked(api.petRoom).mockResolvedValue({ ...ROOM, carried: fresh })
+    const { container } = renderPane()
+    await screen.findAllByText('给领导的汇报')
+    expect(
+      container.querySelector('[data-room-shelf-carried]')?.getAttribute('data-room-shelf-carried')
+    ).toBe('deliver/a.md')
+    expect(screen.getByText('它刚叼回来的')).toBeTruthy()
+  })
+
+  it('24 小时内到手的说「多久以前」，更早的回到日期——屋里不摆流水账', async () => {
+    const now = Date.now() / 1000
+    vi.mocked(api.petRoom).mockResolvedValue({
+      ...ROOM,
+      carried: null,
+      shelf: [
+        { kind: 'deliver', label: '交付', title: '刚写的', date: '2026-09-14', path: 'deliver/new.md', mtime: now - 120 },
+        { kind: 'research', label: '研究', title: '上周的', date: '2026-09-07', path: 'research/old.md', mtime: now - 7 * 86400 },
+      ],
+    })
+    renderPane()
+    expect(await screen.findByText('刚写的')).toBeTruthy()
+    expect(screen.getByText('2 分钟前')).toBeTruthy()
+    expect(screen.getByText('2026-09-07')).toBeTruthy() // 旧的照旧写日期
+    expect(screen.queryByText('7 天前')).toBeNull()
+  })
+
+  it('待在这一页的时候会自己重取：后台交出一份成品，屋里当场多一件', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const { container } = renderPane()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(container.querySelectorAll('[data-room-thing]').length).toBe(2)
+      expect(api.petRoom).toHaveBeenCalledTimes(1)
+
+      // 下一拍之前：架子上多了一份
+      const shelf = [
+        ...SHELF,
+        { kind: 'recap', label: '复盘', title: '刚落的复盘', date: '2026-09-14', path: 'recap/b.md', mtime: 2 },
+      ] as WorkOutput[]
+      vi.mocked(api.petRoom).mockResolvedValue({ ...ROOM, shelf })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15000)
+      })
+      expect(api.petRoom).toHaveBeenCalledTimes(2)
+      expect(screen.getByText('刚落的复盘')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 // Q2 · 技能卡：技能只有一个到手方式——一条提示词跑过一次对照。
+// P2 · F13：学习地图在小屋里的镜子。它与屋里别的东西不是一类——照的是**此刻在哪一档**，
+// 所以同一个概念的卡会变色；而「未触及」那一档**一个字都不进屋**（那是「还没做的事」）。
+describe('RoomPane · 它记住的概念', () => {
+  const LEARNED = concept({
+    id: 'concept:SQLite WAL',
+    name: 'SQLite WAL',
+    state: 'learning',
+    sessions: 1,
+    at_ts: Date.now() / 1000 - 3600,
+  })
+  const STUCK = concept({
+    id: 'concept:CORS 预检',
+    name: 'CORS 预检',
+    state: 'stuck',
+    sessions: 2,
+    stuck: '以为 OPTIONS 是应用层发的',
+  })
+
+  it('按地图分好的档摆卡：词与色跟学页那张地图是同一套', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue({
+      ...ROOM,
+      concepts: { cards: [CONCEPT, LEARNED, STUCK], total: 3 },
+    })
+    const { container } = renderPane()
+    const cards = await waitFor(() => {
+      const els = [...container.querySelectorAll('[data-room-concept]')]
+      if (els.length < 3) throw new Error('概念卡还没摆出来')
+      return els as HTMLElement[]
+    })
+    expect(cards.map((el) => el.getAttribute('data-room-concept'))).toEqual([
+      'asyncio 事件循环',
+      'SQLite WAL',
+      'CORS 预检',
+    ])
+    expect(cards.map((el) => el.getAttribute('data-room-concept-state'))).toEqual([
+      'mastered',
+      'learning',
+      'stuck',
+    ])
+    // 档位那两个字来自 `conceptState.ts`（与地图的档位标签同一份），不是后端发来的
+    expect(cards[0].textContent).toContain('已掌握')
+    expect(cards[1].textContent).toContain('在学')
+    expect(cards[2].textContent).toContain('卡住')
+    expect(cards[0].textContent).toContain('讲过 3 次')
+    // 点开走既有的那条深链：专门为这个概念开一场教学
+    expect((cards[0] as HTMLAnchorElement).getAttribute('href')).toBe(
+      `/tutor?new=${encodeURIComponent('asyncio 事件循环')}`
+    )
+  })
+
+  it('只有卡住那一档带「卡在哪儿」', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue({
+      ...ROOM,
+      concepts: { cards: [CONCEPT, STUCK], total: 2 },
+    })
+    const { container } = renderPane()
+    await waitFor(() =>
+      expect(container.querySelectorAll('[data-room-concept]').length).toBe(2)
+    )
+    const got = [...container.querySelectorAll('[data-room-concept]')].map((el) => el.textContent)
+    expect(got[1]).toContain('卡在「以为 OPTIONS 是应用层发的」')
+    expect(got[0]).not.toContain('卡在')
+  })
+
+  it('未触及那一档进不来，屋里也不摆一句「还没碰的」', async () => {
+    // 后端这份契约里根本没有 untouched 这个键；就算硬塞进来也不该被摆出来
+    vi.mocked(api.petRoom).mockResolvedValue({
+      ...ROOM,
+      concepts: {
+        cards: [CONCEPT],
+        total: 1,
+        // @ts-expect-error 故意多塞一档：界面不许自己长出地图上没有的档
+        untouched: [{ id: 1, point: 'B+ 树怎么分裂' }],
+      },
+    })
+    const { container } = renderPane()
+    await waitFor(() => expect(container.querySelector('[data-room-concept]')).toBeTruthy())
+    expect(container.querySelectorAll('[data-room-concept]').length).toBe(1)
+    expect(screen.queryByText('B+ 树怎么分裂')).toBeNull()
+    expect(screen.queryByText(/未触及/)).toBeNull()
+    expect(screen.queryByText(/还差|还欠|没碰/)).toBeNull()
+  })
+
+  it('认不出来的档照实写出来，不猜一个颜色糊上', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue({
+      ...ROOM,
+      concepts: { cards: [concept({ state: '复习中' })], total: 1 },
+    })
+    const { container } = renderPane()
+    const card = await waitFor(() => {
+      const el = container.querySelector('[data-room-concept]')
+      if (!el) throw new Error('还没有卡')
+      return el as HTMLElement
+    })
+    expect(card.textContent).toContain('复习中')
+    // 没有那三档的颜色（认不出来就是不给色，也不假装它是「在学」）
+    expect(card.className).not.toContain('emerald')
+    expect(card.className).not.toContain('amber')
+    expect(card.className).not.toContain('sky')
+  })
+
+  it('屋里摆不下时说「共 N 个」并给出去处——掉出屋子的不是没了', async () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      concept({ id: `concept:概念${i}`, name: `概念${i}`, state: 'learning' })
+    )
+    vi.mocked(api.petRoom).mockResolvedValue({ ...ROOM, concepts: { cards: many, total: 15 } })
+    const { container } = renderPane()
+    await waitFor(() =>
+      expect(container.querySelectorAll('[data-room-concept]').length).toBe(12)
+    )
+    expect(screen.getByText('共 15 个')).toBeTruthy()
+    const hrefs = [...container.querySelectorAll('a')].map((a) => a.getAttribute('href'))
+    expect(hrefs).toContain('/tutor')
+  })
+
+  it('摆得下时不写「共 N 个」', async () => {
+    const { container } = renderPane()
+    await waitFor(() => expect(container.querySelector('[data-room-concept]')).toBeTruthy())
+    expect(screen.queryByText(/^共 \d+ 个$/)).toBeNull()
+  })
+
+  it('一张卡都没有时说清楚路径，不摆空位也不催', async () => {
+    vi.mocked(api.petRoom).mockResolvedValue(EMPTY)
+    renderPane()
+    expect(await screen.findByText('它记住的概念')).toBeTruthy()
+    expect(screen.getByText(/还没有一张概念卡/)).toBeTruthy()
+    expect(screen.queryByText(/还差|还欠|没碰/)).toBeNull()
+  })
+})
+
 describe('RoomPane · 它学会的技能', () => {
   it('摆出有基线的那张卡：名字、过了几条、区间，点开进实验室', async () => {
     const { container } = renderPane()
@@ -300,5 +608,78 @@ describe('RoomPane · 它长出的枝', () => {
     await screen.findByText('它长出的枝')
     expect(container.querySelector('[data-room-form]')).toBeNull()
     expect(screen.getByText(/还没有长出枝/)).toBeTruthy()
+  })
+})
+
+// M4 · 这一周：**读出来的事实**说成一句话。不是清单、不是账单，转播客念的就是那一句。
+describe('RoomPane · 这一周', () => {
+  it('说的是那句话，并把数摆出来让你核', async () => {
+    const { container } = renderPane()
+    expect(await screen.findByText(WEEK.text)).toBeTruthy()
+    // 区间一起摆出来：周三点开时它只是半周，别让半周的数看起来像整周的数
+    expect(screen.getByText('09-14 – 09-16')).toBeTruthy()
+    const facts = [...container.querySelectorAll('[data-room-weekly-fact]')].map((el) =>
+      el.getAttribute('data-room-weekly-fact')
+    )
+    expect(facts).toEqual(['sources', 'got', 'half', 'outputs'])
+    expect(container.querySelector('[data-room-weekly-recurring="闭包"]')).toBeTruthy()
+  })
+
+  it('零的那几格不摆出来——一排 0 就是一张自找的欠账清单', async () => {
+    vi.mocked(api.weeklyReport).mockResolvedValue({
+      ...WEEK,
+      facts: { sources: 0, points: 0, got: 1, half: 0, outputs: 0, recurring: [] },
+      text: '这周你说通了 1 个概念。',
+    })
+    const { container } = renderPane()
+    await screen.findByText('这周你说通了 1 个概念。')
+    const facts = [...container.querySelectorAll('[data-room-weekly-fact]')].map((el) =>
+      el.getAttribute('data-room-weekly-fact')
+    )
+    expect(facts).toEqual(['got'])
+  })
+
+  it('没数据的那一周只说「还没什么可说的」，也不给转播客的按钮', async () => {
+    vi.mocked(api.weeklyReport).mockResolvedValue({
+      ...WEEK,
+      facts: { sources: 0, points: 0, got: 0, half: 0, outputs: 0, recurring: [] },
+      text: '',
+      empty: true,
+    })
+    const { container } = renderPane()
+    expect(await screen.findByText(/还没什么可说的/)).toBeTruthy()
+    expect(screen.queryByText('转成播客')).toBeNull()
+    expect(container.querySelector('[data-room-weekly-text]')).toBeNull()
+    expect(screen.queryByText(/还欠|还差|没做/)).toBeNull()
+  })
+
+  it('一键转播客：声音给出来，地址就是那一期', async () => {
+    vi.mocked(api.weeklyPodcast).mockResolvedValue(POD)
+    const { container } = renderPane()
+    fireEvent.click(await screen.findByText('转成播客'))
+    await waitFor(() => {
+      const el = container.querySelector('[data-room-weekly-audio]')
+      if (!el) throw new Error('还没有音频')
+      expect(el.getAttribute('data-room-weekly-audio')).toBe('pod-x.wav')
+      expect(el.getAttribute('src')).toBe('/api/podcast/audio/pod-x.wav')
+    })
+  })
+
+  it('录不出来就照实说，不假装成功', async () => {
+    vi.mocked(api.weeklyPodcast).mockRejectedValue(
+      new Error('400: {"detail":"语音合成失败，没有生成任何音频"}')
+    )
+    const { container } = renderPane()
+    fireEvent.click(await screen.findByText('转成播客'))
+    expect(await screen.findByText('语音合成失败，没有生成任何音频')).toBeTruthy()
+    expect(container.querySelector('[data-room-weekly-audio]')).toBeNull()
+  })
+
+  it('周报读不出来不拖垮整间屋子', async () => {
+    vi.mocked(api.weeklyReport).mockRejectedValue(new Error('500: boom'))
+    const { container } = renderPane()
+    await screen.findAllByText('一摞成果')
+    expect(container.querySelector('[data-room-weekly-text]')).toBeNull()
+    expect(screen.getByText('架上那几份')).toBeTruthy()
   })
 })

@@ -301,6 +301,38 @@ export interface CardGenStage {
   model_id?: string
 }
 
+// ---------- 零柒的事件流 ----------
+
+/** 一条台词（就是 `/api/pet/feed` 会给的那一行）。 */
+export interface PetStreamLine {
+  id: number
+  kind: string
+  text: string
+  detail: string
+  created_at: string
+  name: string
+}
+
+/**
+ * 零柒的事件流（P4）：**有事发生就立刻说**，不再靠每 15 秒问一次。
+ *
+ * 两件事会来：`event`（新台词）与 `work`（此刻在跑什么变了）。状态本身不在这条流上算——
+ * 它取决于你在哪个页面、多久没动键鼠，那是浏览器才知道的事，所以流只说「有新东西了」，
+ * 界面收到 `work` 就重算一次 `/api/pet/state`。
+ *
+ * **无限流**：正常返回只在服务端关掉它时发生（那就当断了，调用方负责重连）。
+ * 用 `fetch` 而不是 `EventSource`：后者发不了自定义 header，也读不出别的错误信息。
+ */
+export async function streamPet(
+  sinceId: number,
+  onFrame: (event: string, data: Record<string, unknown>) => void,
+  signal: AbortSignal
+): Promise<void> {
+  const res = await fetch(`/api/pet/stream?since_id=${sinceId}`, { signal })
+  if (!res.ok || !res.body) throw new Error(`pet stream failed: ${res.status}`)
+  for await (const [event, data] of sseFrames(res)) onFrame(event, data)
+}
+
 export interface CardGenDone {
   ok: boolean
   error?: string

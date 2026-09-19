@@ -5,9 +5,14 @@
  *  选一条 → 按 golden set 重放 → 看 `k/n`、Wilson 区间、每一条用例的成败与原文。
  *
  *  两个词的区别写在界面上，因为很容易混：
- *  - **登记表**（这一页）= 驱动系统行为的 32 条系统提示词，有 sha 指纹；
+ *  - **登记表**（这一页）= 驱动系统行为的那些系统提示词（`core/prompts.py::_SPECS`），有 sha 指纹；
  *  - 设置页那个「提示词」= 你自己的片段库（存起来备用的一段文本，不带行为）。
  *  上一轮定的技能卡绑的是**前者**。
+ *
+ *  golden set 有两种形状，这一页按形状显示（判据是断言还是人工档位）：
+ *  - **聊天型**：一句真实输入 + 它必须满足的断言 → 报告说「断言 x/y 过」；
+ *  - **判分型**（重讲判分，PLAN2 P2-1）：卡三样 + 重讲原文 + **人工档位** → 报告说
+ *    「档位一致 k/n」「差一档内」「高判/低判」，有争议的条目不进 k/n。
  *
  *  语气上的三条，与宠物那条线一致：
  *  - **不摆进度条**：没有「还差 3 条用例才能上线」，只有事实（几条、过没过、区间多宽）；
@@ -24,6 +29,10 @@ import {
   type PromptRegistryEntryDetail,
 } from './api'
 import EmptyHint from './EmptyHint'
+
+/** 判分型金标集（P2-1）的四档 + 一个「不判」。**0 不是一档**：它是「人工也认为
+ *  这时候该判不了」（卡上没有答案）——与 `retell.read_card` 里那个 `grade: 0` 同义。 */
+const GRADE_LABEL: Record<number, string> = { 0: '不判', 1: '重来', 2: '困难', 3: '良好', 4: '简单' }
 
 /** 区间宽度这件事要摆在明面上——宽到没法下结论时说清楚，而不是给个数字让它自己看。 */
 function ciText(lo: number, hi: number): string {
@@ -327,15 +336,19 @@ export default function PromptLab() {
                 ) : null}
                 <div className="flex-1" />
                 <span className="text-[10px] text-neutral-400">{detail.fixture}</span>
-                <button
-                  data-lab-feed-open
-                  onClick={() =>
-                    setFeed({ open: !feed.open, user: '', intent: '', checks: [] })
-                  }
-                  className="text-[11px] text-violet-500 hover:underline"
-                >
-                  {feed.open ? '收起' : '喂一条进来'}
-                </button>
+                {/* 判分型的金标集不从界面喂：它的用例是「卡三样 + 重讲 + 人工档位」，
+                    没有断言可勾（后端也当场拒绝）。要加一条就去改那个 JSON。 */}
+                {detail.case_kind === 'grade' ? null : (
+                  <button
+                    data-lab-feed-open
+                    onClick={() =>
+                      setFeed({ open: !feed.open, user: '', intent: '', checks: [] })
+                    }
+                    className="text-[11px] text-violet-500 hover:underline"
+                  >
+                    {feed.open ? '收起' : '喂一条进来'}
+                  </button>
+                )}
               </div>
 
               {/* 喂食表单：这一整套的入口只有一句话——把真实踩到的那句抄进来 */}
@@ -419,16 +432,52 @@ export default function PromptLab() {
                       </span>
                       <span className="text-neutral-400 dark:text-neutral-500">{c.intent}</span>
                       <div className="flex-1" />
-                      <button
-                        data-lab-case-drop={c.id}
-                        onClick={() => void dropCase(c.id)}
-                        title="从金标集里删掉这条（坏用例会污染指标）"
-                        className="shrink-0 text-[10px] text-neutral-400 hover:text-rose-500"
-                      >
-                        删
-                      </button>
+                      {c.grade != null ? (
+                        <span
+                          data-lab-case-grade={c.id}
+                          className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${
+                            c.contested
+                              ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
+                              : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
+                          }`}
+                          title={
+                            c.contested
+                              ? c.why || '这条的档位有争议：不计进 k/n'
+                              : '人工档位（这套金标集的基准）'
+                          }
+                        >
+                          人工 {GRADE_LABEL[c.grade] ?? c.grade}
+                          {c.contested ? ' · 有争议' : ''}
+                        </span>
+                      ) : null}
+                      {/* 判分型的用例不从界面删：它的条数有下限（30 条），一条条删很容易在
+                          不知情的情况下把整套跑到跑不动。出口在文件里（后端也会拒）。 */}
+                      {detail.case_kind === 'grade' ? null : (
+                        <button
+                          data-lab-case-drop={c.id}
+                          onClick={() => void dropCase(c.id)}
+                          title="从金标集里删掉这条（坏用例会污染指标）"
+                          className="shrink-0 text-[10px] text-neutral-400 hover:text-rose-500"
+                        >
+                          删
+                        </button>
+                      )}
                     </div>
-                    <div className="mt-1 text-neutral-600 dark:text-neutral-300">「{c.user}」</div>
+                    {c.grade != null ? (
+                      <>
+                        <div className="mt-1 text-neutral-600 dark:text-neutral-300">
+                          题面：{c.front || '（空）'}
+                        </div>
+                        <div className="mt-0.5 text-neutral-500 dark:text-neutral-400">
+                          答案：{c.back || '（这张卡没写答案——这时唯一正确的动作是「判不了」）'}
+                        </div>
+                        <div className="mt-0.5 text-neutral-600 dark:text-neutral-300">
+                          重讲：「{c.retell}」
+                        </div>
+                      </>
+                    ) : (
+                      <div className="mt-1 text-neutral-600 dark:text-neutral-300">「{c.user}」</div>
+                    )}
                     <div className="mt-1 flex flex-wrap gap-1">
                       {c.checks.map((n) => (
                         <span
@@ -444,8 +493,9 @@ export default function PromptLab() {
                 ))}
               </ul>
               <p className="border-t border-neutral-100 px-3 py-2 text-[10px] leading-relaxed text-neutral-400 dark:border-neutral-800">
-                每条断言都对应提示词自己的一句话（鼠标停在断言上看是哪句）。断言写错名字会**当场算不过**，
-                不会静默放过。
+                {detail.case_kind === 'grade'
+                  ? '判分型的用例：卡三样 + 重讲原文 + 人工档位。判据是人工档位（这套集合的基准，不是真理）——每条 intent 写着为什么是这一档，人要能审。'
+                  : '每条断言都对应提示词自己的一句话（鼠标停在断言上看是哪句）。断言写错名字会**当场算不过**，不会静默放过。'}
               </p>
             </div>
 
@@ -515,13 +565,64 @@ export default function PromptLab() {
                     </span>
                   </div>
                   <div className="mt-1 text-[11px] text-neutral-400">
-                    断言 {report.assertions.total - report.assertions.failed}/
-                    {report.assertions.total} 过
+                    {report.report_kind === 'grade' ? (
+                      <>
+                        档位一致 {report.passed}/{report.total}
+                        {report.near != null && (
+                          <>
+                            {' · '}差一档内{' '}
+                            <span title="有序档位上的第二个数：判低一档与判反了不是一件事">
+                              {report.near}/{report.total}（{report.near_rate != null ? pct(report.near_rate) : '—'}）
+                            </span>
+                          </>
+                        )}
+                        {report.over != null && (
+                          <>
+                            {' · '}高判 {report.over} / 低判 {report.under}
+                            <span className="text-neutral-300 dark:text-neutral-600">
+                              （它承诺「宁可低判不高判」）
+                            </span>
+                          </>
+                        )}
+                        {report.fallback ? <> · 说判不了 {report.fallback}</> : null}
+                      </>
+                    ) : (
+                      <>
+                        断言 {report.assertions.total - report.assertions.failed}/
+                        {report.assertions.total} 过
+                      </>
+                    )}
                     {report.baseline
                       ? ` · 基线 ${report.baseline.passed}/${report.baseline.total}`
                       : ' · 没有基线可比（这是第一次）'}
                     {report.tell ? ' · 样本量够分辨' : ' · ⚠️ 区间太宽，这个 n 下不了结论'}
                   </div>
+                  {report.report_kind === 'grade' && report.matrix && (
+                    <div className="mt-1.5 text-[10px] tabular-nums text-neutral-400">
+                      <span title="行 = 人工档位，列 = 它判的档位">
+                        矩阵（行=人工，列=它判 0–4）：
+                      </span>
+                      {Object.entries(report.matrix).map(([exp, row]) => (
+                        <span key={exp} className="ml-1.5 font-mono">
+                          {GRADE_LABEL[Number(exp)] ?? exp}
+                          {['0', '1', '2', '3', '4'].map((g) => row[g] ?? 0).join('/')}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {report.report_kind === 'grade' && (report.contested?.length ?? 0) > 0 && (
+                    <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                      有争议、不计分：
+                      {report.contested?.map((c) => (
+                        <span key={c.id} className="ml-1 font-mono" title={c.why}>
+                          {c.id}
+                        </span>
+                      ))}
+                      <span className="text-neutral-400">
+                        （人工档位有争议的用例不进 k/n——拿犹豫冒充一个数更糟）
+                      </span>
+                    </div>
+                  )}
                   {report.flips.length > 0 && (
                     <div className="mt-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
                       翻面：
@@ -540,13 +641,29 @@ export default function PromptLab() {
                   {report.cases.map((c) => (
                     <li key={c.id} data-lab-result={c.id} className="px-3 py-2 text-xs">
                       <div className="flex items-baseline gap-2">
-                        <span className={c.passed ? 'text-emerald-500' : 'text-rose-500'}>
-                          {c.passed ? '✓' : '✗'}
+                        <span
+                          className={
+                            c.passed
+                              ? 'text-emerald-500'
+                              : c.contested || c.near
+                                ? 'text-amber-500'
+                                : 'text-rose-500'
+                          }
+                        >
+                          {c.passed ? '✓' : c.contested ? '~' : c.near ? '≈' : '✗'}
                         </span>
                         <span className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400">
                           {c.id}
                         </span>
+                        {c.expect != null ? (
+                          <span className="shrink-0 text-[10px] text-neutral-400">
+                            人工 {GRADE_LABEL[c.expect] ?? c.expect} · 它判{' '}
+                            {c.fallback ? '不判' : (GRADE_LABEL[c.got ?? 0] ?? c.got)}
+                          </span>
+                        ) : null}
                         <div className="flex-1" />
+                        {/* 判分型的用例不进「喂一条」那个表单：它的判据是人工档位，不是断言 */}
+                        {detail.case_kind === 'grade' ? null : (
                         <button
                           data-lab-feed-from={c.id}
                           onClick={() => {
@@ -572,8 +689,10 @@ export default function PromptLab() {
                         >
                           喂进金标集
                         </button>
+                        )}
                         <span className="text-[10px] tabular-nums text-neutral-400">
-                          {c.chars} 字 · {c.seconds}s
+                          {c.chars ? `${c.chars} 字 · ` : ''}
+                          {c.seconds}s
                         </span>
                       </div>
                       {c.failed.length > 0 && (

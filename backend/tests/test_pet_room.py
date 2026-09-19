@@ -119,6 +119,31 @@ def _insert(table: str, **cols) -> None:
         conn.close()
 
 
+async def _tutor_session(concept: str, verdict: str, *, days_ago: int = 1, stuck: str = "") -> int:
+    """一场已结束的教学会话，直接写库（`tutor.end()` 那一套自己有测试）。
+
+    概念卡的真值就是这张表：屋里那张卡是 `tutor.learning_map()` 的倒影，
+    所以这一层要验的是「真会话 → 真地图 → 屋里的卡」，中间不准有第二份判定。
+    """
+    from app.db import SessionLocal
+    from app.models import TutorSession, utcnow
+
+    when = utcnow() - timedelta(days=days_ago)
+    async with SessionLocal() as db:
+        row = TutorSession(
+            topic=concept,
+            concept=concept,
+            verdict=verdict,
+            stuck=stuck,
+            created_at=when,
+            ended_at=when,
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        return row.id
+
+
 # --- 门槛表本身：它是一份声明，改坏了要在这里被拦下 ------------------------------
 
 
@@ -454,3 +479,201 @@ def test_the_newest_row_wins_when_a_new_file_lands_on_an_old_shelf():
     )
     assert got["label"] == "新的"
     assert got["detail"] == "交付 · 2026-09-14"
+
+
+def test_carried_says_which_shelf_row_it_is():
+    """叼回来的那份要**指得出架上那一行**（`ref` = 那条 `path`）。
+
+    界面靠它标「它叼的就是这份」。让界面自己再算一遍「谁最新」是不行的：那是第二份判定，
+    两处迟早会各指一件东西——而这个仓库为这种事付过账（小屋架子 vs 工作页清单）。
+    """
+    fresh = datetime(2026, 9, 14, 3, 0, tzinfo=timezone.utc).timestamp()
+    got = pr.carried(None, [_shelf("deliver/a.md", fresh)], tz=TZ)
+    assert got["ref"] == "deliver/a.md"
+
+
+def test_a_threshold_thing_has_no_shelf_row_to_point_at():
+    """门槛那件（徽章 / 摆设）不在架上，所以它没有 `ref`——不是空串猜出来的，
+    是这个字段**根本不存在**于那条路上。"""
+    # 空库里没有任何东西，先造一件：一条复习记录就够跨过 `reviews:1` 那个门槛
+    _insert("card_reviews", reviewed_at="2026-09-14 03:00:00.000000")
+    out = pr.room(now=datetime(2026, 9, 14, 12, 0, tzinfo=TZ), tz=TZ)
+    assert out["carried"]["id"] == "reviews:1"
+    assert "ref" not in out["carried"]
+
+
+# --- 概念卡（P2 · F13）：学习地图在小屋里的镜子 ------------------------------------
+#
+# 这一类的规矩与「攒下的东西」不同（模块 docstring 里那两类的分别）：它照的是**此刻**
+# 在哪一档，所以状态会来回动。要钉住的只有三件事：
+#   1. 档位是**地图分好的**，屋里不重判（map 怎么分，这儿就怎么摆）；
+#   2. 「未触及」一档一个字都不进小屋（那是欠账）；
+#   3. 读不出来就说读不出来（时间读不出来的行整张不摆）。
+
+
+def _row(concept: str, at: str, sessions: int = 1, stuck: str = "") -> dict:
+    """地图那一行的样子（`tutor._by_concept()` 的产出，只留这里读的几个字段）。"""
+    return {"concept": concept, "last_at": at, "sessions": sessions, "stuck": stuck}
+
+
+def _board(mastered=(), learning=(), stuck=(), untouched=()) -> dict:
+    return {
+        "mastered": list(mastered),
+        "learning": list(learning),
+        "stuck": list(stuck),
+        "untouched": list(untouched),
+    }
+
+
+def test_concept_cards_carry_the_state_the_map_put_them_in():
+    board = _board(
+        mastered=[_row("asyncio 事件循环", "2026-09-14T01:00:00+00:00", sessions=2)],
+        learning=[_row("SQLite WAL", "2026-09-13T01:00:00+00:00")],
+        stuck=[_row("CORS 预检", "2026-09-12T01:00:00+00:00", stuck="以为 OPTIONS 是应用层发的")],
+    )
+    out = pr.concept_cards(board, tz=TZ)
+    assert [c["id"] for c in out["cards"]] == [
+        "concept:asyncio 事件循环",
+        "concept:SQLite WAL",
+        "concept:CORS 预检",
+    ]
+    assert [c["state"] for c in out["cards"]] == ["mastered", "learning", "stuck"]
+    assert out["total"] == 3
+    # 时间是**镜像那一刻之前最后一次碰它**的时刻，本地墙钟与 epoch 都给（前端不猜时区）
+    first = out["cards"][0]
+    assert first["at"] == "2026-09-14T09:00:00"
+    assert first["at_ts"] == datetime(2026, 9, 14, 1, 0, tzinfo=timezone.utc).timestamp()
+    assert first["sessions"] == 2
+
+
+def test_the_untouched_bucket_never_enters_the_room():
+    """「拆出来、还没开成教」的点是**还没做的事**，不是屋里的一件东西。
+
+    摆出来就是一张「你还有 3 个点没碰」的清单——那正是这个仓库封存过的口吻。
+    注意它**也不进 `total`**：屋里连数都不数它。
+    """
+    board = _board(
+        learning=[_row("SQLite WAL", "2026-09-13T01:00:00+00:00")],
+        untouched=[{"id": 1, "point": "B+ 树怎么分裂"}, {"id": 2, "point": "WAL 的检查点"}],
+    )
+    out = pr.concept_cards(board, tz=TZ)
+    assert [c["name"] for c in out["cards"]] == ["SQLite WAL"]
+    assert out["total"] == 1
+    assert all("未触及" not in c["id"] for c in out["cards"])
+
+
+def test_the_room_shows_the_newest_ones_but_the_total_keeps_counting():
+    """屋里只摆得下 `limit` 张（学页那张地图才是全量）。**掉出屋子的不是没了**——
+    它没有从 `total` 里消失，也没有从真值里消失，只是这一屏放不下。"""
+    board = _board(
+        learning=[
+            _row(f"概念{i:02d}", f"2026-09-{i + 1:02d}T01:00:00+00:00") for i in range(15)
+        ]
+    )
+    out = pr.concept_cards(board, tz=TZ)
+    assert len(out["cards"]) == pr.CONCEPT_CARDS_CAP == 12
+    assert out["total"] == 15
+    assert out["cards"][0]["name"] == "概念14"  # 最近的排最前
+    assert "概念00" not in [c["name"] for c in out["cards"]]
+
+
+def test_only_a_stuck_card_carries_the_stuck_line():
+    """卡在哪只有「卡住」那一档说。
+
+    「已掌握」的行上也可能留着当时的卡点（说通了，当时卡在 X）——那是记录，不是现状；
+    镜子照的是现状，所以那两档一律不带这句话。
+    """
+    board = _board(
+        mastered=[_row("asyncio 事件循环", "2026-09-14T01:00:00+00:00", stuck="当时卡在 select")],
+        stuck=[_row("CORS 预检", "2026-09-12T01:00:00+00:00", stuck="以为 OPTIONS 是应用层发的")],
+    )
+    got = {c["name"]: c for c in pr.concept_cards(board, tz=TZ)["cards"]}
+    assert got["CORS 预检"]["stuck"] == "以为 OPTIONS 是应用层发的"
+    assert got["asyncio 事件循环"]["stuck"] == ""
+
+
+def test_a_concept_without_a_readable_time_is_not_shown_at_all():
+    """时间读不出来 → 整张不摆，`total` 也不数它。
+
+    「什么时候碰的」是这张卡的一半；摆一张日期空着的卡，读的人只会以为是今天。
+    同 `delivery.due()` 对时间读不出来的行的做法。
+    """
+    board = _board(
+        learning=[
+            _row("时间坏了", "昨天"),
+            _row("空时间", ""),
+            _row("好的", "2026-09-13T01:00:00+00:00"),
+        ]
+    )
+    out = pr.concept_cards(board, tz=TZ)
+    assert [c["name"] for c in out["cards"]] == ["好的"]
+    assert out["total"] == 1
+
+
+def test_concept_cards_survive_a_broken_board():
+    """镜子坏了不该挡住整间屋子：读不出来就是没有，一条也不抛。"""
+    for junk in (None, {}, [], {"mastered": "不是清单"}, {"learning": ["不是字典", None]}):
+        assert pr.concept_cards(junk, tz=TZ) == {"cards": [], "total": 0}
+
+    # 同一个概念真出现在两档里（地图不会这么给）：以**靠前的档**为准，且只摆一张
+    dup = _board(
+        mastered=[_row("同名", "2026-09-14T01:00:00+00:00")],
+        learning=[_row("同名", "2026-09-13T01:00:00+00:00")],
+    )
+    cards = pr.concept_cards(dup, tz=TZ)["cards"]
+    assert [c["state"] for c in cards] == ["mastered"]
+    assert pr.concept_cards(dup, tz=TZ)["total"] == 1
+
+    # 计数读不出来当 0、负数不摆成负的（界面上那行字是「讲过 N 次」）
+    bad = pr.concept_cards(_board(learning=[_row("x", "2026-09-13T01:00:00+00:00", sessions="很多")]), tz=TZ)
+    assert bad["cards"][0]["sessions"] == 0
+    neg = pr.concept_cards(_board(learning=[_row("y", "2026-09-13T01:00:00+00:00", sessions=-3)]), tz=TZ)
+    assert neg["cards"][0]["sessions"] == 0
+
+    # limit=0：一张都不摆，但总数照旧
+    assert pr.concept_cards(
+        _board(learning=[_row("z", "2026-09-13T01:00:00+00:00")]), tz=TZ, limit=0
+    ) == {"cards": [], "total": 1}
+
+
+async def test_the_rooms_three_states_are_the_maps_three_buckets():
+    """屋里那三档与学习地图的三档**同形**（`concept_cards` 只读这三个键）。
+
+    地图加一档（或改个名），这里必须当场红——否则屋里会安静地少摆一类概念，
+    而那种少是看不出来的。这是「一处逻辑」那条规矩在这一层上的钉子。
+    """
+    from app.core import tutor
+
+    board = await tutor.learning_map()
+    assert set(pr.CONCEPT_STATES) | {"untouched"} == set(board)
+    assert set(pr.CONCEPT_STATES) == {"mastered", "learning", "stuck"}
+
+
+async def test_the_room_reads_its_concept_cards_out_of_real_sessions():
+    """真行那一层：会话是真值，地图是派生的，屋里这张卡只是它的倒影。
+
+    顺带钉住**接线**：`/api/pet/room` 真的把它带出来了（路由里那一行不写，
+    界面就永远是空的，而且看不出来是坏的）。
+    """
+    from app.core import tutor
+    from app.routers.pet import pet_room as room_endpoint
+
+    await _tutor_session("asyncio 事件循环", "got", days_ago=5)
+    await _tutor_session("asyncio 事件循环", "got", days_ago=1)  # 两场才算已掌握
+    await _tutor_session("React useEffect 依赖数组", "half", days_ago=2)
+    await _tutor_session("CORS 预检", "half", days_ago=3, stuck="以为 OPTIONS 是应用层发的")
+
+    # `/api/pet/room` 那个端点本身（直接调函数，不起 HTTP）
+    payload = await room_endpoint()
+    cards = {c["name"]: c["state"] for c in payload["concepts"]["cards"]}
+    assert cards == {
+        "asyncio 事件循环": "mastered",
+        "React useEffect 依赖数组": "learning",
+        "CORS 预检": "stuck",
+    }
+    assert payload["concepts"]["total"] == 3
+    # 与地图本身对齐（不是自己另算了一份）
+    board = await tutor.learning_map()
+    assert payload["concepts"]["total"] == len(board["mastered"]) + len(board["learning"]) + len(
+        board["stuck"]
+    )

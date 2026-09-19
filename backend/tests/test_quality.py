@@ -127,3 +127,41 @@ def test_days_window_excludes_old_rows():
     s90 = asyncio.run(quality.summary(days=90))
     s400 = asyncio.run(quality.summary(days=400))
     assert s400["total"] == s90["total"] + 1
+
+
+# ---------- S1：注入那一维（PLAN3 §9.2 决策4） ----------
+
+
+def test_the_injection_mark_splits_a_group_without_moving_the_key():
+    """同一份 (kind, sha, model) 下，「有注入 / 没注入 / 不知道」分开摆——而**原来那几个数
+    一个不动**。注入不改变 `prompt_sha`（它是模块级常量的指纹），不加这一维，两种工序的
+    👍/👎 会混成一份成绩，而改 key 又会断裂历史。"""
+    _rec(kind="compose", verdict="good", prompt_sha="e" * 12, model_id="m2",
+         injected='["给领导写汇报要结论先行"]')
+    _rec(kind="compose", verdict="bad", prompt_sha="e" * 12, model_id="m2", reason="太啰嗦",
+         injected='["给领导写汇报要结论先行"]')
+    _rec(kind="compose", verdict="good", prompt_sha="e" * 12, model_id="m2", injected="[]")
+    _rec(kind="compose", verdict="good", prompt_sha="e" * 12, model_id="m2")  # 不传 = 不知道
+
+    g = next(x for x in asyncio.run(quality.summary())["groups"] if x["prompt_sha"] == "e" * 12)
+    assert (g["total"], g["good"], g["bad"]) == (4, 3, 1)  # 老口径的数没变
+    assert g["split"]["injected"] == {"good": 1, "bad": 1}
+    assert g["split"]["plain"] == {"good": 1, "bad": 0}
+    assert g["split"]["unknown"] == {"good": 1, "bad": 0}
+
+
+def test_not_knowing_is_not_the_same_as_not_injecting():
+    """`""`（不知道）与 `"[]"`（确实没有）是两件事——并到一起，这一维就是编出来的数。
+
+    从产出清单**事后**点的 👍 传不了注入清单（那时前端手上没有），它必须落在「不知道」。
+    """
+    assert quality.inject_state("") == "unknown"
+    assert quality.inject_state("   ") == "unknown"
+    assert quality.inject_state("[]") == "plain"
+    assert quality.inject_state('["x"]') == "injected"
+
+    _rec(kind="decide", verdict="good", prompt_sha="f" * 12, model_id="m3", injected="[]")
+    _rec(kind="decide", verdict="good", prompt_sha="f" * 12, model_id="m3")
+    g = next(x for x in asyncio.run(quality.summary())["groups"] if x["prompt_sha"] == "f" * 12)
+    assert g["split"]["plain"]["good"] == 1
+    assert g["split"]["unknown"]["good"] == 1

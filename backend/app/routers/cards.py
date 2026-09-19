@@ -70,6 +70,16 @@ class BatchIn(BaseModel):
 class ReviewIn(BaseModel):
     grade: int
     seconds: float = 0.0
+    # M1：这一次是**讲出来**的（判分挂了退回自评时也带上它——那一天你确实重讲了）
+    retell: str = ""
+
+
+class RetellIn(BaseModel):
+    """重讲作答：它自己判档，你一个字都不用打。"""
+
+    text: str
+    seconds: float = 0.0
+    model_id: str = ""  # 空 = 默认模型（判分用的是同一个，没有单独的"便宜模型"配置）
 
 
 class CardPatch(BaseModel):
@@ -281,6 +291,54 @@ async def get_stats():
     return await core.stats()
 
 
+@router.get("/calibration")
+async def get_calibration(days: int = core.CALIB_DAYS):
+    """校准曲线（PLAN2 T2）：滚动 N 天里，自评的档位分布 vs 判分器判的档位分布。
+
+    **只进仪表盘**——不设目标、不排名、不进零柒嘴里（红线与 PLAN §7 同一条，
+    口径、三条「读之前必须知道的事」都在 `cards.calibration` 里，界面照抄不自己编）。
+    """
+    return await core.calibration(days=days)
+
+
+@router.get("/contradiction")
+async def get_contradiction():
+    """双轨对照（PLAN2 T1 场景 A）：今天到期的卡里，**最该说破的那一条**矛盾事实。
+
+    递卡那句话的内容来源。**不是新的一个提醒来源**：它服务的是原来那条「到期卡」，
+    只换那句话的内容，不加来源、不动优先级（PLAN2 §2 T1）。
+
+    没有矛盾时 `contradiction=null`——那时界面照旧念到期卡，这里不硬凑一句。
+    """
+    from app.core import cross
+
+    return await cross.due_contradiction()
+
+
+@router.get("/contradiction-rate")
+async def get_contradiction_rate(days: int = 30):
+    """双轨矛盾率（PLAN2 §6）：已掌握的概念里，名下的卡这些天还在重来的占多少。
+
+    **只进仪表盘**——这条数是本规划要消灭的那个东西（它降说明桥通了），所以它只许被
+    看见，不许变成目标、排名或零柒的一句话。口径原文在 `cross.GAP_RULE`，界面照抄。
+    """
+    from app.core import cross
+
+    return await cross.contradiction_rate(days)
+
+
+@router.get("/prereq-adoption")
+async def get_prereq_adoption(days: int = 90):
+    """回指采纳（PLAN2 §6）：搁置卡的前置候选，翻过多少张、真开课了多少张。
+
+    拉取式功能「有没有人看」是它唯一的生死指标——**没人看就撤，不留尸体**。
+    口径与那条已知偏差（分母只会偏小）都在 `cross.py` 里，界面照抄。
+    """
+    from app.core import cross
+
+    return await cross.adoption_rate(days)
+
+
 @router.get("/weak")
 async def get_weak(days: int = 30, limit: int = 10):
     return {"days": days, "sources": await core.weak_sources(days=days, limit=limit)}
@@ -349,7 +407,7 @@ async def list_cards(
 @router.post("/{card_id}/review")
 async def review_card(card_id: int, body: ReviewIn):
     try:
-        return await core.submit_review(card_id, body.grade, body.seconds)
+        return await core.submit_review(card_id, body.grade, body.seconds, retell=body.retell)
     except LookupError as e:
         raise HTTPException(404, "卡片不存在") from e
     except ValueError as e:
@@ -357,9 +415,78 @@ async def review_card(card_id: int, body: ReviewIn):
         raise HTTPException(422 if "grade" in msg else 400, msg) from e
 
 
+@router.post("/{card_id}/retell")
+async def retell_card(card_id: int, body: RetellIn):
+    """「讲给它听」：判一次 → 落**同一条**复习记录 → 零柒接一句。
+
+    `ok=False` 时**什么都没写**（判分没跑成 ≠ 差评）：界面据此退回 1–4 自评，
+    并把重讲原文带在自评那次请求上（`ReviewIn.retell`）——那一天你确实重讲了。
+    """
+    from app.core import retell as core_retell
+
+    if not (body.text or "").strip():
+        raise HTTPException(400, "先说点什么")
+    out = await core_retell.adjudicate(
+        card_id, body.text, seconds=body.seconds, model_id=body.model_id
+    )
+    if out.get("reason") == "卡片不存在":
+        raise HTTPException(404, "卡片不存在")
+    if out.get("reason") == "这张卡已搁置":
+        raise HTTPException(400, "这张卡已搁置")
+    # 其余失败（判不了 / 没模型 / 输出读不出来）一律 200 + `ok=false`：那是**设计好的降级**，
+    # 界面据此退回 1–4 自评——不是错误，不该在页面上弹一条红杠。
+    return out
+
+
 @router.post("/{card_id}/undo")
 async def undo_card(card_id: int):
     return await core.undo_review(card_id)
+
+
+@router.get("/{card_id}/crosscheck")
+async def card_crosscheck(card_id: int):
+    """这张卡与它对应概念的对照事实（PLAN2 T1）：`{concept, mastered, said_n, again_7d,
+    contradiction}`。
+
+    **只读、只陈述**：它不判谁对、不改任何判定，也不落库（§3：对质当场算、算完就散）。
+    关联不上概念时 `concept=""` 且 `contradiction=false`——那是常态，不是错误。
+    """
+    from app.core import cross
+
+    out = await cross.card_crosscheck(card_id)
+    if out is None:
+        raise HTTPException(404, "卡片不存在")
+    return out
+
+
+@router.post("/{card_id}/prereq/seen")
+async def mark_prereq_seen(card_id: int):
+    """记一笔「这张卡的候选被翻过」（PLAN2 §6 回指采纳的分母）。
+
+    **是一个单独的 POST，不是那条 GET 的副作用**：读路径带副作用的话，翻页、重试、
+    预取都会记账，而这一条数的用途是判「这个功能有没有人看」——记不准就会把没人用的
+    东西判成有人用。卡不存在 → 404（界面据此知道自己的 id 过期了）。
+    """
+    from app.core import cross
+
+    if not await cross.mark_prereq_seen(card_id):
+        raise HTTPException(404, "卡片不存在")
+    return {"ok": True}
+
+
+@router.get("/{card_id}/prereq")
+async def card_prereq(card_id: int):
+    """这张卡「可能缺的前置」（PLAN2 T3）：半懂 / 又卡住的概念，最多 3 个。
+
+    **拉取式**：看的时候才有这一栏，搁置发生的那一刻零柒一个字都不说，也不进任何提醒。
+    候选是**建议不是结论**；`candidates=[]` 不是失败——找不到就不显示，不硬凑。
+    """
+    from app.core import cross
+
+    out = await cross.prereq(card_id)
+    if out is None:
+        raise HTTPException(404, "卡片不存在")
+    return out
 
 
 @router.get("/{card_id}")

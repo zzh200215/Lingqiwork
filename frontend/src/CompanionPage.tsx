@@ -3,29 +3,26 @@
  *  总账，整页搬进来）、**小屋**（它攒下的东西：产出、徽章、道具）、
  *  **有声**（播客：拿你的卡点、你的材料录一期，干活时有声音陪着）。
  *
- *  陪伴不进导航——五区导航里没有它的位置是刻意的：入口是宠物本身（右下角零柒 → 陪伴页），
- *  陪伴是「随手够得着」，不是「又一个要去的地方」。
+ *  **2026-09-18 导航改版**：这一页原来不进导航（入口只有右下角那只宠物），理由是
+ *  「陪伴是随手够得着，不是又一个要去的地方」。改版后它成了侧栏「🐾 零柒」那一组——
+ *  五张脸就摆在那组的子项里。**宠物那个入口照旧**（两条路都通），页面里那排标签条删了。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
-import { api, type PetGrowth, type PodcastEntry, type TutorStuckRow } from './api'
+import { api, type PetPlugin, type PetState, type PetGrowth, type PodcastEntry, type TutorStuckRow } from './api'
 import EmptyHint from './EmptyHint'
 import GrowthPage from './GrowthPage'
 import PageShell from './PageShell'
 import RoomPane from './RoomPane'
-import { receiptLabel, streamPetChat, toolCallLabel, type PetToolReceipt } from './petChat'
+import { Mic } from 'lucide-react'
+import { petSprite } from './petFace'
+import { useVoiceInput } from './voice'
+import { historyOf, receiptLabel, streamPetChat, toolCallLabel, type PetToolReceipt } from './petChat'
 import { streamTutorSay } from './stream'
+import { COMPANION_TABS, type CompanionTab } from './routes'
 
-type Tab = 'chat' | 'teach' | 'growth' | 'room' | 'audio'
-
-const TABS: [Tab, string][] = [
-  ['chat', '聊天'],
-  ['teach', '教它'],
-  ['growth', '成长'],
-  ['room', '小屋'],
-  ['audio', '有声'],
-]
+type Tab = CompanionTab
 
 interface ChatMsg {
   role: 'user' | 'pet'
@@ -34,17 +31,223 @@ interface ChatMsg {
   tools?: PetToolReceipt[]
 }
 
-/** 还没开聊时的一键起头——与宠物面板同一份，开口的门槛越低，陪伴越真。 */
-const STARTERS: [string, string][] = [
-  ['排一下今天', '帮我看看现在都欠着什么，排个先后。'],
-  ['陪我聊两句', '陪我聊两句，随便什么都行。'],
-  ['总结今天', '总结一下我今天都干了什么。'],
+/** 还没开聊时的建议卡——成熟聊天产品的空态范式（ChatGPT/豆包同款）：
+ *  居中头像 + 一句问候 + **几张能点的卡**，每张卡就是第一句话本身。
+ *  前三张与宠物面板同一份起头；标题被测试钉死，别改字。 */
+const STARTER_CARDS: { icon: string; title: string; desc: string; q: string }[] = [
+  { icon: '📋', title: '排一下今天', desc: '看看都欠着什么，排个先后。', q: '帮我看看现在都欠着什么，排个先后。' },
+  { icon: '💭', title: '陪我聊两句', desc: '随便什么都行，不用有事。', q: '陪我聊两句，随便什么都行。' },
+  { icon: '🌇', title: '总结今天', desc: '我今天都干了点什么。', q: '总结一下我今天都干了什么。' },
+  { icon: '🧠', title: '讲讲我的卡点', desc: '挑一个没解的卡点，讲成人话。', q: '挑一个我没解的卡点，用大白话讲讲我卡在哪。' },
 ]
 
 function dur(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = Math.round(sec % 60)
   return `${m}:${String(s).padStart(2, '0')}`
+}
+
+/** 心情 1–5 的表情，index 0 = 1 分（与宠物面板同一个量表）。 */
+const MOOD_FACES = ['😞', '😕', '😐', '🙂', '😄']
+
+function mmss(sec: number): string {
+  const s = Math.max(0, Math.ceil(sec))
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** 陪你干活：专注番茄钟 + 喝水打卡 + 心情打卡。
+ *
+ *  这三件事后端的宠物插件早就支持（`petPluginCommand`，挂件里只有一行小按钮），
+ *  但聊天页从来没有给过它们一个正经的位置。这里是**真功能**，不是摆设：
+ *  · 专注：**真的倒计时**（服务端 remaining 是真值，本地每秒走针、每 30 秒对一次表），
+ *    点停它就停；结束/开始零柒都会开口（`r.said`）。
+ *  · 喝水：N/8 杯的进度可视化，+1 杯当场记。
+ *  · 心情：五档一键打卡，点同一档再按一次=清掉（后端 `clear`）。
+ *  全部走现成接口；插件被关掉就整块不摆，绝不摆一个死的遥控器。
+ */
+function WorkshopCard() {
+  const [plugins, setPlugins] = useState<PetPlugin[] | null>(null)
+  const [said, setSaid] = useState('')
+  const [err, setErr] = useState('')
+  // 倒计时的本地走针：记住这次面板是什么时候拿的，每秒重画
+  const [tick, setTick] = useState(() => Date.now())
+  const fetchedAt = useRef(0)
+
+  const refresh = useCallback(() => {
+    api
+      .petPlugins()
+      .then((r) => {
+        setPlugins(r.plugins)
+        fetchedAt.current = Date.now()
+      })
+      .catch(() => setPlugins([]))
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    const t = setInterval(refresh, 60000)
+    return () => clearInterval(t)
+  }, [refresh])
+
+  // 专注在跑的时候：本地每秒走针 + 每 30 秒对一次服务端的表
+  const focusing = plugins?.some(
+    (p) => p.name === 'focus' && p.panel.kind === 'timer' && p.panel.running
+  )
+  useEffect(() => {
+    const t = setInterval(() => setTick(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  useEffect(() => {
+    if (!focusing) return
+    const t = setInterval(refresh, 30000)
+    return () => clearInterval(t)
+  }, [focusing, refresh])
+
+  if (!plugins || plugins.length === 0) return null
+
+  const water = plugins.find((p) => p.name === 'water' && p.enabled)
+  const focus = plugins.find((p) => p.name === 'focus' && p.enabled)
+  const mood = plugins.find((p) => p.name === 'mood' && p.enabled)
+  if (!water && !focus && !mood) return null
+
+  const run = async (name: string, command: string, args?: Record<string, unknown>) => {
+    setErr('')
+    try {
+      const r = await api.petPluginCommand(name, command, args)
+      setPlugins((prev) =>
+        prev ? prev.map((p) => (p.name === name ? { ...p, panel: r.panel } : p)) : prev
+      )
+      fetchedAt.current = Date.now()
+      if (r.said) setSaid(r.said)
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e)
+      const i = raw.indexOf(':')
+      setErr(i > 0 ? raw.slice(i + 2) : raw)
+    }
+  }
+
+  const focusPanel = focus?.panel.kind === 'timer' ? focus.panel : null
+  // 本地走针：服务端真值 − 本次取数后经过的秒数
+  const focusLeft = focusPanel?.running
+    ? Math.max(0, (focusPanel.remaining ?? 0) - (tick - fetchedAt.current) / 1000)
+    : 0
+
+  const waterPanel = water?.panel.kind === 'counter' ? water.panel : null
+  const waterValue = waterPanel?.value ?? 0
+  const waterTarget = Math.max(1, waterPanel?.target ?? 8)
+
+  const moodPanel = mood?.panel.kind === 'mood' ? mood.panel : null
+  const moodValue = moodPanel?.value ?? 0
+
+  return (
+    <section className="wb-card p-4">
+      <RailTitle>陪你干活</RailTitle>
+
+      {focus && focusPanel && (
+        <div className="flex items-center gap-3 pb-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] text-neutral-400">⏱ 专注</p>
+            <p className="text-2xl font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
+              {focusPanel.running ? mmss(focusLeft) : `${focusPanel.minutes ?? focusPanel.default_minutes ?? 25}:00`}
+            </p>
+          </div>
+          <button
+            onClick={() => void run('focus', focusPanel.running ? 'stop' : 'start')}
+            className={`rounded-full px-3.5 py-1.5 text-xs font-medium text-white transition-all disabled:opacity-40 ${
+              focusPanel.running
+                ? 'bg-neutral-700 hover:bg-neutral-600 dark:bg-neutral-600 dark:hover:bg-neutral-500'
+                : 'bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:brightness-110'
+            }`}
+          >
+            {focusPanel.running ? '停' : '开始专注'}
+          </button>
+        </div>
+      )}
+
+      {water && waterPanel && (
+        <div className="border-t border-neutral-100 py-2.5 dark:border-neutral-800/70">
+          <div className="flex items-center gap-2">
+            <p className="text-[10px] text-neutral-400">💧 喝水</p>
+            <p className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+              {waterValue}/{waterTarget} {waterPanel.unit ?? '杯'}
+            </p>
+            <div className="flex-1" />
+            <button
+              onClick={() => void run('water', 'drink')}
+              title="记一杯水"
+              className="rounded-full border border-sky-300 px-2.5 py-0.5 text-[11px] text-sky-700 transition-colors hover:bg-sky-50 dark:border-sky-500/50 dark:text-sky-300 dark:hover:bg-sky-500/10"
+            >
+              +1 杯
+            </button>
+          </div>
+          <div className="mt-1.5 flex gap-1">
+            {Array.from({ length: waterTarget }, (_, i) => (
+              <span
+                key={i}
+                className={`h-1.5 flex-1 rounded-full ${
+                  i < waterValue ? 'bg-sky-400' : 'bg-neutral-100 dark:bg-neutral-800'
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {mood && moodPanel && (
+        <div className="border-t border-neutral-100 pt-2.5 dark:border-neutral-800/70">
+          <div className="flex items-center gap-2">
+            <p className="text-[10px] text-neutral-400">🙂 心情</p>
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+              {moodValue ? `今天 ${moodValue}/${moodPanel.scale ?? 5}` : '今天还没记'}
+            </p>
+          </div>
+          <div className="mt-1 flex gap-1">
+            {MOOD_FACES.map((face, i) => {
+              const v = i + 1
+              const active = moodValue === v
+              return (
+                <button
+                  key={face}
+                  title={active ? '再点一下清掉' : `${v} 分`}
+                  onClick={() => void run('mood', active ? 'clear' : 'set', active ? undefined : { value: v })}
+                  className={`flex-1 rounded-lg py-1 text-lg leading-none transition-all ${
+                    active
+                      ? 'bg-amber-50 ring-1 ring-amber-300 dark:bg-amber-500/10 dark:ring-amber-500/40'
+                      : 'opacity-45 hover:bg-neutral-50 hover:opacity-100 dark:hover:bg-neutral-800'
+                  }`}
+                >
+                  {face}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {said ? (
+        <p className="mt-2 border-t border-neutral-100 pt-2 text-[11px] leading-relaxed text-violet-600 dark:border-neutral-800/70 dark:text-violet-300">
+          零柒：{said}
+        </p>
+      ) : null}
+      {err ? <p className="mt-2 text-[11px] text-rose-500">{err}</p> : null}
+    </section>
+  )
+}
+
+/** 侧栏三小卡的公共外壳：标题小写字距款，与「学」页右栏同一套排版语言。 */
+function RailTitle({ children }: { children: string }) {
+  return (
+    <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+      {children}
+    </p>
+  )
+}
+
+/** 聊天右栏：只摆这一页**自己的功能**——陪你干活（专注番茄钟/喝水/心情打卡）。
+ *  别的页面已经摆过的清单（最近对话、事件流水）不再搬一份过来——重复的信息
+ *  不叫充实。插件全被关掉时整条侧栏不渲染，聊天占满整行。 */
+function ChatRail() {
+  return <WorkshopCard />
 }
 
 /** 整页聊天：和小面板同一条 SSE 协议（petChat.ts），但地方够大，说话不用抠抠缩缩。 */
@@ -56,6 +259,37 @@ function ChatPane() {
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  // 空态头图上那只零柒摆的是**此刻的姿势**（与挂件、小屋同一接口同一只）
+  const [pet, setPet] = useState<PetState | null>(null)
+  // 语音说话：点一下录音、再点一下转写进输入框——**不自动发送**，
+  // 转写可能听错，让你看一眼再按发送（与「讲给它听」同一条规矩）。
+  const voice = useVoiceInput(
+    (t) => setInput((prev) => (prev ? `${prev} ${t}` : t)),
+    (m) => setError(m)
+  )
+
+  useEffect(() => {
+    api.petState(0, '/companion').then(setPet).catch(() => {})
+  }, [])
+
+  // P5 落库之后：上一场的对话从库里铺出来——刷新、隔天回来，整页聊天接着上次聊。
+  // 服务端在客户端没带历史时也会从同一张表补（routers/pet.pet_chat），两边同源。
+  // **合入而不是覆盖**：历史在前面，这一场已经打出去的话留在后面——
+  // 这几条 promise 是并着跑的，谁都有可能后到。
+  useEffect(() => {
+    api.petChats(30)
+      .then((r) =>
+        setChat((prev) => [
+          ...r.chats.map((c) => ({
+            role: c.role,
+            text: c.text,
+            tools: c.tools?.length ? (c.tools as ChatMsg['tools']) : undefined,
+          })),
+          ...prev,
+        ])
+      )
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
@@ -86,7 +320,8 @@ function ChatPane() {
       })
     try {
       await streamPetChat(
-        msg,
+        // Z1：整页聊天也把已有的那几轮带上（与右下角面板同一个函数、同一个上限）
+        { message: msg, history: historyOf(chat) },
         {
           onDelta: (t) => {
             acc += t
@@ -109,78 +344,113 @@ function ChatPane() {
       setToolBusy(null)
       abortRef.current = null
     }
-  }, [busy, input])
+  // `chat` 也在依赖里（Z1）：历史是随请求带过去的，闭包里必须是最新那一串对话
+  }, [busy, input, chat])
 
   return (
-    <div className="flex h-[calc(100vh-230px)] min-h-[380px] flex-col rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-      <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4 text-sm leading-relaxed">
-        {chat.length === 0 && !error && (
-          <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-            我在。想聊什么都行——卡住的地方、今天的心情，或者什么都不为。
+    <div className="flex h-[calc(100vh-230px)] min-h-[380px] flex-col wb-card">
+      {/* 一句都没说：空态头图——居中的它 + 一句问候 + 几张能点的卡（每张卡就是
+          第一句话本身）。这不是把一行字挪到中间，是成熟聊天产品的空态范式。 */}
+      {chat.length === 0 && !error ? (
+        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8">
+          <img
+            src={petSprite(pet?.action)}
+            alt="零柒"
+            className="h-20 w-20 object-contain drop-shadow-md"
+            onError={(e) => {
+              e.currentTarget.src = '/pet-avatar.png'
+            }}
+          />
+          <h2 className="mt-3 text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+            {pet?.busy_with ? `它在${pet.busy_with}，聊两句也不耽误。` : '我在。想聊什么都行。'}
+          </h2>
+          <p className="mt-1 text-sm text-neutral-400 dark:text-neutral-500">
+            卡住的地方、今天的心情，或者什么都不为。
+          </p>
+          <div className="mt-6 grid w-full max-w-xl grid-cols-1 gap-2.5 sm:grid-cols-2">
+            {STARTER_CARDS.map((c) => (
+              <button
+                key={c.title}
+                onClick={() => void send(c.q)}
+                disabled={busy}
+                className="rounded-xl border border-neutral-200 bg-white p-3.5 text-left transition-all hover:border-violet-300 hover:shadow-sm disabled:opacity-40 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+              >
+                <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                  <span className="mr-1.5">{c.icon}</span>
+                  <span>{c.title}</span>
+                </p>
+                <p className="mt-0.5 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
+                  {c.desc}
+                </p>
+              </button>
+            ))}
           </div>
-        )}
-        {chat.map((m, i) =>
-          m.role === 'user' ? (
-            <div
-              key={`u${i}`}
-              className="ml-auto max-w-[75%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-violet-600 px-4 py-3 text-white"
-            >
-              {m.text}
+        </div>
+      ) : (
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4 text-sm leading-relaxed">
+          {chat.map((m, i) =>
+            m.role === 'user' ? (
+              <div
+                key={`u${i}`}
+                className="ml-auto max-w-[75%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-violet-600 px-4 py-3 text-white"
+              >
+                {m.text}
+              </div>
+            ) : (
+              <div
+                key={`p${i}`}
+                className="max-w-[75%] rounded-2xl rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              >
+                {/* 它真的做了什么。写在话**前面**：先有动作，再有解释。 */}
+                {m.tools && m.tools.length > 0 && (
+                  <ul className="mb-1.5 flex flex-wrap gap-1">
+                    {m.tools.map((r, k) => (
+                      <li
+                        key={k}
+                        className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
+                      >
+                        {receiptLabel(r)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {m.text ? <span className="whitespace-pre-wrap">{m.text}</span> : null}
+                {!m.text && (
+                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                    {toolBusy ?? (
+                      <span className="inline-block animate-pulse text-violet-400">▊</span>
+                    )}
+                  </span>
+                )}
+              </div>
+            )
+          )}
+          {error && (
+            <div className="rounded-lg bg-red-100 px-3 py-2 text-xs text-red-600 dark:bg-red-950/60 dark:text-red-300">
+              {error}
             </div>
-          ) : (
-            <div
-              key={`p${i}`}
-              className="max-w-[75%] rounded-2xl rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-            >
-              {/* 它真的做了什么。写在话**前面**：先有动作，再有解释。 */}
-              {m.tools && m.tools.length > 0 && (
-                <ul className="mb-1.5 flex flex-wrap gap-1">
-                  {m.tools.map((r, k) => (
-                    <li
-                      key={k}
-                      className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
-                    >
-                      {receiptLabel(r)}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {m.text ? <span className="whitespace-pre-wrap">{m.text}</span> : null}
-              {!m.text && (
-                <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
-                  {toolBusy ?? (
-                    <span className="inline-block animate-pulse text-violet-400">▊</span>
-                  )}
-                </span>
-              )}
-            </div>
-          )
-        )}
-        {error && (
-          <div className="rounded-lg bg-red-100 px-3 py-2 text-xs text-red-600 dark:bg-red-950/60 dark:text-red-300">
-            {error}
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {chat.length === 0 && (
-        <div className="flex flex-wrap gap-1.5 px-5 pb-1">
-          {STARTERS.map(([label, q]) => (
-            <button
-              key={label}
-              onClick={() => void send(q)}
-              disabled={busy}
-              className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50"
-            >
-              {label}
-            </button>
-          ))}
+          )}
+          <div ref={bottomRef} />
         </div>
       )}
 
       <div className="border-t border-neutral-200 p-3 dark:border-neutral-800">
         <div className="flex gap-2">
+          <button
+            onClick={() => voice.toggle()}
+            title={voice.recording ? '停止录音并转写' : '说一段，转成文字（不自动发送）'}
+            className={`shrink-0 rounded-xl border px-3 transition-colors ${
+              voice.recording
+                ? 'animate-pulse border-rose-300 bg-rose-50 text-rose-600 dark:border-rose-500/50 dark:bg-rose-500/10 dark:text-rose-300'
+                : 'border-neutral-300 text-neutral-500 hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50'
+            }`}
+          >
+            {voice.transcribing ? (
+              <span className="text-xs">转写中…</span>
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
+          </button>
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -203,6 +473,44 @@ function ChatPane() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** 有声右栏：能拿来讲的素材（卡点）。
+ *  播客清单空着的时候，这张卡说明「录一期」录的是什么、为什么值得录。 */
+function AudioRail() {
+  const [stuck, setStuck] = useState<TutorStuckRow[]>([])
+
+  useEffect(() => {
+    api
+      .tutorStuck()
+      .then((r) => setStuck(r.stuck.filter((s) => !s.resolved_at).slice(0, 5)))
+      .catch(() => {})
+  }, [])
+
+  if (stuck.length === 0) return null
+
+  return (
+    <aside className="hidden max-h-[calc(100vh-230px)] w-[290px] shrink-0 flex-col gap-4 overflow-y-auto pb-2 xl:flex">
+      <section className="wb-card p-4">
+        <RailTitle>它能拿来讲的</RailTitle>
+        <ul className="space-y-2">
+          {stuck.map((s) => (
+            <li key={s.id}>
+              <p className="truncate text-sm text-neutral-700 dark:text-neutral-200">{s.concept}</p>
+              {s.stuck ? (
+                <p className="truncate text-[11px] text-neutral-400 dark:text-neutral-500" title={s.stuck}>
+                  ↳ {s.stuck}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+        <p className="pt-2 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+          点左上「拿没解的卡点录一期」，它把「你卡在哪」讲成人话。
+        </p>
+      </section>
+    </aside>
   )
 }
 
@@ -248,7 +556,8 @@ function AudioPane() {
   )
 
   return (
-    <div className="space-y-4">
+    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_290px]">
+      <div className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={() => void fromStuck()}
@@ -273,7 +582,7 @@ function AudioPane() {
           hint="上面点一下，拿你最近没解的卡点录一期——它把「你卡在哪」讲成人话。"
         />
       ) : (
-        <ul className="divide-y divide-neutral-100 dark:divide-neutral-800/70">
+        <ul className="wb-card divide-y divide-neutral-100 px-4 dark:divide-neutral-800/70">
           {podcasts.map((p) => (
             <li key={p.id} className="py-3">
               <div className="flex items-baseline gap-2">
@@ -302,6 +611,8 @@ function AudioPane() {
           ))}
         </ul>
       )}
+      </div>
+      <AudioRail />
     </div>
   )
 }
@@ -326,6 +637,11 @@ function TeachPane() {
   const [concept, setConcept] = useState('')
   const [growth, setGrowth] = useState<PetGrowth | null>(null)
   const [stuck, setStuck] = useState<TutorStuckRow[]>([])
+  // 空态头图上那只零柒摆的是**此刻的姿势**（与挂件、小屋同一接口同一只）
+  const [pet, setPet] = useState<PetState | null>(null)
+  useEffect(() => {
+    api.petState(0, '/companion').then(setPet).catch(() => {})
+  }, [])
   // 会话开始前的成长快照：用来报**真实的**增量，而不是把后端的 EXP 常数
   // 抄一份到前端（抄了就会漂移）。
   const beforeRef = useRef<PetGrowth | null>(null)
@@ -339,6 +655,19 @@ function TeachPane() {
       .tutorStuck()
       .then((r) => setStuck(r.stuck.filter((s) => !s.resolved_at).slice(0, 3)))
       .catch(() => {})
+  }, [])
+
+  // 讲通了一个之前卡着的概念？当场把那条卡点结掉——教学与卡点是同一本账的两面，
+  // 这个闭环以前要跑去「学 → 记录」手动打勾，现在讲完顺手就完成了。
+  const [stuckMsg, setStuckMsg] = useState('')
+  const resolveStuck = useCallback(async (s: TutorStuckRow) => {
+    try {
+      await api.tutorResolveStuck(s.id, true)
+      setStuck((prev) => prev.filter((x) => x.id !== s.id))
+      setStuckMsg(`卡点「${s.concept}」结了。`)
+    } catch (e) {
+      setStuckMsg(e instanceof Error ? e.message : String(e))
+    }
   }, [])
 
   useEffect(() => {
@@ -437,31 +766,96 @@ function TeachPane() {
   const idle = sid === null
 
   return (
-    <div className="flex h-[calc(100vh-230px)] min-h-[380px] flex-col rounded-2xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-      <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4 text-sm leading-relaxed">
-        {idle && !verdict && (
-          <div className="space-y-3">
-            <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-              我什么都不懂。你挑一个东西，用大白话讲给我听——讲到我听明白，我就学会了。
-            </div>
-            {stuck.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] text-neutral-400">你卡着的：</span>
-                {stuck.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => void begin(s.concept)}
-                    disabled={busy}
-                    className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50"
+    <div className="flex h-[calc(100vh-230px)] min-h-[380px] flex-col wb-card">
+      {/* 还没开讲：空态头图——居中的它 + 原话 + 一个大的开讲框 + 选题卡
+          （卡着的概念优先；一张都没有就给两条真入口）。讲起来之后回到普通聊天流。 */}
+      {idle && !verdict ? (
+        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8">
+          <img
+            src={petSprite(pet?.action)}
+            alt="零柒"
+            className="h-20 w-20 object-contain drop-shadow-md"
+            onError={(e) => {
+              e.currentTarget.src = '/pet-avatar.png'
+            }}
+          />
+          <h2 className="mt-3 max-w-xl text-center text-lg font-semibold leading-relaxed text-neutral-800 dark:text-neutral-100">
+            我什么都不懂。你挑一个东西，用大白话讲给我听——讲到我听明白，我就学会了。
+          </h2>
+          <div className="mt-5 flex w-full max-w-xl gap-2">
+            <input
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  e.preventDefault()
+                  void begin(topic)
+                }
+              }}
+              placeholder="你要教它什么？比如 asyncio 事件循环"
+              className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+            />
+            <button
+              onClick={() => void begin(topic)}
+              disabled={busy || !topic.trim()}
+              className="shrink-0 rounded-xl bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+            >
+              开始讲
+            </button>
+          </div>
+          <div className="mt-6 grid w-full max-w-xl grid-cols-1 gap-2.5 sm:grid-cols-2">
+            {stuck.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => void begin(s.concept)}
+                disabled={busy}
+                className="rounded-xl border border-neutral-200 bg-white p-3.5 text-left transition-all hover:border-violet-300 hover:shadow-sm disabled:opacity-40 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+              >
+                <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                  <span className="mr-1.5">🎯</span>
+                  <span>{s.concept}</span>
+                </p>
+                {s.stuck ? (
+                  <p
+                    className="mt-0.5 truncate text-xs text-neutral-400 dark:text-neutral-500"
+                    title={s.stuck}
                   >
-                    {s.concept}
-                  </button>
-                ))}
-              </div>
+                    ↳ {s.stuck}
+                  </p>
+                ) : null}
+                <p className="mt-1 text-[11px] font-medium text-violet-500">讲这个 →</p>
+              </button>
+            ))}
+            {stuck.length === 0 && (
+              <>
+                <Link
+                  to="/notes"
+                  className="rounded-xl border border-neutral-200 bg-white p-3.5 transition-all hover:border-violet-300 hover:shadow-sm dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+                >
+                  <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                    📝 去笔记挑一段
+                  </p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
+                    学过的东西带着出处，以后可考。
+                  </p>
+                </Link>
+                <Link
+                  to="/tutor?tab=learn"
+                  className="rounded-xl border border-neutral-200 bg-white p-3.5 transition-all hover:border-violet-300 hover:shadow-sm dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+                >
+                  <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                    🧭 消化一份材料
+                  </p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
+                    要搞懂的点列出来，逐个讲给它听。
+                  </p>
+                </Link>
+              </>
             )}
           </div>
-        )}
-
+        </div>
+      ) : (
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4 text-sm leading-relaxed">
         {turns.map((m, i) =>
           m.role === 'user' ? (
             <div
@@ -509,6 +903,21 @@ function TeachPane() {
             ) : (
               <div>这次没讲通。不记账，想讲的时候再来。</div>
             )}
+            {verdict === 'got' &&
+              (() => {
+                const hit = stuck.find((s) => s.concept === (concept || who) && !s.resolved_at)
+                return hit ? (
+                  <button
+                    onClick={() => void resolveStuck(hit)}
+                    className="mt-1.5 block text-xs text-amber-600 transition-colors hover:text-amber-700 dark:text-amber-400"
+                  >
+                    这条之前卡过——把卡点「{hit.concept}」标记为已解
+                  </button>
+                ) : null
+              })()}
+            {stuckMsg ? (
+              <p className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400">{stuckMsg}</p>
+            ) : null}
             <button
               onClick={() => {
                 setVerdict('')
@@ -528,7 +937,8 @@ function TeachPane() {
           </div>
         )}
         <div ref={bottomRef} />
-      </div>
+        </div>
+      )}
 
       {/* 自评那一行：这是「它学没学会」的唯一输入，也是成长值的来源 */}
       {!idle && (
@@ -550,32 +960,6 @@ function TeachPane() {
               {label}
             </button>
           ))}
-        </div>
-      )}
-
-      {idle && !verdict && (
-        <div className="border-t border-neutral-200 p-3 dark:border-neutral-800">
-          <div className="flex gap-2">
-            <input
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                  e.preventDefault()
-                  void begin(topic)
-                }
-              }}
-              placeholder="你要教它什么？比如 asyncio 事件循环"
-              className="flex-1 rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-            />
-            <button
-              onClick={() => void begin(topic)}
-              disabled={busy || !topic.trim()}
-              className="rounded-xl bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
-            >
-              开始讲
-            </button>
-          </div>
         </div>
       )}
 
@@ -609,45 +993,25 @@ function TeachPane() {
 }
 
 export default function CompanionPage() {
-  const [params, setParams] = useSearchParams()
+  const [params] = useSearchParams()
   const tabParam = params.get('tab')
-  const tab: Tab =
-    tabParam === 'teach' || tabParam === 'growth' || tabParam === 'room' || tabParam === 'audio'
-      ? tabParam
-      : 'chat'
-  const setTab = (t: Tab) =>
-    setParams(
-      (p) => {
-        const n = new URLSearchParams(p)
-        n.set('tab', t)
-        return n
-      },
-      { replace: true }
-    )
+  // 五张脸的清单在 `routes.tsx`（侧栏与这一页**同一份**）：`?tab=` 是唯一入口，
+  // 页面里那排标签按钮已经删掉（2026-09-18 导航改版）。
+  const tab: Tab = (COMPANION_TABS.find((t) => t.key === tabParam)?.key as Tab | undefined) ?? 'chat'
 
   return (
     <PageShell
       title="陪伴"
       description="零柒在这里：说话、把它教会、看它随你长、看它屋里攒了什么、有声音陪着干活。"
-      maxWidth="4xl"
     >
-      <div className="mb-5 flex gap-1">
-        {TABS.map(([k, label]) => (
-          <button
-            key={k}
-            onClick={() => setTab(k)}
-            className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
-              tab === k
-                ? 'bg-neutral-200/80 font-medium text-neutral-800 dark:bg-neutral-700/70 dark:text-neutral-100'
-                : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800/70'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'chat' ? <ChatPane /> : null}
+      {tab === 'chat' ? (
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <ChatPane />
+          </div>
+          <ChatRail />
+        </div>
+      ) : null}
       {tab === 'teach' ? <TeachPane /> : null}
       {tab === 'growth' ? <GrowthPage chromeless /> : null}
       {tab === 'room' ? <RoomPane /> : null}

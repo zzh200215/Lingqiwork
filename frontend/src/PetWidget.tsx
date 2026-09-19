@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import {
   api,
+  type CardContradiction,
   type CardStats,
+  type DecisionWitness,
+  type DeliverWitness,
   type PetGrowth,
   type PetPlugin,
   type PetRoom,
@@ -13,40 +17,17 @@ import {
   type TutorMastery,
   type TutorStuckRow,
 } from './api'
-import { receiptLabel, streamPetChat, toolCallLabel, type PetToolReceipt } from './petChat'
-import { makeSpeech, useVoiceInput } from './voice'
-
+import { historyOf, receiptLabel, streamPetChat, toolCallLabel, type PetToolReceipt } from './petChat'
 // Animation states come from the Codex pet atlas (awesome-codex-pet v1):
 // 9 states, each shipped as an animated webp under /pet/<state>.webp.
 // The browser plays them natively, so switching state is just swapping src.
-export type PetAction =
-  | 'idle'
-  | 'waving'
-  | 'jumping'
-  | 'failed'
-  | 'waiting'
-  | 'running'
-  | 'running-right'
-  | 'running-left'
-  | 'review'
+import { asPetAction, petSprite, type PetAction } from './petFace'
+import { blipOn as isBlipOn, playBlip, setBlipOn as storeBlipOn } from './petSound'
+import { ago } from './reltime'
+import { streamPet } from './stream'
+import { makeSpeech, useVoiceInput } from './voice'
 
-// 九个动画的运行时清单。服务端可能（日后）加新模式，也可能发来一个手滑的字符串；
-// 落到界面上就是一个破图。这里当一道闸：不认识的一律退回 idle。
-const PET_ACTIONS: PetAction[] = [
-  'idle',
-  'waving',
-  'jumping',
-  'failed',
-  'waiting',
-  'running',
-  'running-right',
-  'running-left',
-  'review',
-]
-
-function asPetAction(a: string | undefined | null): PetAction {
-  return a && (PET_ACTIONS as string[]).includes(a) ? (a as PetAction) : 'idle'
-}
+export type { PetAction }
 
 // 面板里给「此刻」一个说法。与后端 `pet_state._line()` 分工是刻意的：
 // 那边是零柒的**台词**（会说话的只有它，没话说就闭嘴），这里是界面的**事实**——
@@ -58,12 +39,15 @@ const MODE_LABEL: Record<PetStateMode, string> = {
   learning: '陪你学',
   reviewing: '陪你过卡',
   celebrating: '刚交出成品',
+  gated: '有一步等你点头',
   busy: '有活在跑',
   idling: '你走开了一会儿',
   pupil: '在听你讲',
   resting: '你走开挺久了',
   tired: '有点蔫',
   sleepy: '深夜',
+  night_owl: '这几天都熬得晚',
+  returning: '好几天没见',
 }
 
 // 「你人不在」的那两个模式 → 宠物区降饱和。**只降宠物自己，不动页面**：
@@ -75,6 +59,58 @@ const DIM_MODES: PetStateMode[] = ['idling', 'resting']
 const PET_CORNER = 20
 // 页面上「宠物必须让开」的东西都标这个属性（目前只有对话页的输入行）。
 const PET_CLEAR_SELECTOR = '[data-pet-clear]'
+
+// ---------- 拖拽（P5 · 做活）的算术 ----------
+//
+// 位置记的是**离右下角自然位置的偏移**，不记绝对坐标：窗口一缩放，绝对坐标能把
+// 宠物拽出屏幕外；偏移量 + 夹紧，天生跟着窗口走。
+const PET_SIZE = 96 // 精灵 h-24 w-24
+
+function clampDrag(dx: number, dy: number, w = window.innerWidth, h = window.innerHeight) {
+  return {
+    dx: Math.min(PET_CORNER, Math.max(-(w - PET_CORNER - PET_SIZE), dx)),
+    dy: Math.min(PET_CORNER, Math.max(-(h - PET_CORNER - PET_SIZE), dy)),
+  }
+}
+
+function loadDrag(): { dx: number; dy: number } {
+  try {
+    const v = JSON.parse(localStorage.getItem('pet:drag') || 'null')
+    if (v && typeof v.dx === 'number' && typeof v.dy === 'number') return clampDrag(v.dx, v.dy)
+  } catch {
+    /* 记不了位置就待在右下角 */
+  }
+  return { dx: 0, dy: 0 }
+}
+
+// ---------- 弹出置顶（P5 · Document Picture-in-Picture）----------
+//
+// Chrome / Edge 116+ 能开一个**总在最前**的系统小窗：你切去写代码、看视频，零柒
+// 都浮在屏幕上。浏览器给不了真透明与点击穿透（那是桌面壳的活），但「它一直在」
+// 这件事先到手，且零桌面开发——同一份状态、同一条 SSE，只是换了个窗子摆。
+type PipWindow = Window & { document: Document }
+
+function copyStyles(target: Document) {
+  // PiP 是另一份 document，样式得自己搬。内联 <style> 抄规则文本；跨域的 <link>
+  // 读不了 cssRules，原样复制标签让浏览器自己去取。
+  Array.from(document.styleSheets).forEach((sheet) => {
+    try {
+      const el = target.createElement('style')
+      el.textContent = Array.from(sheet.cssRules)
+        .map((r) => r.cssText)
+        .join('\n')
+      target.head.appendChild(el)
+    } catch {
+      const src = sheet.ownerNode
+      if (src instanceof HTMLLinkElement) {
+        const link = target.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = src.href
+        target.head.appendChild(link)
+      }
+    }
+  })
+}
 
 // 零柒 — the resident companion avatar fixed to the corner of the main workspace.
 //
@@ -146,12 +182,42 @@ function markNudged(key: string): void {
   }
 }
 
-/** 顺序即优先级：等你点头 > 跑挂了 > 卡点 > 到期卡。每个请求各自兜底，挂了当没有。 */
+/** 台词里的引文一律先裁再进句子：气泡是一行，长依据会把那一行撑成一段。 */
+function cut(s: string, n: number): string {
+  const t = (s || '').trim()
+  return t.length > n ? `${t.slice(0, n)}…` : t
+}
+
+/** 顺序即优先级：等你点头 > 跑挂了 > 卡点 > 到期卡 > 到点的决策见证 > **到点的交付见证**。
+ *
+ *  前四条都是「今天不处理会挡住、会过期」的事；两条见证排在最后，因为**它们不挡任何事**
+ *  （`cards.reschedule` 那条纪律：主动开口越少越好）。但排在最后不等于可以永不开口——
+ *  它们是唯一两个「不主动说就永远不会有下次机会」的来源：其余四条下次开机还在，
+ *  而一条三个月前的判断、一份三周前交出去的东西，只有被念到才会有人回头看
+ *  （理由写在 `core/decision_log.py` 与 `core/delivery.py`）。
+ *  一天只念一条（服务端只回一条 + 这里的 localStorage 记账），念的是**当时的事实**：
+ *  判断原文 + 当时的依据 + 当时的信心（或：交给了谁 + 什么东西 + 多久以前），不催、不评。
+ *
+ *  **第六个来源（交付见证）是一次明确让开**（M5 · PLAN3 §13）：同 `decision_log` 那个理由
+ *  ——一份交出去的东西沉在 `deliver/` 里，纯拉取式的下场同样是没人回头看，而它比判断更短命
+ *  （连一条记录都没有，真值只在文件系统里）。代价一起写在原地：这一层的「回看过」只有
+ *  👍/👎 那一个动作，所以定义偏弱（`core/delivery.py` 里写明了为什么要求 24 小时的时差）。
+ *  下面那句「§2 T1：不加第六个来源」说的是**当时那件事**（对质那句话只换措辞、不加来源），
+ *  不是一条永久禁令——但每加一个都得像这次一样，把「为什么它值得开口」写在原地。
+ *
+ *  **到期卡那条会换一句话**（PLAN2 T1 场景 A）：卡对应的概念你已经说通 ×2、可它的卡这周
+ *  反复重来（≥2）时，念的是那句对质——「你说通过两次，可它的卡这周重来三回，再讲一遍？」。
+ *  换的只是**那句话的内容**：来源、优先级、key、去处一样没动。
+ *  它只陈述两边的事实，不判谁对——「再讲一遍？」是个问句，裁决权在你。
+ *
+ *  每个请求各自兜底，挂了当没有。 */
 async function gatherNudges(): Promise<Nudge[]> {
-  const [tasks, stuck, stats] = await Promise.all([
+  const [tasks, stuck, stats, witness, delivered] = await Promise.all([
     api.listTasks().catch((): ScheduledTask[] => []),
     api.tutorStuck().catch((): { stuck: TutorStuckRow[] } => ({ stuck: [] })),
     api.cardStats().catch((): CardStats | null => null),
+    api.decisionWitness().catch((): DecisionWitness | null => null),
+    api.deliverWitness().catch((): DeliverWitness | null => null),
   ])
   const out: Nudge[] = []
   for (const t of tasks) {
@@ -183,13 +249,58 @@ async function gatherNudges(): Promise<Nudge[]> {
       to: '/tutor',
       toLabel: '去清卡点',
     })
-  if (stats && stats.due_now > 0)
+  if (stats && stats.due_now > 0) {
+    // 只有真的有到期卡时才去问那句对照（省一次往返，也免得为一个没人看的数开口）
+    const x = await api.cardContradiction().catch((): CardContradiction | null => null)
+    const c = x?.contradiction
+    out.push(
+      c
+        ? {
+            key: 'due',
+            // 数字全读得出来才说：说通几次、重来几回，两个数都来自后端算出来的事实。
+            // 「再讲一遍？」——**问句不是判决**：不说「你其实没懂」，不替你改任何判定。
+            text: `「${cut(c.concept, 24)}」你说通过 ${c.said_n} 次，可它的卡这周重来 ${c.again_7d} 回，再讲一遍？`,
+            to: '/review',
+            toLabel: '去重讲',
+          }
+        : {
+            key: 'due',
+            text: `今天还有 ${stats.due_now} 张卡没过，趁脑子还在。`,
+            to: '/review',
+            toLabel: '去复习',
+          }
+    )
+  }
+  if (witness?.due) {
+    const w = witness.due
+    // 「几个月前」按天算：90 天 ≈ 3 个月。不足一个月就说天数，别把三周说成「1 个月」。
+    const age = w.age_days >= 30 ? `${Math.round(w.age_days / 30)} 个月前` : `${w.age_days} 天前`
+    const basis = cut(w.basis, 30)
     out.push({
-      key: 'due',
-      text: `今天还有 ${stats.due_now} 张卡没过，趁脑子还在。`,
-      to: '/review',
-      toLabel: '去复习',
+      key: `witness-${w.id}`,
+      // **引用原文依据**：这条提醒的全部价值就是「当时的你怎么想」，转述一遍就没了。
+      // 没有依据那一栏就只说到「当时几成把握」——宁可少一句，也不替当时的你编一个理由。
+      // 把握写成 `%`（与决策日志页那一行同一个写法）：`70` 后面接「成」会读成七倍。
+      text: `${age}你判断：「${cut(w.text, 40)}」。当时 ${w.confidence}% 把握${
+        basis ? `，凭的是「${basis}」` : ''
+      }。`,
+      to: `/dashboard?decision=${w.id}`,
+      toLabel: '翻回去看看',
     })
+  }
+  if (delivered?.due) {
+    const d = delivered.due
+    // 交给谁那一栏可能空着（老交付没有 frontmatter，或当初就没填）——那就只说「交出去的」，
+    // 不替当时的你补一个收件人。
+    const who = d.audience ? `交给${d.audience}的` : '交出去的'
+    out.push({
+      key: `delivered-${d.path}`,
+      // 事实三样：多久以前、什么东西、给谁。**问句结尾**——「后来有回音吗」不是「你该去回访」。
+      text: `${ago(d.at)}${who}《${cut(d.title, 30)}》—— 后来有回音吗？`,
+      to: `/notes?path=${encodeURIComponent(d.path)}`,
+      toLabel: '翻回去看看',
+    })
+  }
   return out
 }
 
@@ -278,6 +389,8 @@ export default function PetWidget() {
   const [flash, setFlash] = useState<PetAction | null>(null)
   const [thinking, setThinking] = useState(false)
   const [state, setState] = useState<PetState | null>(null)
+  // 事件流通着没有。它决定两件事：状态多久重算一回、兜底轮询跑不跑。
+  const [live, setLive] = useState(false)
   const actionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [events, setEvents] = useState<PetEvent[]>([])
   const [growth, setGrowth] = useState<PetGrowth | null>(null)
@@ -299,6 +412,42 @@ export default function PetWidget() {
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+
+  // ---------- 做活（P5）：点击 Q 弹 + 一声合成音效 ----------
+  //
+  // 反馈是给「摸到它」的那个瞬间的：scale 压下去再弹回来，配一声 WebAudio 现做的
+  // 「啵」（oscillator 合成，零素材，实现与开关在 `petSound.ts`——桌面壳那只小窗
+  // 共用同一声）。关得掉（记在 localStorage）；摸不出声的环境就安静，都不算错。
+  const [squash, setSquash] = useState(false)
+  const squashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [blipOn, setBlipOn] = useState(true)
+
+  // ---------- 拖拽（P5 · 做活）----------
+  const [drag, setDrag] = useState(loadDrag)
+  const [dragging, setDragging] = useState(false)
+  const draggedRef = useRef(false) // 拖完那一下 click 是拖拽的尾巴，不是点击
+  const rafRef = useRef(0)
+  // 惯性滑行要从**最新的**位置接着算：move/up 挂在 window 上，闭包里那个 drag
+  // 是按下那一刻的旧值——每次渲染同步一份到 ref，glide 只读这份。
+  const dragPosRef = useRef(drag)
+  dragPosRef.current = drag
+  const dragRef = useRef<{
+    sx: number
+    sy: number
+    bx: number
+    by: number
+    moved: boolean
+    lx: number
+    ly: number
+    lt: number
+    vx: number
+    vy: number
+  } | null>(null)
+
+  // ---------- 弹出置顶（P5 · Document PiP）----------
+  const [pipWin, setPipWin] = useState<PipWindow | null>(null)
+  const pipWinRef = useRef<PipWindow | null>(null)
+  pipWinRef.current = pipWin
 
   // 此刻摆哪个姿势：一次性覆盖 > 正在想 > 状态机。
   const action: PetAction = flash ?? (thinking ? 'review' : asPetAction(state?.action))
@@ -374,27 +523,52 @@ export default function PetWidget() {
     }
   }, [])
 
-  // 路由换了立刻重算（学/工作/复习是三种不同的状态），其余时候 15 秒一回。
+  // 路由换了立刻重算（学/工作/复习是三种不同的状态），其余时候 15 秒一回；
+  // 事件流接上以后退到 60 秒——它已经不再负责「及时」，只负责兜底。
+  //
+  // 读的都是 ref（`lastInput` / `pathRef`），所以流的回调里拿到的也一定是**最新**的值，
+  // 不会因为闭包停在某一次渲染上。
+  const pathRef = useRef(location.pathname)
   useEffect(() => {
-    let alive = true
-    const tick = () => {
-      const idleSec = (Date.now() - lastInput.current) / 1000
-      void api
-        .petState(idleSec, location.pathname)
-        .then((s) => {
-          if (alive) setState(s)
-        })
-        .catch(() => {
-          /* 拿不到就沿用上一次的姿势，别闪 */
-        })
-    }
-    tick()
-    const t = setInterval(tick, 15000)
-    return () => {
-      alive = false
-      clearInterval(t)
-    }
+    pathRef.current = location.pathname
   }, [location.pathname])
+
+  const loadState = useCallback(() => {
+    const idleSec = (Date.now() - lastInput.current) / 1000
+    return api
+      .petState(idleSec, pathRef.current)
+      .then((s) => setState(s))
+      .catch(() => {
+        /* 拿不到就沿用上一次的姿势，别闪 */
+      })
+  }, [])
+
+  // 慢慢变的那几样（成长 / 学到了什么 / 屋里的东西）：流说「有活跑完了」时值得重看一眼，
+  // 平时 60 秒一次也够——它们不是「此刻」。
+  const loadSlow = useCallback(() => {
+    void api.petGrowth().then(setGrowth).catch(() => {})
+    void api.tutorMastery().then(setMastery).catch(() => {})
+    void api.petRoom().then(setRoom).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    void loadState()
+    const t = setInterval(() => void loadState(), live ? 60000 : 15000)
+    return () => clearInterval(t)
+  }, [loadState, live, location.pathname])
+
+  // 久别重逢（P5）：状态机说「好几天没见」时，把那句话当**气泡**说一次——
+  // 这趟到访值得它先开口，且这次会话只说这一回。不落 localStorage：它是
+  // 「这一趟」的问候，不是一天一条的账；页面刷新重挂，重逢还在，就该再见面。
+  const reunionShown = useRef(false)
+  useEffect(() => {
+    if (reunionShown.current || state?.mode !== 'returning' || !state.line) return
+    reunionShown.current = true
+    setNudge(null)
+    setBubble(state.line)
+    if (bubbleTimer.current) clearTimeout(bubbleTimer.current)
+    bubbleTimer.current = setTimeout(() => setBubble(null), 8000)
+  }, [state])
 
   // ---------- 语音（P3 的另一半）----------
   //
@@ -447,13 +621,15 @@ export default function PetWidget() {
   useEffect(() => {
     try {
       setSpeakOn(localStorage.getItem('pet:speak') === '1')
+      setBlipOn(isBlipOn())
     } catch {
-      /* 无痕模式 */
+      /* 无痕模式：朗读默认关、音效默认开 */
     }
-    // 卸载时把嘴闭上：不然离开这一页它还在念
+    // 卸载时把嘴闭上、把没弹完的 Q 弹收掉：不然离开这一页它还在念
     return () => {
       audioRef.current?.pause()
       audioRef.current = null
+      if (squashTimer.current) clearTimeout(squashTimer.current)
     }
   }, [])
 
@@ -463,6 +639,30 @@ export default function PetWidget() {
     if (actionTimer.current) clearTimeout(actionTimer.current)
     actionTimer.current = setTimeout(() => setFlash(null), ms)
   }, [])
+
+  // ---------- 随机小动作（P5 · 做活）----------
+  //
+  // 状态机说 idle（没活、没提醒，你也安静）时，隔一阵子它自己动一下——挥挥手、
+  // 蹦一下、溜两步。**只动 idle**：状态机给的任何别的姿势（在跑 / 在等 / 蔫了）都是
+  // 事实，盖不得；小动作是一次性 flash，到点自然回到状态机。姿势随机——「它自己
+  // 想动一下」本就不需要可复现。读 ref 而不是进依赖：状态每 15 秒重取一次，
+  // 依赖一变 interval 就重置，小动作会被永远饿死在 30 秒之前。
+  const stateRef = useRef(state)
+  stateRef.current = state
+  const flashRef = useRef(flash)
+  flashRef.current = flash
+  const thinkingRef = useRef(thinking)
+  thinkingRef.current = thinking
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.hidden) return
+      if (flashRef.current || thinkingRef.current) return
+      if (asPetAction(stateRef.current?.action) !== 'idle') return
+      const pool: PetAction[] = ['waving', 'jumping', 'running-left', 'running-right']
+      playAction(pool[Math.floor(Math.random() * pool.length)], 2600 + Math.floor(Math.random() * 1600))
+    }, 30000)
+    return () => clearInterval(t)
+  }, [playAction])
 
   // 气泡区一次只说一句话：feed 和 nudge 谁开口，另一个闭嘴
   const showNudge = useCallback(
@@ -508,12 +708,15 @@ export default function PetWidget() {
   useEffect(() => {
     void (async () => {
       try {
-        const [f, g, p, m, rm] = await Promise.all([
+        const [f, g, p, m, rm, pc] = await Promise.all([
           fetch('/api/pet/feed?limit=30').then((r) => r.json()),
           api.petGrowth().catch(() => null),
           api.petPlugins().then((r) => r.plugins).catch(() => []),
           api.tutorMastery().catch(() => null),
           api.petRoom().catch(() => null),
+          // P5 落库之后：上一场的对话从库里铺出来。「它记得你」不再只活在
+          // 这一次会话的内存里——刷新、隔天回来，上一句还在。
+          api.petChats(30).catch(() => ({ chats: [] })),
         ])
         const evs: PetEvent[] = f.events ?? []
         setEvents([...evs].reverse())
@@ -522,23 +725,124 @@ export default function PetWidget() {
         setPlugins(p)
         setMastery(m)
         setRoom(rm)
+        // **合入而不是覆盖**：这几条 promise 是并着跑的，谁都有可能后到——
+        // 直接 setChat(历史) 会把你已经打出去、正在等回复的那几条冲掉。
+        // 库里的历史摆在前面，这一场会话的排在后面。
+        setChat((prev) => [
+          ...pc.chats.map((c) => ({
+            role: c.role,
+            text: c.text,
+            tools: c.tools?.length ? (c.tools as ChatMsg['tools']) : undefined,
+          })),
+          ...prev,
+        ])
       } catch {
         /* offline — the pet just sits quietly */
       }
     })()
   }, [])
 
-  // poll for new events → bubble (the pet "speaks first")
+  // 新台词到了 → 说（气泡 + 一次性姿势）。**流与兜底轮询共用这一段**：
+  // 两处各写一遍，迟早会长出两种行为（一条一次性的规矩在第 47 天被改了一半）。
+  const speakFresh = useCallback(
+    (fresh: PetEvent[]) => {
+      if (!fresh.length) return
+      setEvents((prev) => {
+        const ids = new Set(prev.map((e) => e.id))
+        const add = fresh.filter((e) => !ids.has(e.id))
+        return add.length ? [...prev, ...add.reverse()] : prev
+      })
+      for (const e of fresh) lastIdRef.current = Math.max(lastIdRef.current, e.id)
+      // react to what happened: failures slump, everything else waves hello
+      const isFail = fresh.some((e) => e.kind === 'task_failed')
+      playAction(isFail ? 'failed' : 'waving', 6000)
+      if (!openRef.current) {
+        setNudge(null) // 轮到系统事件说话，主动提醒先让位
+        setBubble(fresh[0].text)
+        if (bubbleTimer.current) clearTimeout(bubbleTimer.current)
+        bubbleTimer.current = setTimeout(() => setBubble(null), 6000)
+      }
+    },
+    [playAction]
+  )
+
+  // ---------- 事件流（SSE）：有事发生就立刻说 ----------
+  //
+  // 轮询留下来当**兜底**：流断了不该让零柒变成哑巴——那正是最看不出问题的坏法
+  // （页面一切正常，只是它再也不说话）。所以 `live=false` 时那条 15 秒的轮询照旧跑。
+  // 重连用退避（5→10→20→30 秒封顶）：服务端重启、网线拔了，都不该刷屏。
+  useEffect(() => {
+    const ctl = new AbortController()
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let wait = 5000
+
+    const connect = async () => {
+      let heard = false
+      try {
+        await streamPet(
+          lastIdRef.current,
+          (event, data) => {
+            heard = true
+            if (event === 'hello') setLive(true)
+            else if (event === 'event') {
+              setLive(true)
+              const line = data as unknown as PetEvent
+              speakFresh([line])
+              // 这两句背后是**累计量变了**：交出一份成品 → 屋里的架子多一件、EXP 涨；
+              // 说通一个概念 → 最近搞懂那栏换人。慢的那几样这时候值得立刻重看一眼。
+              if (line.kind === 'output' || line.kind === 'mastered') loadSlow()
+            } else if (event === 'work') {
+              // 有活开始 / 跑完 / 卡住了：立刻重算「此刻」，顺带看一眼慢的那几样
+              // （成品可能刚落地，屋里的架子上就多一件）。
+              void loadState()
+              loadSlow()
+            }
+          },
+          ctl.signal
+        )
+      } catch {
+        /* 断了：下面按退避重连，这期间轮询兜着 */
+      }
+      if (stopped) return
+      setLive(false)
+      if (heard) wait = 5000 // 刚才是通着的，那就从最短的间隔重来
+      timer = setTimeout(() => void connect(), wait)
+      wait = Math.min(wait * 2, 30000)
+    }
+
+    void connect()
+    return () => {
+      stopped = true
+      ctl.abort()
+      if (timer) clearTimeout(timer)
+    }
+  }, [speakFresh, loadState, loadSlow])
+
+  // 兜底轮询：流接上了就停（`live`），断了自然接着跑
+  useEffect(() => {
+    if (live) return
+    const t = setInterval(() => {
+      void (async () => {
+        try {
+          const r = await fetch(`/api/pet/feed?since_id=${lastIdRef.current}&limit=20`)
+          if (!r.ok) return
+          const data = await r.json()
+          speakFresh(data.events ?? [])
+        } catch {
+          /* retry next tick */
+        }
+      })()
+    }, 15000)
+    return () => clearInterval(t)
+  }, [live, speakFresh])
+
   useEffect(() => {
     // 成长是累计量，慢慢变——每次轮询顺带刷新，等级/EXP/最近搞懂跟上就好。
     // 小屋同频：**它身上带着的那件东西**是同一份真值里最新的一件。
-    const growthTimer = setInterval(() => {
-      void api.petGrowth().then(setGrowth).catch(() => {})
-      void api.tutorMastery().then(setMastery).catch(() => {})
-      void api.petRoom().then(setRoom).catch(() => {})
-    }, 60000)
+    const growthTimer = setInterval(() => loadSlow(), 60000)
     return () => clearInterval(growthTimer)
-  }, [])
+  }, [loadSlow])
 
   // a plugin command (drink / start / stop / set) → 更新那一格的面板
   const runPlugin = useCallback(
@@ -559,41 +863,6 @@ export default function PetWidget() {
     },
     []
   )
-
-  // poll for new events → bubble (the pet "speaks first")
-  useEffect(() => {
-    const t = setInterval(() => {
-      void (async () => {
-        try {
-          const r = await fetch(`/api/pet/feed?since_id=${lastIdRef.current}&limit=20`)
-          if (!r.ok) return
-          const data = await r.json()
-          const fresh: PetEvent[] = data.events ?? []
-          if (!fresh.length) return
-          setEvents((prev) => {
-            const ids = new Set(prev.map((e) => e.id))
-            const add = fresh.filter((e) => !ids.has(e.id))
-            return add.length ? [...prev, ...add.reverse()] : prev
-          })
-          for (const e of fresh) lastIdRef.current = Math.max(lastIdRef.current, e.id)
-          // react to what happened: failures slump, everything else waves hello
-          if (fresh[0]) {
-            const isFail = fresh.some((e) => e.kind === 'task_failed')
-            playAction(isFail ? 'failed' : 'waving', 6000)
-          }
-          if (!openRef.current && fresh[0]) {
-            setNudge(null) // 轮到系统事件说话，主动提醒先让位
-            setBubble(fresh[0].text)
-            if (bubbleTimer.current) clearTimeout(bubbleTimer.current)
-            bubbleTimer.current = setTimeout(() => setBubble(null), 6000)
-          }
-        } catch {
-          /* retry next tick */
-        }
-      })()
-    }, 15000)
-    return () => clearInterval(t)
-  }, [])
 
   // close panel on outside click
   useEffect(() => {
@@ -632,7 +901,8 @@ export default function PetWidget() {
       })
     try {
       await streamPetChat(
-        msg,
+        // Z1：把面板上已有的那几轮一起带上——后端不落库，不带它就等于每一句都是新会话
+        { message: msg, history: historyOf(chat) },
         {
           onDelta: (t) => {
             acc += t
@@ -683,30 +953,174 @@ export default function PetWidget() {
     }
   }
 
+  // ---------- 摸它一下（P5 · 做活）：Q 弹 + 一声「啵」（音效本体在 petSound.ts） ----------
+  function onSpriteClick() {
+    if (draggedRef.current) {
+      draggedRef.current = false // 这是拖完松手的那个 click，不是「点开面板」
+      return
+    }
+    setSquash(true)
+    if (squashTimer.current) clearTimeout(squashTimer.current)
+    squashTimer.current = setTimeout(() => setSquash(false), 380)
+    playBlip()
+    setOpen((v) => !v)
+  }
+
+  // ---------- 拖拽（P5 · 做活）：拽着走，松手带一点惯性，撞墙就停 ----------
+  //
+  // 指针事件挂在精灵上（touch-none 免得拖动变成滚动）；位移与「给输入行让位」
+  // 共用同一套 translate 轴。6px 死区把「点」和「拖」分开；惯性只做衰减不做反弹
+  // ——弹来弹去像球，不像猫。
+  function saveDrag(v: { dx: number; dy: number }) {
+    try {
+      localStorage.setItem('pet:drag', JSON.stringify(v))
+    } catch {
+      /* 无痕模式记不了就算了 */
+    }
+  }
+
+  function glide(vx: number, vy: number) {
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null
+    if (!raf || Math.abs(vx) + Math.abs(vy) < 0.05) {
+      saveDrag(dragPosRef.current)
+      return
+    }
+    cancelAnimationFrame(rafRef.current)
+    let { dx, dy } = dragPosRef.current
+    const step = () => {
+      vx *= 0.9
+      vy *= 0.9
+      if (Math.abs(vx) + Math.abs(vy) < 0.02) {
+        saveDrag({ dx, dy })
+        return
+      }
+      const next = clampDrag(dx + vx * 16, dy + vy * 16)
+      dx = next.dx
+      dy = next.dy
+      setDrag({ dx, dy })
+      rafRef.current = raf(step)
+    }
+    rafRef.current = raf(step)
+  }
+
+  function onSpritePointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return
+    const d = {
+      sx: e.clientX,
+      sy: e.clientY,
+      bx: drag.dx,
+      by: drag.dy,
+      moved: false,
+      lx: e.clientX,
+      ly: e.clientY,
+      lt: performance.now(),
+      vx: 0,
+      vy: 0,
+    }
+    dragRef.current = d
+    // move / up 挂在 **window** 上而不是精灵上：宠物一挪就跑到了指针下面之外，
+    // 靠元素收事件的话，抓住一半就断（真机验收撞过：只走到路径第二个点）。
+    // 收尾在 pointerup 与 pointercancel 两处（触屏拖出屏幕是 cancel）。
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - d.sx
+      const dy = ev.clientY - d.sy
+      if (!d.moved && Math.hypot(dx, dy) < 6) return // 过了死区才算拖，点一下还是点
+      if (!d.moved) setDragging(true)
+      d.moved = true
+      const now = performance.now()
+      const dt = Math.max(1, now - d.lt)
+      d.vx = 0.7 * d.vx + 0.3 * ((ev.clientX - d.lx) / dt)
+      d.vy = 0.7 * d.vy + 0.3 * ((ev.clientY - d.ly) / dt)
+      d.lx = ev.clientX
+      d.ly = ev.clientY
+      d.lt = now
+      setDrag(clampDrag(d.bx + dx, d.by + dy))
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      dragRef.current = null
+      setDragging(false)
+      if (!d.moved) return
+      draggedRef.current = true // 松手那下的 click 是拖拽的尾巴，不是点击
+      glide(d.vx, d.vy)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  // ---------- 音效开关（P5 · 做活）----------
+  function toggleBlip() {
+    const next = !blipOn
+    setBlipOn(next)
+    storeBlipOn(next)
+  }
+
+  // ---------- 弹出置顶（P5 · Document PiP）----------
+  async function openPip() {
+    if (pipWinRef.current) {
+      pipWinRef.current.close()
+      setPipWin(null)
+      return
+    }
+    const dpip = (
+      window as unknown as {
+        documentPictureInPicture?: {
+          requestWindow: (o: { width: number; height: number }) => Promise<PipWindow>
+        }
+      }
+    ).documentPictureInPicture
+    if (!dpip) {
+      setError('这个浏览器还不支持弹出置顶（要 Chrome / Edge 116+）。')
+      return
+    }
+    try {
+      const win = await dpip.requestWindow({ width: 240, height: 300 })
+      copyStyles(win.document)
+      // 暗色跟主页面走一份（主题中途切换不重拷：收回再弹就是新的）
+      win.document.documentElement.className = document.documentElement.className
+      win.addEventListener('pagehide', () => setPipWin(null))
+      setPipWin(win)
+    } catch (e) {
+      setError(`弹出失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  // 主页面一走，小窗里的 React 树就没了——把窗口也带上，别留一个空壳钉在屏幕上
+  useEffect(
+    () => () => {
+      pipWinRef.current?.close()
+    },
+    []
+  )
+
   return (
     <>
-      <style>{`
-        @keyframes pet-idle {
-          0%, 100% { transform: translateY(0) scale(1); }
-          50% { transform: translateY(-4px) scale(1.03); }
-        }
-        @keyframes pet-bubble-in {
-          from { opacity: 0; transform: translateY(6px) scale(0.9); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        .pet-idle { animation: pet-idle 3.2s ease-in-out infinite; }
-        .pet-bubble { animation: pet-bubble-in 0.22s ease-out; }
-      `}</style>
+      {/* 零柒的三个动画（pet-idle / pet-squash / pet-bubble-in）已搬进 index.css：
+          桌面壳那只小窗（pet.html）共用同一份，这里不再各抄一份。 */}
 
       {/* 分栏（SplitPane）已移除，不再需要躲开 `--aside-w`——宠物就固定在右下角。 */}
+      {/* 拖拽的位移与「让位」共用 translate 轴：拖过就走偏移量，没拖过保持原来的
+          写法（让位那条测试与旧习惯都钉着 `translateY` 的样子）。拖动进行中关掉
+          transition——200ms 的过渡追着每一帧 move 跑，手感是橡皮。 */}
       <div
         ref={panelRef}
         data-pet-root
         // pointer-events-none 在外层：这个 flex 盒子的宽度由最宽的子元素决定
         // （气泡能到 280px），不关掉的话，离精灵很远的地方点下去也会被它吃掉。
         // 真正要能点的三块（气泡 / 面板 / 精灵本体）各自 pointer-events-auto。
-        className="pointer-events-none fixed bottom-5 right-5 z-50 flex flex-col items-end transition-transform duration-200"
-        style={dodge ? { transform: `translateY(-${dodge}px)` } : undefined}
+        className={`pointer-events-none fixed bottom-5 right-5 z-50 flex flex-col items-end ${
+          dragging ? '' : 'transition-transform duration-200'
+        }`}
+        style={
+          drag.dx || drag.dy
+            ? { transform: `translate(${drag.dx}px, ${drag.dy - dodge}px)` }
+            : dodge
+              ? { transform: `translateY(-${dodge}px)` }
+              : undefined
+        }
       >
         {/* speech bubble above the sprite：主动提醒（带去处）优先，系统气泡让位 */}
         {nudge && !open ? (
@@ -767,6 +1181,26 @@ export default function PetWidget() {
                 } hover:text-violet-500`}
               >
                 {speaking ? '🔊' : speakOn ? '🔈' : '🔇'}
+              </button>
+              <button
+                onClick={toggleBlip}
+                title={blipOn ? '音效：开（点一下关掉）' : '音效：关'}
+                className={`text-[10px] transition-colors ${
+                  blipOn ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
+                } hover:text-violet-500`}
+              >
+                {blipOn ? '🔔' : '🔕'}
+              </button>
+              <button
+                onClick={() => void openPip()}
+                title={
+                  pipWin ? '收回置顶小窗' : '弹出置顶小窗：切去别的应用，它也浮在屏幕上'
+                }
+                className={`text-[10px] transition-colors ${
+                  pipWin ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
+                } hover:text-violet-500`}
+              >
+                📌
               </button>
               <Link
                 to="/companion"
@@ -978,21 +1412,26 @@ export default function PetWidget() {
           </div>
         )}
 
-        {/* the avatar itself — animated webp per state, PNG fallback on error */}
+        {/* the avatar itself — animated webp per state, PNG fallback on error.
+            P5 做活：能拽着走（指针事件 + 惯性），点一下有 Q 弹和一声「啵」。 */}
         <button
-          onClick={() => setOpen((v) => !v)}
+          onClick={onSpriteClick}
+          onPointerDown={onSpritePointerDown}
           title={state ? `零柒 · ${MODE_LABEL[state.mode]}` : '零柒'}
-          className="pointer-events-auto relative flex h-24 w-24 items-center justify-center transition-transform hover:scale-105 active:scale-95"
+          className="pointer-events-auto relative flex h-24 w-24 touch-none items-center justify-center transition-transform hover:scale-105 active:scale-95"
         >
           <div className="pet-idle flex items-center justify-center">
             <img
               key={action}
-              src={`/pet/${action}.webp`}
+              src={petSprite(action)}
               alt="零柒"
               data-pet-action={action}
               // 你走开久了 → 只把宠物自己降饱和（陪伴不是管教，页面不动）
               style={dimmed ? { filter: 'saturate(0.25)' } : undefined}
-              className="h-[88px] w-[88px] object-contain drop-shadow-md transition-[filter] duration-700"
+              className={
+                'h-[88px] w-[88px] object-contain drop-shadow-md transition-[filter] duration-700' +
+                (squash ? ' pet-squash' : '')
+              }
               onError={(e) => {
                 e.currentTarget.src = '/pet-avatar.png'
               }}
@@ -1011,6 +1450,45 @@ export default function PetWidget() {
           )}
         </button>
       </div>
+
+      {/* 置顶小窗（P5 · Document PiP）：同一份状态、同一个气泡，只是搬到了一个
+          **总在最前**的系统小窗里。样式是 copyStyles 搬过去的，暗色随主页面。 */}
+      {pipWin &&
+        createPortal(
+          <div className="flex h-screen flex-col items-center justify-center gap-2 bg-neutral-50 px-3 py-2 dark:bg-neutral-900">
+            {bubble ? (
+              <p className="pet-bubble max-w-[200px] rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-3 py-2 text-xs leading-relaxed text-neutral-800 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
+                {bubble}
+              </p>
+            ) : null}
+            <div className="pet-idle">
+              <img
+                src={petSprite(action)}
+                alt="零柒"
+                className={'h-24 w-24 object-contain drop-shadow-md' + (squash ? ' pet-squash' : '')}
+                style={dimmed ? { filter: 'saturate(0.25)' } : undefined}
+                onError={(e) => {
+                  e.currentTarget.src = '/pet-avatar.png'
+                }}
+              />
+            </div>
+            {state?.line ? (
+              <p className="max-w-[200px] text-center text-[10px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                {state.line}
+              </p>
+            ) : null}
+            <button
+              onClick={() => {
+                pipWin.close()
+                setPipWin(null)
+              }}
+              className="rounded-full border border-neutral-300 px-2.5 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
+            >
+              收回
+            </button>
+          </div>,
+          pipWin.document.body
+        )}
     </>
   )
 }

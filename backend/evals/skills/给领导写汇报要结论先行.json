@@ -1,0 +1,30 @@
+{
+  "skill": "给领导写汇报要结论先行",
+  "model_id": "",
+  "cases": [
+    {
+      "id": "trial-1",
+      "intent": "第一句就得是结论：这个项目到底能不能上、什么时候上",
+      "ask": "给领导汇报这次项目的结论",
+      "checks": [
+        "not_a_wall_of_text"
+      ]
+    },
+    {
+      "id": "trial-2",
+      "intent": "先给结果和影响，再给两条依据；不要过程",
+      "ask": "把这次上线的结果讲给老板听，一页纸",
+      "checks": [
+        "not_a_wall_of_text"
+      ]
+    },
+    {
+      "id": "trial-3",
+      "intent": "结论（延到哪天）+ 代价 + 需要他拍板的那一件事",
+      "ask": "跟领导说清这版为什么要延期两周",
+      "checks": [
+        "not_a_wall_of_text"
+      ]
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 这一层最容易出的不是写错列，是**把「没查」读成「查了没问题」**，以及**记账坏了连累
 那一轮**。所以下面专门有几条盯这两件事。
 """
+import asyncio
 import sys
 import time
 
@@ -340,3 +341,166 @@ async def test_the_length_facts_get_their_own_filters():
     d2["quality"] = {"length": {"budget": None, "hard": None, "chars": 900, "over": False, "saves": 1}}
     row2 = await tt.finish(d2)
     assert "over" not in row2["flags"] and "rewrote" not in row2["flags"]
+
+
+# ---------- R1：回合读数上墙（PLAN5 §3 R1） ----------
+#
+# 这一栏要上的是仪表盘那面墙，所以这里钉的不是「算得对不对」而已，而是**它不变成考核表**：
+# 只给计数、不给比率，读不到就说读不到。
+
+
+async def _age_row(conversation_id: int, hours: float) -> None:
+    """把某一轮往前挪 —— 窗口边界只有真比时间才验得出来。
+
+    **按 `conversation_id` 认行，不按「最新/最早那一行」**：靠顺序认行，改一条用例的
+    插入顺序就会静默挪错行，而症状是另一条断言莫名其妙地挂（这里第一版就是这么挂的）。
+
+    它也是 `async def`（与 `_three_turns` 一致）：在 `async def` 用例里调 `asyncio.run`
+    会撞上「cannot be called from an already running event loop」。
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select as _select
+
+    from app.db import SessionLocal
+    from app.models import TurnTrace as _TT, utcnow
+
+    async with SessionLocal() as db:
+        row = (
+            await db.execute(
+                _select(_TT).where(_TT.conversation_id == conversation_id).order_by(_TT.id.desc())
+            )
+        ).scalars().first()
+        assert row is not None, f"没有 conversation_id={conversation_id} 那一轮"
+        row.created_at = utcnow() - timedelta(hours=hours)
+        await db.commit()
+
+
+async def _three_turns() -> None:
+    """三条各带一种毛病的事实 + 一条干净的。"""
+    await _reset()
+    lie = tt.begin(conversation_id=1, model_id="m")
+    tt.note_claim(lie, "已存入产出：周报", [])
+    await tt.finish(lie)
+
+    multi = tt.begin(conversation_id=2, model_id="m")
+    multi["artifacts"] = [{"path": "a"}, {"path": "b"}]
+    await tt.finish(multi)
+
+    clean = tt.begin(conversation_id=3, model_id="m")
+    clean["answer_chars"] = 20
+    await tt.finish(clean)
+
+
+async def test_summary_counts_each_flag_over_the_window():
+    """每一格是**窗口内命中这一类毛病的回合数**，分母是窗口内跑过的回合数。"""
+    await _three_turns()
+    out = await tt.summary()
+    assert out["readable"] is True and out["error"] == ""
+    assert out["days"] == tt.SUMMARY_DAYS
+    assert out["turns"] == 3 and out["total"] == 3
+    assert out["truncated"] is False
+    assert out["counts"]["lie"] == 1
+    assert out["counts"]["multi"] == 1
+    # 干净那一轮不制造任何毛病（一排 0 里只有这两格是 1）
+    assert out["counts"]["slow"] == 0 and out["counts"]["error"] == 0
+
+
+async def test_summary_has_a_key_for_every_filter():
+    """每一类毛病都有一格 —— 少一格，界面上就是「这一类从来没发生过」的假象。"""
+    await _three_turns()
+    out = await tt.summary()
+    assert [f["key"] for f in out["filters"]] == [f["key"] for f in tt.FILTERS]
+    assert set(out["counts"]) == {f["key"] for f in tt.FILTERS}
+
+
+async def test_summary_leaves_out_what_is_outside_the_window():
+    """窗口之外的行不算 —— 否则「最近 30 天」会慢慢变成「从装那天起」。"""
+    await _three_turns()
+    await _age_row(conversation_id=2, hours=24 * 40)  # 那条「多份」挪到 40 天前
+    out = await tt.summary(days=30)
+    assert out["turns"] == 2 and out["total"] == 2
+    assert out["counts"]["multi"] == 0  # 被挪走的那一条
+    assert out["counts"]["lie"] == 1  # 还在窗口里的照旧数得到
+
+
+async def test_summary_says_so_when_it_cannot_read(monkeypatch):
+    """读不到就 `readable=false`，**不拿一排 0 充数**（§4-8：读不到 ≠ 零）。"""
+    await _three_turns()
+
+    async def boom(_since, _cap):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(tt, "_summary_rows", boom)
+    out = await tt.summary()
+    assert out["readable"] is False
+    assert "db down" in out["error"]
+    assert out["turns"] == 0
+    assert set(out["counts"].values()) == {0}  # 形状还在（界面不必判空），但 readable 说明了真相
+
+
+async def test_summary_says_so_when_it_had_to_stop_counting():
+    """库很大时只数最近 N 轮 —— **截断了要说出来**，不静默少算。"""
+    await _three_turns()
+    out = await tt.summary(max_rows=1)
+    assert out["turns"] == 1
+    assert out["total"] == 3  # 窗口里真实有三轮
+    assert out["truncated"] is True
+
+
+async def test_summary_hands_out_its_rules_and_no_rate():
+    """口径随读数一起给（界面照抄），而且**这里没有比率**。"""
+    await _three_turns()
+    out = await tt.summary()
+    for key in ("window", "counts", "no_rate", "truncated"):
+        assert out["rules"][key]
+    # 红线（§4-2 / 本模块开篇）：诊断工具不是考核仪表 —— 不给成功率，一个都不给
+    assert not any("rate" in k or "ratio" in k or "percent" in k for k in out)
+
+
+async def test_reading_the_summary_makes_the_pet_say_nothing():
+    """R1 的红线：这面墙**不进零柒嘴里**（与 `metrics` / `calibration` 同一条）。
+
+    跑完读数，宠物那边一个字都不该多出来（`pet_events` 是它说话的账本）。
+    """
+    await _three_turns()
+    await tt.summary()
+
+    from app.core import pet as pet_core
+
+    assert pet_core.feed(limit=50) == []
+
+
+def test_the_module_has_no_way_to_speak():
+    """比上一条更硬：光测「这一次没说话」不够，真正的风险是下一个人顺手在这里 emit 一句。
+
+    `turn_trace` 与宠物那条线**一处都不该连**——它连本地日换算都不需要。
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(tt.__file__).read_text(encoding="utf-8")
+    body = src.split('"""', 2)[2]  # 去掉模块 docstring
+    assert re.findall(r"\bpet\.(\w+)", body) == []
+    for banned in ("emit", "note_output", "compose", "feed", "greeting"):
+        assert f"pet.{banned}" not in body, banned
+
+
+def test_http_summary_endpoint(monkeypatch):
+    """墙上的那一格走的是 `/api/dashboard/turns`（R1 决定：扩现有 /dashboard，不新增导航）。"""
+    asyncio.run(_three_turns())
+    monkeypatch.setenv("WB_API_TOKEN", "t")
+    from fastapi.testclient import TestClient
+
+    from app.core import auth
+    from app.main import app
+
+    monkeypatch.setattr(auth, "_cached", None)
+    c = TestClient(app)
+    h = {"X-WB-Token": "t"}
+
+    assert c.get("/api/dashboard/turns").status_code == 401
+    body = c.get("/api/dashboard/turns", headers=h).json()
+    assert body["readable"] is True
+    assert body["turns"] == 3 and body["counts"]["lie"] == 1
+    assert "window" in body["rules"]

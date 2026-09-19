@@ -2,8 +2,14 @@
 
 重点在**校准那套纯算术**：命中率的样本下限、按信心分档、按领域分组、以及「说不清」
 不进分母。这些是这条链路唯一会出错也不会被肉眼发现的地方。存取那一层只测往返与守卫。
+
+M4（2026-09-16）加的这一段是**到期见证**（PLAN §3 G5）：`witness_days` 那一列、
+纯函数的到期判定、以及「只回一条」的那道口子。它是这条日志「拉取式」规矩唯一一次
+让开，所以最后一条用例专门盯着**那段理由还在不在原地**——规矩可以让开，理由不能丢。
 """
 import asyncio
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -203,3 +209,189 @@ def test_http_endpoints(monkeypatch):
     assert c.put("/api/decisions/999999/review", json={"outcome": "hit"}, headers=h).status_code == 404
     assert c.post("/api/decisions", json={"text": "  "}, headers=h).status_code == 400
     assert c.delete(f"/api/decisions/{created['id']}", headers=h).json()["ok"] is True
+
+
+# ---------- 到期见证（M4 · PLAN §3 G5） ----------
+
+
+def _past(days: int) -> datetime:
+    """`days` 天前的 **naive UTC**——就是库里那一列的口径（`utcnow()` 写 UTC，读出来是 naive）。"""
+    return (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+
+
+def _wrow(id_: int = 1, days_ago: int = 100, witness_days=90, outcome: str = "", **kw):
+    """够用的行替身：`due()` 只读这几个字段（与上面 `calibration` 那几条用例同一个做法）。
+
+    刻意不叫 `_row`——那个是校准那几条用例的（`(confidence, outcome, topic)`），
+    重名会**安静地把它们改坏**（第一版就是这么撞的）。
+    """
+    return SimpleNamespace(
+        id=id_,
+        text=kw.get("text", "先用 SQLite 就够"),
+        basis=kw.get("basis", "数据量上不去"),
+        topic="",
+        confidence=kw.get("confidence", 70),
+        created_at=_past(days_ago),
+        reviewed_at=None,
+        outcome=outcome,
+        note="",
+        witness_days=witness_days,
+    )
+
+
+async def _backdate(did: int, days: int) -> None:
+    """把一条真行改到 `days` 天前——`add()` 只会写「此刻」，而这一条测的就是时间。
+
+    **是 async 的**：调用它的用例本身就在事件循环里（`asyncio.run` 套 `asyncio.run`
+    会直接抛「cannot be called from a running event loop」）。
+    """
+    from app.db import SessionLocal
+    from app.models import DecisionLog
+
+    async with SessionLocal() as db:
+        row = await db.get(DecisionLog, did)
+        row.created_at = _past(days)
+        await db.commit()
+
+
+def test_witness_due_at_is_written_plus_the_column():
+    row = _wrow(days_ago=100, witness_days=30)
+    assert dl.witness_due_at(row) == dl._when(row) + timedelta(days=30)
+
+
+def test_a_missing_or_broken_column_falls_back_to_ninety():
+    """老库（迁移还没跑）那一列读出来是 None，坏数据是串——一律按默认 90 天。
+
+    这里的要点不是「容错」而是**默认值属于规矩**：读不出来就「永不到点」，
+    正是这张表会退化成死数据的那种方式。
+    """
+    for wd in (None, "", "x", 0, -5):
+        row = _wrow(days_ago=100, witness_days=wd)
+        assert dl.witness_due_at(row) == dl._when(row) + timedelta(days=90), wd
+
+
+def test_the_column_is_clamped_to_something_sane():
+    row = _wrow(days_ago=100, witness_days=99999)
+    assert dl.witness_due_at(row) == dl._when(row) + timedelta(days=dl.WITNESS_MAX)
+
+
+def test_due_skips_reviewed_and_not_yet_due():
+    rows = [
+        _wrow(1, days_ago=100),  # 到点
+        _wrow(2, days_ago=100, outcome="hit"),  # 回看过了：不是「到点」，是「看过了」
+        _wrow(3, days_ago=10),  # 还没到
+    ]
+    assert [d["id"] for d in dl.due(rows)] == [1]
+
+
+def test_due_puts_the_longest_overdue_first():
+    """老行上线时会集体到点，先念最老的那条：它最可能已经见分晓、也最可能被忘干净。"""
+    rows = [_wrow(1, days_ago=120), _wrow(2, days_ago=400), _wrow(3, days_ago=95)]
+    assert [d["id"] for d in dl.due(rows)] == [2, 1, 3]
+
+
+def test_age_days_counts_from_the_day_it_was_written():
+    """台词说的是「三个月前你判断」——那是**判断的年纪**，不是到点之后过了多久。"""
+    got = dl.due([_wrow(1, days_ago=100, witness_days=30)])[0]
+    assert 99 <= got["age_days"] <= 100
+    assert got["due_at"] is not None
+
+
+def test_due_skips_rows_whose_time_is_unreadable():
+    """宁可少念一条，也不编一个年纪出来。"""
+    bad = _wrow(1)
+    bad.created_at = None
+    assert [d["id"] for d in dl.due([bad, _wrow(2, days_ago=100)])] == [2]
+    assert dl.due([bad]) == []
+
+
+def test_witness_returns_one_line_and_a_count():
+    """**只回一条**：一次全摆出来就等于把 90 天前的一堆判断变成一张「你还欠」的账单。"""
+
+    async def go():
+        first = await dl.add("最老的那条", basis="当时只能这么选", confidence=70)
+        second = await dl.add("次老的", basis="", confidence=60)
+        await _backdate(first["id"], 400)
+        await _backdate(second["id"], 200)
+        try:
+            got = await dl.witness()
+            assert got["count"] == 2 and got["due"]["id"] == first["id"]
+            assert got["due"]["age_days"] >= 399
+            # 回看掉第一条 → 下一条顶上来（回看是拉取式的，这一步只有人做）
+            await dl.review(first["id"], "hit", "")
+            got2 = await dl.witness()
+            assert got2["count"] == 1 and got2["due"]["id"] == second["id"]
+        finally:
+            await dl.remove(first["id"])
+            await dl.remove(second["id"])
+
+    asyncio.run(go())
+
+
+def test_witness_is_silent_on_an_empty_log():
+    async def go():
+        got = await dl.witness()
+        assert got == {"due": None, "count": 0}
+
+    asyncio.run(go())
+
+
+def test_add_carries_the_column_and_clamps_it():
+    """写行与读行走**同一个** `clamp_witness_days`：两处各写一遍迟早给出两个答案。"""
+
+    async def go():
+        row = await dl.add("没给就用默认", witness_days=0)  # 0 会让「刚写完就催你回看」
+        assert row["witness_days"] == dl.WITNESS_DAYS
+        await dl.remove(row["id"])
+        big = await dl.add("十年封顶", witness_days=99999)
+        assert big["witness_days"] == dl.WITNESS_MAX
+        await dl.remove(big["id"])
+
+    asyncio.run(go())
+
+
+def test_http_witness_endpoint(monkeypatch):
+    monkeypatch.setenv("WB_API_TOKEN", "t")
+    from fastapi.testclient import TestClient
+
+    from app.core import auth
+    from app.main import app
+
+    monkeypatch.setattr(auth, "_cached", None)
+    c = TestClient(app)
+    h = {"X-WB-Token": "t"}
+
+    assert c.get("/api/decisions/witness").status_code == 401
+    assert c.get("/api/decisions/witness", headers=h).json() == {"due": None, "count": 0}
+
+    async def seed():
+        row = await dl.add("三个月前那条", basis="凭当时的量级估算", confidence=70)
+        await _backdate(row["id"], 120)
+        return row["id"]
+
+    did = asyncio.run(seed())
+    try:
+        got = c.get("/api/decisions/witness", headers=h).json()
+        assert got["count"] == 1
+        # 台词要能**引用原文依据**（PLAN §3 G5 的验收）：三个字段一个都不能少
+        assert got["due"]["text"] == "三个月前那条"
+        assert got["due"]["basis"] == "凭当时的量级估算"
+        assert got["due"]["confidence"] == 70
+    finally:
+        asyncio.run(dl.remove(did))
+
+
+def test_the_reason_it_bends_the_rule_is_still_written_down():
+    """规矩可以让开，**理由不能丢**（PLAN §3 G5 的验收就要求钉住这个）。
+
+    钉的是「为什么」：原来那条是拉取式；这次可以，是因为纯拉取式在 90 天的尺度上会
+    让这张表变成死数据，所以接进**现有 nudge 管线**、一天一条、只说当时的事实。
+    下一个人翻到这里，第一眼就该看到这段，而不是只看到 `witness()` 在催人。
+    """
+    from app import models
+
+    assert "拉取式" in dl.__doc__ and "死数据" in dl.__doc__ and "nudge" in dl.__doc__
+    assert "让开" in dl.__doc__
+    # 表上那份说明说的是同一件事——只改一处的话，另一处就成了自相矛盾
+    assert "让开" in models.DecisionLog.__doc__
+    assert "witness_days" in models.DecisionLog.__doc__

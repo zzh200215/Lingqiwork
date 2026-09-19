@@ -255,6 +255,9 @@ async def run(*, days: int = DAYS, stream_fn=None, native_fn=None, **gather_kw):
         return
     yield "sources", {"sources": [_public_source(s) for s in sources], "n": len(sources)}
 
+    # S1 引擎吃 skill：**这里刻意不注入**。复盘没有话题（`run(*, days=…)` 的那个
+    # `f"最近 {days} 天"` 只是个时间范围，不是话题），拿它去匹配只会瞎撞上含「最近」
+    # 「天」的技能。这不是漏做，是 PLAN3 §9.3 定下的。
     yield "writing", {}
     rep = None
     async for _ev, _payload in _report.synthesize_streaming(

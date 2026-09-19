@@ -390,19 +390,50 @@ async def synthesize_streaming(
     yield "done", (_finalize(obj, sources) if obj is not None else None)
 
 
+def frontmatter(fields: dict[str, str] | None) -> str:
+    """`{key: value}` → 一段 `---` frontmatter（一个字段都没有就返回空串）。Pure.
+
+    形状与 `skills.SKILL.md` 的 frontmatter 一样（那边也用自己的迷你解析器读它），
+    所以读的人不必再学一套。空值一律丢掉——**不写一个空字段**，那会让人以为「问过了但没答案」。
+    """
+    rows = [(k, str(v).strip()) for k, v in (fields or {}).items() if str(v or "").strip()]
+    if not rows:
+        return ""
+    return "---\n" + "\n".join(f"{k}: {v}" for k, v in rows) + "\n---\n\n"
+
+
 async def save(
-    report: Report, sources: list[dict], dest_dir: Path, fallback_title: str = "研究笔记"
+    report: Report,
+    sources: list[dict],
+    dest_dir: Path,
+    fallback_title: str = "研究笔记",
+    front: dict[str, str] | None = None,
 ) -> dict:
-    """落 `dest_dir` 并进索引——「下次先捞你自己的」那一跳靠的就是这里。"""
+    """落 `dest_dir` 并进索引——「下次先捞你自己的」那一跳靠的就是这里。
+
+    `front`：可选的 frontmatter（交付那条用它把**体裁与读者**写进文件）。`deliver.run` 的
+    payload 里本来就带着这两个值，注释也写着「存进 vault 之后还看得出这份是给谁写的」——
+    可在这之前它们到这一步就丢了（存完只剩文件名）。别的引擎不传，文件格式一个字节没变。
+    """
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{datetime.now():%Y-%m-%d}-{slug(report.title, dest_dir.name)}.md"
-    dest.write_text(to_markdown(report, sources, fallback_title), encoding="utf-8")
+    body = to_markdown(report, sources, fallback_title)
+    dest.write_text((frontmatter(front) + body) if front else body, encoding="utf-8")
+    rel = dest.relative_to(VAULT_DIR).as_posix()
+
+    # 环二表达层：六个成文引擎（研究 / 成文 / 复盘 / 方案 / 对质 / 交付）**都从这一处**
+    # 落盘，所以「成品交出去了」那句话在这里说一次就够了——引擎页面点出来的、定时任务里
+    # 跑出来的，同一条路。落点是不是成品由 `pet.is_output_path` 判（`notes/` 的成文不算，
+    # 与成长值同一口径）；`tasks.run_task` 因此不再补一句「跑完了」。
+    from app.core import pet
+
+    pet.note_output(report.title or dest.stem, rel)
 
     from app.core import indexer
 
     chunks = await asyncio.to_thread(indexer.index_file, dest)
     return {
-        "filename": dest.relative_to(VAULT_DIR).as_posix(),
+        "filename": rel,
         "title": report.title,
         "chunks": chunks,
     }

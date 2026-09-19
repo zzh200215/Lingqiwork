@@ -1,5 +1,28 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { api, type AgentPreset, type ArenaResult, type BackupList, type CostSummary, type EngineEvalLatest, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
+import { useSearchParams } from 'react-router-dom'
+import {
+  Bot,
+  Brain,
+  Clock,
+  Coins,
+  Globe,
+  GraduationCap,
+  HeartPulse,
+  Image,
+  Layers,
+  Mail,
+  Plug,
+  Puzzle,
+  Rss,
+  Save,
+  ScrollText,
+  Settings,
+  Star,
+  Trophy,
+  Zap,
+} from 'lucide-react'
+import { api, type AgentPreset, type ArenaResult, type BackupList, type CostSummary, type EngineEvalLatest, type FeedItem, type HealthReport, type ImageItem, type McpServer, type McpProbe, type McpView, type MemoryExpose, type MemoryItem, type MemoryTidyReport, type ModelProbe, type PromptItem, type ProviderConfig, type QualityGroup, type ScheduledTask, type SkillItem, type TaskRunItem, type TaskTool, type TutorProfile, type QualitySummary } from './api'
+import { SETTING_SECTIONS, type SettingSection } from './routes'
 import TurnLedger from './TurnLedger'
 
 /** 四个成文引擎的展示顺序（与 core/engine_eval.ENGINES 一致）。 */
@@ -13,6 +36,28 @@ function fmtSize(bytes: number): string {
 
 function fmtTime(iso: string | null): string {
   return iso ? iso.slice(5, 16).replace('T', ' ') : '—'
+}
+
+/** S1（PLAN3 §9.2 决策4）：同一份成绩里「有注入 / 没注入 / 不知道」分开摆。
+ *
+ *  注入**不改变** `prompt_sha`（它是模块级常量的指纹），所以不加这一行，吃着技能和没吃
+ *  技能的 👍/👎 会混成一份成绩；而聚合的 key 一个没动——表格上面那几个数还是原来那几个数。
+ *
+ *  **只摆非零**：一次注入都没有的那些组，这一行根本不出现（同「样本不够就不给率」的规矩）。
+ *  `不知道` 与 `没注入` 是两件事：从产出清单事后点的评价落在「不知道」。
+ */
+export function injectSplit(g: QualityGroup): string {
+  const cell = (k: 'injected' | 'plain' | 'unknown') => g.split?.[k] ?? { good: 0, bad: 0 }
+  const bits: string[] = []
+  for (const [key, label] of [
+    ['injected', '有注入'],
+    ['plain', '没注入'],
+    ['unknown', '不知道'],
+  ] as const) {
+    const c = cell(key)
+    if (c.good + c.bad > 0) bits.push(`${label} ${c.good}👍/${c.bad}👎`)
+  }
+  return bits.length ? `这份产出吃着技能生成的没有 —— ${bits.join(' · ')}` : ''
 }
 
 const EMPTY = { name: '', kind: 'openai' as 'openai' | 'anthropic', base_url: '', api_key: '', models: '', enabled: true }
@@ -72,19 +117,12 @@ const EMPTY_TASK = {
   landing_dir: '',
 }
 
-const SETTING_SECTIONS = [
-  { key: 'general', icon: '⚙️', label: '通用' },
-  { key: 'models', icon: '🧠', label: '模型' },
-  { key: 'agents', icon: '🤖', label: '智能体' },
-  { key: 'automation', icon: '⏰', label: '自动化' },
-  { key: 'content', icon: '🎨', label: '内容生成' },
-  { key: 'data', icon: '💾', label: '数据' },
-  { key: 'mcp', icon: '🔌', label: 'MCP' },
-] as const
-
-type SectionKey = (typeof SETTING_SECTIONS)[number]['key']
+// 分区清单（通用 / 模型 / 智能体 / 自动化 / 内容生成 / 数据 / MCP）**搬到 `routes.tsx` 了**：
+// 侧栏要摆它、这一页要按它切，两处各写一份的那天就会出现「侧栏七项、页面里六项」。
+// 2026-09-18 导航改版：页面里那个左侧竖排也删了，当前分区由 `?section=` 驱动。
 
 export default function SettingsPage() {
+  const [searchParams] = useSearchParams()
   const [providers, setProviders] = useState<ProviderConfig[]>([])
   const [probes, setProbes] = useState<Record<number, ModelProbe[]>>({})
   const [probing, setProbing] = useState<number | null>(null)
@@ -940,7 +978,11 @@ export default function SettingsPage() {
   const mcpServers = mcpView?.servers ?? []
   const activeToolCount = mcpView?.active_tools.length ?? 0
 
-  const [section, setSection] = useState<SectionKey>('general')
+  // 当前分区由 URL 决定（侧栏是唯一入口）：`/settings?section=models`。
+  // 没写或写了个不认识的词 → 「通用」，与侧栏 `navState` 的默认一致。
+  const sectionParam = searchParams.get('section')
+  const section: SettingSection =
+    SETTING_SECTIONS.find((s) => s.key === sectionParam)?.key ?? 'general'
 
   // 体检报告 + 模型竞技场（agents 页签）：进入页签时才拉取，失败静默。
   // 这两个状态必须放在 section 声明之后——useEffect 的依赖数组引用它。
@@ -1028,40 +1070,22 @@ export default function SettingsPage() {
 
   return (
     <>
-      <div className="mx-auto max-w-6xl px-6 py-8">
+      <div className="mx-auto max-w-[1600px] px-6 py-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold">设置</h1>
       </div>
 
-      <div className="flex gap-6">
-        <aside className="w-44 shrink-0">
-          <nav className="sticky top-6 flex flex-col gap-1">
-            {SETTING_SECTIONS.map((s) => (
-              <button
-                key={s.key}
-                data-settings-tab={s.key}
-                onClick={() => setSection(s.key)}
-                className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                  section === s.key
-                    ? 'bg-violet-100 font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
-                    : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
-                }`}
-              >
-                <span className="text-base leading-none">{s.icon}</span>
-                {s.label}
-              </button>
-            ))}
-          </nav>
-        </aside>
-
-        <main className="min-w-0 flex-1">
+      {/* 左侧那排分区（通用/模型/…/MCP）**搬到侧栏**了（2026-09-18 导航改版）：
+          同一件事不留两个入口。当前分区仍然走 `?section=`，旧书签照用。
+          版面因此从「页内两栏」变成整幅——所以下面那层 flex 一起去掉。 */}
+      <main className="min-w-0">
       {/* General preferences */}
       {section === 'general' && !prefs && (
         <p className="py-8 text-sm text-neutral-400">加载中…</p>
       )}
       {section === 'general' && prefs && (
-        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-4 flex items-center gap-2 font-semibold"><span>⚙️</span> 通用</h2>
+        <section className="mb-6 wb-card p-5">
+          <h2 className="mb-4 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"><Settings className="h-3.5 w-3.5" /></span></h2>
           <div className="flex flex-col gap-4">
             <label className="flex flex-col gap-1 text-sm">
               系统提示词（每次对话都会作为 system 消息注入）
@@ -1330,8 +1354,8 @@ export default function SettingsPage() {
 
       {/* Artifacts light execution */}
       {section === 'content' && prefs && (
-        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>⚡</span> 轻执行 Artifacts</h2>
+        <section className="mb-6 wb-card p-5">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300"><Zap className="h-3.5 w-3.5" /></span></h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-500">
             默认关闭。开启后聊天里的 Python / JavaScript 代码块出现「▶ 运行」按钮，HTML 代码块出现沙箱预览。
             代码在你本机以独立临时目录直接执行（Python 用工作台自带的运行环境），有超时与输出上限，但没有真正的沙箱隔离 —— 请只运行你理解用途的代码。
@@ -1362,8 +1386,8 @@ export default function SettingsPage() {
 
       {/* Image generation */}
       {section === 'content' && prefs && (
-        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>🖼️</span> 图片生成</h2>
+        <section className="mb-6 wb-card p-5">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-pink-100 text-pink-600 dark:bg-pink-400/15 dark:text-pink-300"><Image className="h-3.5 w-3.5" /></span></h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-500">
             开启后模型可调用 image_gen 工具作图，Notes 页也能用「🖼️ 配图」插入。生成的图片会下载到
             data/images/ 并以 /api/images/&lt;name&gt; 提供（DashScope 返回的原始链接带签名会过期）。
@@ -1495,8 +1519,8 @@ export default function SettingsPage() {
 
       {/* Backup & restore */}
       {section === 'data' && prefs && (
-        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>💾</span> 备份与恢复</h2>
+        <section className="mb-6 wb-card p-5">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Save className="h-3.5 w-3.5" /></span></h2>
           <p className="mb-4 text-xs text-neutral-500">
             打包 vault/（全部笔记）+ data/workbench.db（会话/记忆/配置库，一致性快照）+ data/config.json 为 zip。
             向量索引不入包，可由 vault 重建。
@@ -1586,8 +1610,8 @@ export default function SettingsPage() {
 
       {/* 复习卡片 */}
       {section === 'automation' && prefs && (
-        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>🎴</span> 复习卡片</h2>
+        <section className="mb-6 wb-card p-5">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"><Layers className="h-3.5 w-3.5" /></span></h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-400">
             每日上限不是为了省时间，是为了别让积压把人劝退——某天出了两百张卡，第二天被队列砸懵就再也不打开了。
           </p>
@@ -1630,8 +1654,8 @@ export default function SettingsPage() {
 
       {/* RSS subscriptions */}
       {section === 'automation' && prefs && (
-        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>📡</span> RSS 订阅</h2>
+        <section className="mb-6 wb-card p-5">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-orange-100 text-orange-600 dark:bg-orange-400/15 dark:text-orange-300"><Rss className="h-3.5 w-3.5" /></span></h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-400">
             抓到的新条目按月追加到 vault/feeds/，自动进 RAG 索引——再配一个定时任务（如「总结 feeds
             目录里今天的新内容」）就是每日情报简报。同一条目只写一次。
@@ -1746,8 +1770,8 @@ export default function SettingsPage() {
 
       {/* E-mail push */}
       {section === 'automation' && prefs && (
-        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>📧</span> 邮件推送</h2>
+        <section className="mb-6 wb-card p-5">
+          <h2 className="mb-1 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Mail className="h-3.5 w-3.5" /></span></h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-400">
             用你自己的 SMTP 发件（密码存在本机 data/config.json，接口读取时会打码）。端口 465 走隐式 TLS，587 走
             STARTTLS。
@@ -1852,8 +1876,8 @@ export default function SettingsPage() {
 
       {/* Scheduled tasks */}
       {section === 'automation' && (
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>⏰</span> 定时任务</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"><Clock className="h-3.5 w-3.5" /></span></h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           三种玩法：① 简单执行——到点跑一条指令（可带知识库与工具）；② 自主智能体——给目标让它多轮调用工具干到完成，全程留执行日志；
           ③ 任务链——上游任务的产出自动交给下游继续处理（经 vault/tasks/handoff/ 交接，可人工干预）。触发支持 cron 或 vault
@@ -2006,7 +2030,7 @@ export default function SettingsPage() {
           </div>
         ))}
         {!tasks.length && <p className="text-sm text-neutral-400">还没有定时任务</p>}
-        <div className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <div className="wb-card p-5">
           <h3 className="mb-3 text-sm font-medium">
             {taskEditId != null ? `编辑「${taskDraft.name}」` : '新增定时任务'}
           </h3>
@@ -2309,9 +2333,9 @@ export default function SettingsPage() {
 
       {/* Existing providers */}
       {section === 'models' && cost && (
-        <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <section className="mb-6 wb-card p-5">
           <h2 className="mb-1 flex items-center gap-2 font-semibold">
-            <span>💸</span> 用量与成本
+            <span className="wb-chip h-6 w-6 rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300"><Coins className="h-3.5 w-3.5" /></span>
           </h2>
           <p className="mb-4 text-xs leading-relaxed text-neutral-500">
             最近 {cost.days} 天。聊天与定时任务各自记账；其余路径（研究 / 产出 / 复盘 / 方案 /
@@ -2383,8 +2407,8 @@ export default function SettingsPage() {
       )}
 
       {section === 'models' && (
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>🧠</span> 模型 Provider</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"><Brain className="h-3.5 w-3.5" /></span></h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           「测一下」会给这个 provider 的每个模型各打一次最小请求，逐个标出可用还是打不通。
           <b>模型顺序有意义</b>：所有自动化功能（每日提醒、每周补讲、每日摘要、零柒问候、自动记忆、图谱抽取）
@@ -2468,8 +2492,8 @@ export default function SettingsPage() {
       {section === 'agents' && (
       <>
       {/* 体检报告：自检 + 备份 + 索引 + 任务失败 + 整理员，一页看全 */}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>🩺</span> 体检报告</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-400/15 dark:text-rose-300"><HeartPulse className="h-3.5 w-3.5" /></span></h2>
         {!health ? (
           <p className="text-xs text-neutral-400">正在体检…</p>
         ) : (
@@ -2514,8 +2538,8 @@ export default function SettingsPage() {
       </section>
 
       {/* MCP server（能力开放）：把工作台的读状态开放给外部 MCP 客户端 */}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>🔌</span> MCP 服务器（对外只读）</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Plug className="h-3.5 w-3.5" /></span></h2>
         <p className="text-xs leading-relaxed text-neutral-500">
           外部 MCP 客户端（Claude Desktop 等）可以连进来查你的知识库、对话/教学历史、长期记忆、学习画像和今日建议。
           端点只绑本机（127.0.0.1），且全部是<strong>读</strong>操作——外部工具看工作台，改动仍走工作台自己的界面。
@@ -2545,8 +2569,8 @@ export default function SettingsPage() {
       </section>
 
       {/* 模型竞技场：同一段 prompt 打到所有已启用 provider 并排对比 */}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>🏟️</span> 模型竞技场</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300"><Trophy className="h-3.5 w-3.5" /></span></h2>
         <p className="text-xs text-neutral-500">
           同一段话并行发给每个已启用的 provider，并排看回答、耗时和错误——也是降级链候选的检阅台。
         </p>
@@ -2590,8 +2614,8 @@ export default function SettingsPage() {
       </section>
 
       {/* 生成质量闭环：研究/产出/复盘/方案 每次成文后都能评一次，按「哪版提示词 + 哪个模型」聚合 */}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>⭐</span> 生成质量</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300"><Star className="h-3.5 w-3.5" /></span></h2>
         <p className="text-xs text-neutral-500">
           研究 / 产出 / 复盘 / 方案 每次成文后，各自的卡片底部都有一次 👍/👎。评价按「哪版提示词 + 哪个模型」聚合——
           改过提示词或换过 provider 之后，前后两版会分开统计，不用靠感觉判断。
@@ -2622,15 +2646,25 @@ export default function SettingsPage() {
                 </thead>
                 <tbody className="text-neutral-600 dark:text-neutral-300">
                   {quality.groups.map((g) => (
-                    <tr key={`${g.kind}-${g.prompt_sha}-${g.model_id}`} className="border-t border-neutral-100 dark:border-neutral-800">
-                      <td className="py-1 pr-3">{g.kind}</td>
-                      <td className="py-1 pr-3 font-mono text-[10px] text-neutral-400">{g.prompt_sha || '—'}</td>
-                      <td className="max-w-[14rem] truncate py-1 pr-3" title={g.model_id}>{g.model_id || '—'}</td>
-                      <td className={`py-1 pr-3 ${g.rate >= 0.7 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                        {Math.round(g.rate * 100)}%
-                      </td>
-                      <td className="py-1 text-neutral-400">{g.total}</td>
-                    </tr>
+                    <Fragment key={`${g.kind}-${g.prompt_sha}-${g.model_id}`}>
+                      <tr className="border-t border-neutral-100 dark:border-neutral-800">
+                        <td className="py-1 pr-3">{g.kind}</td>
+                        <td className="py-1 pr-3 font-mono text-[10px] text-neutral-400">{g.prompt_sha || '—'}</td>
+                        <td className="max-w-[14rem] truncate py-1 pr-3" title={g.model_id}>{g.model_id || '—'}</td>
+                        <td className={`py-1 pr-3 ${g.rate >= 0.7 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                          {Math.round(g.rate * 100)}%
+                        </td>
+                        <td className="py-1 text-neutral-400">{g.total}</td>
+                      </tr>
+                      {injectSplit(g) ? (
+                        // S1：**单独一行**摆「有注入 / 没注入 / 不知道」——上面那几个数一个没动
+                        <tr className="border-t border-dashed border-neutral-100 dark:border-neutral-800">
+                          <td colSpan={5} data-inject-split className="pb-1.5 text-[10px] leading-relaxed text-neutral-400">
+                            {injectSplit(g)}
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -2731,8 +2765,8 @@ export default function SettingsPage() {
       </section>
 
       {tutorProfile && (tutorProfile.known.length > 0 || tutorProfile.half.length > 0 || tutorProfile.preferences.length > 0) ? (
-        <section className="mb-6 flex flex-col gap-2 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-          <h2 className="flex items-center gap-2 font-semibold"><span>🎓</span> 学习画像</h2>
+        <section className="mb-6 flex flex-col gap-2 wb-card p-5">
+          <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><GraduationCap className="h-3.5 w-3.5" /></span></h2>
           <p className="text-xs text-neutral-500">
             自动汇总自教学记录，注入教学提示词校准讲解深度。是派生的记录，不能手改；教学页里它会自己更新。
           </p>
@@ -2756,9 +2790,9 @@ export default function SettingsPage() {
           ) : null}
         </section>
       ) : null}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
         <div className="flex items-center justify-between">
-          <h2 className="flex items-center gap-2 font-semibold"><span>💭</span> 长期记忆</h2>
+          <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-pink-100 text-pink-600 dark:bg-pink-400/15 dark:text-pink-300"><Brain className="h-3.5 w-3.5" /></span></h2>
           {memories.length > 0 && (
             <button onClick={clearAllMemories} className="text-xs text-red-400 hover:text-red-600">
               清空全部
@@ -2944,8 +2978,8 @@ export default function SettingsPage() {
       </section>
 
       {/* Agent presets */}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>🤖</span> 智能体预设</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"><Bot className="h-3.5 w-3.5" /></span></h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           把人设提示词、模型、RAG/工具开关打包成命名预设，对话页顶部一键切换。
         </p>
@@ -2979,7 +3013,7 @@ export default function SettingsPage() {
         ))}
         {!agents.length && <p className="text-sm text-neutral-400">还没有智能体预设</p>}
 
-        <div className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <div className="wb-card p-5">
           <h3 className="mb-3 text-sm font-medium">
             {agentEditId != null ? `编辑「${agentDraft.name}」` : '新增智能体'}
           </h3>
@@ -3080,8 +3114,8 @@ export default function SettingsPage() {
       </section>
 
       {/* Prompt library */}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>📝</span> 提示词库</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><ScrollText className="h-3.5 w-3.5" /></span></h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           常用提示词存成模板，对话页输入框敲 <code className="text-neutral-500">/</code> 即可唤起。
           内容支持 <code className="text-neutral-500">{'{变量}'}</code> 占位符，使用时会逐个询问填入。
@@ -3113,7 +3147,7 @@ export default function SettingsPage() {
         ))}
         {!prompts.length && <p className="text-sm text-neutral-400">还没有提示词模板</p>}
 
-        <div className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+        <div className="wb-card p-5">
           <h3 className="mb-3 text-sm font-medium">
             {promptEditId != null ? `编辑「${promptDraft.title}」` : '新增提示词'}
           </h3>
@@ -3159,8 +3193,8 @@ export default function SettingsPage() {
       </section>
 
       {/* Agent Skills */}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="flex items-center gap-2 font-semibold"><span>🧩</span> 技能 Skills</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300"><Puzzle className="h-3.5 w-3.5" /></span></h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           SKILL.md 指令包：frontmatter 写 name/description（何时使用），正文是完整指导。对话时注入技能清单，模型判断相关就自动加载全文执行。
           技能存于 skills/ 目录，也可直接手动放文件夹进去。
@@ -3249,8 +3283,8 @@ export default function SettingsPage() {
 
       {/* Provider editor */}
       {section === 'models' && (
-      <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="mb-4 flex items-center gap-2 font-semibold"><span>🧠</span> {editingId ? `编辑 ${draft.name}` : '新增 Provider'}</h2>
+      <section className="mb-6 wb-card p-5">
+        <h2 className="mb-4 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"><Brain className="h-3.5 w-3.5" /></span> {editingId ? `编辑 ${draft.name}` : '新增 Provider'}</h2>
         <div className="grid grid-cols-2 gap-4">
           <label className="flex flex-col gap-1 text-sm">
             名称（用于 model_id 前缀）
@@ -3313,8 +3347,8 @@ export default function SettingsPage() {
       {section === 'mcp' && (
       <>
       {prefs && (
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="mb-1 flex items-center gap-2 font-semibold"><span>🔍</span> 联网搜索</h2>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <h2 className="mb-1 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Globe className="h-3.5 w-3.5" /></span></h2>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           web_search 工具的搜索引擎。配置 Keenable API Key 后优先走 Keenable（稳定、带正文摘要）；
           免费爬取 Bing / DuckDuckGo 始终作为兜底。
@@ -3343,9 +3377,9 @@ export default function SettingsPage() {
         </div>
       </section>
       )}
-      <section className="mb-6 flex flex-col gap-3 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
         <div className="flex items-center justify-between">
-          <h2 className="flex items-center gap-2 font-semibold"><span>🔌</span> MCP 工具服务器</h2>
+          <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Plug className="h-3.5 w-3.5" /></span></h2>
           <span className="text-xs text-neutral-400">{activeToolCount} 个可用工具</span>
         </div>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
@@ -3416,8 +3450,8 @@ export default function SettingsPage() {
       </section>
 
       {/* MCP editor */}
-      <section className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="mb-4 flex items-center gap-2 font-semibold"><span>🔌</span> {mcpEditIdx != null ? `编辑 ${mcpDraft.name}` : '新增 MCP Server'}</h2>
+      <section className="wb-card p-5">
+        <h2 className="mb-4 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Plug className="h-3.5 w-3.5" /></span> {mcpEditIdx != null ? `编辑 ${mcpDraft.name}` : '新增 MCP Server'}</h2>
         <div className="grid grid-cols-2 gap-4">
           <label className="flex flex-col gap-1 text-sm">
             名称
@@ -3496,8 +3530,7 @@ export default function SettingsPage() {
       </>
       )}
 
-        </main>
-      </div>
+      </main>
       </div>
     </>
   )

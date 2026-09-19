@@ -1,6 +1,77 @@
 import { describe, expect, it } from 'vitest'
 
-import { legacyTarget, parseRoute } from './routes'
+import { NAV, navState, legacyTarget, parseRoute } from './routes'
+
+// ---------- 侧栏导航（2026-09-18 改版：平铺五区 → 可展开的分组）----------
+//
+// 这些断言盯的是「**侧栏高亮的地方，就是页面真正打开的地方**」——两边各算一份的那天，
+// 会出现「侧栏亮着引擎、页面停在产出」这种没人报错的错。
+
+describe('navState', () => {
+  it('没写参数 → 这一组的第一个子项（与页面的默认值是同一个）', () => {
+    expect(navState('/work', '')).toEqual({ group: 'work', href: '/work?tab=output' })
+    expect(navState('/tutor', '')).toEqual({ group: 'tutor', href: '/tutor?tab=learn' })
+    expect(navState('/companion', '')).toEqual({ group: 'companion', href: '/companion?tab=chat' })
+    expect(navState('/settings', '')).toEqual({ group: 'settings', href: '/settings?section=general' })
+  })
+
+  it('写了参数 → 就是那一个子项', () => {
+    expect(navState('/work', '?tab=dispatch').href).toBe('/work?tab=dispatch')
+    expect(navState('/tutor', '?tab=record').href).toBe('/tutor?tab=record')
+    expect(navState('/settings', '?section=mcp').href).toBe('/settings?section=mcp')
+  })
+
+  it('工作流深链 `?task=7` 没写 tab → 落「引擎」（与工作页自己的默认一致）', () => {
+    expect(navState('/work', '?task=7').href).toBe('/work?tab=engine')
+  })
+
+  it('认不出的参数 → 退回第一个子项（页面也会退回默认，两边一致）', () => {
+    expect(navState('/work', '?tab=nonsense').href).toBe('/work?tab=output')
+    expect(navState('/settings', '?section=nope').href).toBe('/settings?section=general')
+  })
+
+  it('资产那一组的子项是**各自独立的页面**，按路径认', () => {
+    expect(navState('/assets', '')).toEqual({ group: 'assets', href: '/assets' })
+    expect(navState('/notes', '?path=notes/a.md')).toEqual({ group: 'assets', href: '/notes' })
+    expect(navState('/kb', '').group).toBe('assets')
+    expect(navState('/dashboard', '').href).toBe('/dashboard')
+  })
+
+  it('没有分组的页面（对话）不亮任何一组', () => {
+    expect(navState('/', '')).toEqual({ group: '', href: '' })
+    expect(navState('/nope', '')).toEqual({ group: '', href: '' })
+  })
+})
+
+describe('NAV 这份表本身', () => {
+  it('每一组都有地址；有子项的组，组地址就是第一个子项（点组名不会落到空处）', () => {
+    for (const g of NAV) {
+      expect(g.href).toBeTruthy()
+      expect(g.label).toBeTruthy()
+      if (g.items.length) expect(g.href).toBe(g.items[0].href)
+    }
+  })
+
+  it('六个分组、按你定的顺序：今日 / 学 / 工作 / 资产 / 零柒 / 设置', () => {
+    expect(NAV.map((g) => g.key)).toEqual([
+      'review',
+      'tutor',
+      'work',
+      'assets',
+      'companion',
+      'settings',
+    ])
+  })
+
+  it('页面里的每一档都在这张表上（子项地址不重复）', () => {
+    const hrefs = NAV.flatMap((g) => g.items.map((i) => i.href))
+    expect(new Set(hrefs).size).toBe(hrefs.length)
+    // 工作页六档、零柒五档、学三档、设置七档、资产四项
+    expect(NAV.find((g) => g.key === 'work')!.items).toHaveLength(6)
+    expect(NAV.find((g) => g.key === 'companion')!.items).toHaveLength(5)
+    expect(NAV.find((g) => g.key === 'settings')!.items).toHaveLength(7)
+  })
+})
 
 describe('parseRoute', () => {
   it('新路径直接认得', () => {

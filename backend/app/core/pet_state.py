@@ -14,12 +14,20 @@
    等级与 EXP 永不回落（那是 `growth()` 的立场），**精力不是账本**。
    零柒说的是「我有点蔫」，不是「你欠了 3 小时专注」。
 
+   ⚠️ **P2（2026-09-16）在这里让开了一格，理由写在原地**：`night_owl`（连着三个晚上
+   过十点）是**唯一**一个往回看几天的输入。它仍然不是账本——不落库、不算欠、不发通知、
+   不进问候，每次都是现从 `messages` 的时间戳推出来的，把那些行删掉它就没了。
+   为什么要它：作息是**模式**，不是「此刻」，用一个小时的能量值描述不了它；而「它陪你
+   熬了三天所以蔫了」比「你坐太久了」更接近一只宠物的样子。代价也写清楚：它只看
+   `messages` 一个来源（一个模块里「活跃」只有一个意思，那个意思已经定在
+   `_activity_span` 里），所以**深夜只复习不打字的人，这个信号不会亮**。
+
 纯函数（`energy` / `mode` / `compute`）与 DB 分开，照 `pet_plugins` 里 `roll_day` /
 `water_due` / `focus_due` 的先例：规则能被单测完整覆盖，不用起服务、不用碰库。
 """
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.config import VAULT_DIR, settings
 from app.core import pet
@@ -53,23 +61,33 @@ MODE_ACTION = {
     "learning": "review",  # 在 /tutor
     "reviewing": "review",  # 在 /review
     "celebrating": "jumping",  # 刚交出一份成品
+    "gated": "waiting",  # 有一步跑完了，停在你点头那儿
     "busy": "running-right",  # 有活正在跑，它去盯着
+    "returning": "waving",  # 好几天没见（P5）：回来这一趟值得挥个手——和问候是一家
     "idling": "waiting",  # 你摸了一会儿鱼
     "pupil": "waiting",  # 你正在讲给它听——同一个「在等你」，两个原因
     "resting": "running-left",  # 你走开很久，它也去眯一会儿
     "tired": "failed",  # 今天坐太久了
     "sleepy": "idle",  # 深夜
+    "night_owl": "failed",  # 连着几个晚上熬到很晚（P2）：同一个「蔫」的姿势，两个原因
 }
 
 # ---------- 阈值（都是「此刻」的量，不是账本）----------
 
 IDLE_MIN = 5  # 几分钟不动算「摸鱼」（只有前端给了 idle_sec 才判定）
 REST_MIN = 30  # 多久算「走开很久」
+AWAY_DAYS = 2  # 好几天没有任何活动才算「回来一趟」（久别重逢，P5）——半天不算，那叫摸鱼
 CELEBRATE_MIN = 10  # 产出落地 / 刚说通一个概念后的庆祝窗口（分钟）
 PUPIL_WINDOW_MIN = 120  # 费曼会话「还活着」的窗口：超过这么久没发言就当它已经散了
 LATE_HOUR = 23  # 23:00 之后算深夜
 EARLY_HOUR = 6  # 06:00 之前也算深夜
 LOW_ENERGY = 40  # 低于这个就蔫了
+# 「夜猫子」（P2）：连着几个晚上过十点还在，它就蔫。**只看已结束的日子**——
+# 今天 22:00 之后这件事，在今天还没到 22:00 时根本不存在；拿今天当一格，这个信号
+# 在白天永远是假的，而它恰恰该在白天被看见（你昨晚又熬了）。代价是它最多晚一天知道，
+# 而「作息」本来就不是一个当天可判的东西。
+NIGHT_HOUR = 22
+NIGHT_OWL_DAYS = 3
 
 FATIGUE_PER_MIN = 0.12  # 今天活跃跨度每 1 分钟扣多少
 # 疲劳封顶：再久也不会归零，因为它是状态不是惩罚。
@@ -165,21 +183,59 @@ def _celebration(signals: dict) -> str:
     return ""
 
 
+def is_late_night(stamp: datetime | None, hour: int = NIGHT_HOUR) -> bool:
+    """那一天算不算「晚睡」：**那天最后一条活动的本地时刻**在 `hour` 点之后。Pure。
+
+    `stamp` 是库里那种 naive UTC（`messages.created_at`）。`None` = 那天一条活动都没有
+    → **不算**：没开过工作台的那天，凭什么说人家熬夜。
+
+    口径就是 PLAN 那句话的字面意思（「22 点后仍活跃」），只看那天**最后**一条：
+    连着 22:00–01:00 那样干的人，那一天的 22–24 点这一段照样命中，所以不会漏。
+    """
+    if stamp is None:
+        return False
+    return stamp.replace(tzinfo=timezone.utc).astimezone().hour >= hour
+
+
+def is_night_owl(late: list[bool], need: int = NIGHT_OWL_DAYS) -> bool:
+    """`late`（旧→新，一个已结束的本地日一格）里**最近 `need` 天是不是天天晚睡**。Pure。
+
+    只数最后 `need` 格：往前多喂几天不影响结论（信号只关心最近的作息）。
+    不够 `need` 格（新装的库、或者根本没有那些天的记录）→ False。
+    """
+    return len(late) >= need and all(late[-need:])
+
+
 def mode(signals: dict, now: datetime, e: int) -> str:
     """此刻该是什么模式。**顺序即优先级**，第一条命中就返回。
 
-    优先级是照着「什么更值得说」排的：正在专注 > 刚交出东西 > 有活在跑 >
-    你人不在 > 你正在讲给它听 > 深夜 > 累了 > 你在哪个页面。
+    优先级是照着「什么更值得说」排的：正在专注 > 刚交出东西 > 有活**停着等你** >
+    有活在跑 > 好几天没见（重逢是一趟到访的问候）> 你人不在 > 你正在讲给它听 >
+    深夜 > 连着晚睡 > 累了 > 你在哪个页面。
 
     「你人不在」排在「你在讲」之前是刻意的：讲解中走开 20 分钟，零柒该显示无聊，
     而不是一直假装还在听。走回来它自然回到 `pupil`。
+
+    `gated` 排在 `busy` 之前也是刻意的：两件事可以同时为真，而**需要你的那件更值得说**。
+
+    `returning`（P5）也排在「你人不在」那两档之前：隔了几天回来这一趟，重逢那句
+    就是这次到访的问候——哪怕你回来只看了一眼又走开，「N 天没见」依然是真的，
+    而「走开挺久了」只是这一小时的近况。
+
+    `night_owl`（P2）排在 `sleepy` 之后、`tired` 之前：此刻是深夜就说深夜（那是眼前
+    最要紧的一件），而**连着三天的那个模式比「今天坐太久了」更值得先开口**——前者是
+    三天的证据，后者是一下午的疲劳。两者都命中时只说一句，说更早发生的那件。
     """
     if signals.get("focus_running"):
         return "focusing"
     if _celebration(signals):
         return "celebrating"
+    if signals.get("gated"):
+        return "gated"
     if signals.get("busy"):
         return "busy"
+    if signals.get("away_days"):
+        return "returning"
     idle_min = _idle_minutes(signals)
     if idle_min is not None:
         if idle_min >= REST_MIN:
@@ -190,6 +246,8 @@ def mode(signals: dict, now: datetime, e: int) -> str:
         return "pupil"
     if now.hour >= LATE_HOUR or now.hour < EARLY_HOUR:
         return "sleepy"
+    if signals.get("night_owl"):
+        return "night_owl"
     if e < LOW_ENERGY:
         return "tired"
     path = str(signals.get("path") or "")
@@ -222,9 +280,30 @@ def _line(m: str, signals: dict, e: int) -> str:
             return "你讲明白了。我记住了。" if signals.get("mastered_taught") else "你搞懂了。记一笔。"
         return "交出去一份。收着。"
     if m == "busy":
-        return "活正在跑，我去盯着。"
+        # 引擎名能拿到就说清在跑什么（「它在翻工具箱」的诚实版：说的是真在跑的那件事）；
+        # 定时任务那一跳没有名字（`task_runs` 只知道有一行在跑），所以退回一句泛的。
+        what = str(signals.get("busy_with") or "").strip()
+        return f"{what}正在跑，我去盯着。" if what else "活正在跑，我去盯着。"
+    if m == "gated":
+        # P4 补的那一格：有一步**跑完了、停着等人点头**（`task_runs.status='awaiting_approval'`）。
+        # 这不是催办，是系统的事实——仓库本来就会为它弹一条桌面通知（`tasks._notify_gate`），
+        # 这句只是把同一件事摆到它脸上。**不报件数**：一报就成了「你还欠 N 件」的口吻。
+        return "有一步停着，等你点头。"
+    if m == "returning":
+        # 久别重逢（P5）：只说事实——几天没见；走之前在拆什么（拆点就发生在离开前后
+        # 那阵子才提，见 `_away` 的守卫）。不问「为什么这么久没来」，不算「你欠了几天」
+        # ——重逢是陈述，不是考勤。
+        days = int(signals.get("away_days") or 0)
+        what = str(signals.get("away_topic") or "").strip()
+        if what:
+            return f"{days} 天没见。走的时候你在拆「{what}」。"
+        return f"{days} 天没见。"
     if m == "tired":
         return "你坐太久了。我蔫了，你也差不多。"
+    if m == "night_owl":
+        # P2：主语是**它自己**（「我有点蔫」），事实是无主语的陈述。**不劝、不评、不算账**——
+        # 没有「你该早睡了」，也没有「连续三天」这种像在记账的计数，只说「三个晚上」这个事实。
+        return "连着三个晚上都过了十点。我有点蔫。"
     if m == "sleepy":
         return "很晚了。"
     if m == "resting":
@@ -246,6 +325,10 @@ def compute(signals: dict, now: datetime) -> dict:
         "energy": e,
         "line": _line(m, signals, e),
         "path": str(signals.get("path") or "")[:100],
+        # 「在跑什么」与「几件停着等你」是**事实**，界面可以直接显示；
+        # 它们不参与判定之外的任何事，也不是第二份真值（都从 `signals` 派生）。
+        "busy_with": str(signals.get("busy_with") or ""),
+        "gated": int(signals.get("gated") or 0),
     }
 
 
@@ -286,24 +369,37 @@ def _naive(dt: datetime) -> datetime:
     return dt.replace(tzinfo=None)
 
 
-def _output_mtimes() -> list[float]:
-    """`vault/` 下几类成品的改动时间。与 `pet._OUTPUT_DIRS` 同一份目录清单——
-    刻意引用它而不是抄一遍，改了那边这里不会走偏。"""
-    out: list[float] = []
+def output_files() -> list[tuple[str, float]]:
+    """`vault/` 下几类成品：`(vault 相对路径, mtime)`。与 `pet._OUTPUT_DIRS` 同一份
+    目录清单——刻意引用它而不是抄一遍，改了那边这里不会走偏（也就是
+    `pet.is_output_path` 那一条判据：算不算成品在这个仓库里只有一个答案）。
+
+    周报（`core/weekly.py`）与「今天」都从这里取：**同一批文件，只是窗口不同**。
+    两处各写一遍 glob 的话，「这周交出 3 份」与「今天交出 1 份」迟早对不上账。
+    """
+    out: list[tuple[str, float]] = []
     for d in pet._OUTPUT_DIRS:  # noqa: SLF001 - 同包内共用一份真值
         p = VAULT_DIR / d
         if not p.is_dir():
             continue
         for f in p.glob("*.md"):
             try:
-                out.append(f.stat().st_mtime)
+                out.append((f"{d}/{f.name}", f.stat().st_mtime))
             except OSError:
                 continue
     return out
 
 
+def _output_mtimes() -> list[float]:
+    return [m for _rel, m in output_files()]
+
+
 def _today_counts(conn, now: datetime) -> dict:
     """今天的那几个计数。区间用 UTC 边界，见 `_utc_day_bounds`。"""
+    # 卡点的那个状态串**只有 `tasks` 有一份**（`_GATE_STATUS`）——这里引它而不是抄一遍：
+    # 抄一份的话，哪天那边改名，这边会安静地永远不显示「停着等你」。
+    from app.core.tasks import _GATE_STATUS  # noqa: PLC0415 - tasks 也引 pet，只能在这里进
+
     start, end = _utc_day_bounds(now)
     out: dict = {}
     for st, n in _rows(
@@ -318,6 +414,8 @@ def _today_counts(conn, now: datetime) -> dict:
             out["tasks_failed"] = int(n or 0)
         elif st == "running":
             out["busy"] = True
+        elif st == _GATE_STATUS:
+            out["gated"] = int(n or 0)
     r = _rows(
         conn,
         "SELECT COUNT(*) FROM tutor_sessions "
@@ -445,6 +543,217 @@ def _fresh_mastery(conn, now: datetime) -> dict:
     return {"mastered_ago_min": age, "mastered_taught": str(r[0][1] or "") == "taught"}
 
 
+def _away(conn, now: datetime) -> dict:
+    """「回来一趟」的信号（P5 · 久别重逢）：好几天没有任何活动。
+
+    「活动」看两个来源：`messages`（与 `_activity_span` 同一列——作息那条 P2 的
+    口径「说话」就是它）和 `pet_chats`（跟零柒自己聊天**也算来过**——聊天落库之后，
+    只聊天不记笔记的人不该被说「没见」）。两张表的时间口径不同（naive UTC 对
+    本地带偏移），分别解析成 aware 再比，**不拿字符串比**（字符串序在两种格式
+    之间没有意义）。都没有 → 空库/新装，谈不上「重逢」。
+
+    「走的时候在拆什么」：最新一个拆点，**只有它就发生在离开前后那阵子**才提
+    （离开的时长 + 一天的宽限）——拆点是好几个月前的事、人上周还在，那就不是
+    「走的时候」，说出来就是编。
+    """
+    now_aware = now.astimezone()
+    last: datetime | None = None
+    r = _rows(conn, "SELECT MAX(CAST(created_at AS TEXT)) FROM messages")
+    if r and r[0][0]:
+        d = _iso(str(r[0][0]))
+        if d is not None:
+            d = d.replace(tzinfo=timezone.utc)  # messages 是 naive UTC
+            last = d
+    r = _rows(conn, "SELECT MAX(CAST(created_at AS TEXT)) FROM pet_chats")
+    if r and r[0][0]:
+        d = _iso(str(r[0][0]))
+        if d is not None:
+            if d.tzinfo is None:  # 老行兜底：按本地补上
+                d = d.astimezone()
+            if last is None or d > last:
+                last = d
+    if last is None:
+        return {}
+    gap_min = (now_aware - last).total_seconds() / 60.0
+    days = gap_min / 1440.0
+    if days < AWAY_DAYS:
+        return {}
+    out = {"away_days": int(days)}
+    r = _rows(conn, "SELECT point, created_at FROM digest_points ORDER BY id DESC LIMIT 1")
+    if r and r[0][0]:
+        d = _iso(str(r[0][1] or ""))
+        if d is not None:
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            age_min = (now_aware - d).total_seconds() / 60.0
+            if 0 <= age_min <= gap_min + 1440:
+                out["away_topic"] = str(r[0][0])[:80]
+    return out
+
+
+def _late_nights(conn, now: datetime, days: int = NIGHT_OWL_DAYS) -> list[bool]:
+    """最近 `days` 个**已结束的**本地日，每天是不是晚睡（旧 → 新）。
+
+    `messages` 一个来源，与 `_activity_span` 同一条：**一个模块里「活跃」只能有一个
+    意思**，那个意思已经定在那儿了（你要把复习、教学也算活跃，改那一处，别在这儿另立）。
+    一天一条 `MAX(created_at)`，三天三条小查询。
+
+    为什么从**昨天**开始数：见 `NIGHT_HOUR` 那段注释。
+    """
+    out: list[bool] = []
+    for i in range(max(1, int(days)), 0, -1):
+        start, end = _utc_day_bounds(now - timedelta(days=i))
+        r = _rows(
+            conn,
+            "SELECT MAX(CAST(created_at AS TEXT)) FROM messages "
+            "WHERE CAST(created_at AS TEXT) >= ? AND CAST(created_at AS TEXT) < ?",
+            (start, end),
+        )
+        stamp = _iso(r[0][0]) if (r and r[0] and r[0][0]) else None
+        out.append(is_late_night(stamp))
+    return out
+
+
+def running_engines() -> list[str]:
+    """**进程内**正在跑的那些引擎（`inflight` 的 key），比如 `recap` / `decide`。
+
+    这是 `task_runs` 看不到的那一半：页面点出来的六个成文引擎不写 `task_runs`，
+    但它们正是「有活正在跑」最真实的证据——用户盯着转圈的正是那几秒。
+    进程内状态，重启即空，**不落库**（`inflight` 自己就是这么设计的）。
+    """
+    try:
+        from app.core import inflight
+
+        return sorted(inflight.running())
+    except Exception:  # noqa: BLE001 - 拿不到就当没有在跑的
+        return []
+
+
+def engine_label(key: str) -> str:
+    """引擎名 → 一个中文词。**不另抄一份表**：`mcp._ARTIFACT_KINDS` 已经是
+    「这六个东西叫什么」的唯一出处（落点目录与标签都从它来）。认不出来就用原名。"""
+    try:
+        from app.core import mcp
+
+        return mcp._ARTIFACT_KINDS.get(key, ("", ""))[1] or key  # noqa: SLF001 - 同包内共用一份真值
+    except Exception:  # noqa: BLE001
+        return key
+
+
+def work_fingerprint(now: datetime | None = None) -> str:
+    """「此刻有什么在跑」的指纹：**变了就说明界面该重算一次状态**。
+
+    只读两样便宜的东西：进程内正在跑的引擎、今天的在跑/卡点任务数。刻意**不**搬
+    `_signals()`——它要扫五个产出目录、算活跃跨度，给两秒一次的流用太贵。
+
+    它只回答「有没有变化」，**不含任何给用户看的数**；状态依然只有 `snapshot()`
+    一个出处，指纹不构成第二份真值。查询挂了返回空串（= 一次多余的刷新，无害）。
+    """
+    now = now or datetime.now()
+    counts: dict = {}
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(settings.db_path)
+        try:
+            counts = _today_counts(conn, now)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        log.debug("pet state fingerprint failed", exc_info=True)
+    return "|".join(
+        [
+            "engines:" + ",".join(running_engines()),
+            "running:1" if counts.get("busy") else "running:0",
+            f"gated:{int(counts.get('gated') or 0)}",
+        ]
+    )
+
+
+def day_facts(now: datetime | None = None) -> dict:
+    """今天**已经发生的事**：拆了几个点、出了几张卡、说通了几个概念、过了几张卡、交出几份成品。
+
+    收工那句陈述读它（M2 · PLAN §3 G2 第 3 条）。与「今日概览五档」（`core/today`）
+    分工不同：那是**待办**（未消化 / 到期卡 / 卡点），这里只说已经做完的事——
+    两者都真实，但一个是清单、一个是陈述，**混起来就变成「你还欠」**。
+
+    全部按**本地日**算（`_utc_day_bounds`：那张换算只能有一份）。坏了返回全零，
+    绝不抛——一句问候不值得让调度器红。
+    """
+    now = now or datetime.now()
+    out = {"digested": 0, "cards_made": 0, "got": 0, "reviews": 0, "outputs": 0}
+    start, end = _utc_day_bounds(now)
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(settings.db_path)
+        try:
+            for key, col, table in (
+                ("digested", "created_at", "digest_points"),
+                ("cards_made", "created_at", "cards"),
+                ("reviews", "reviewed_at", "card_reviews"),
+            ):
+                r = _rows(
+                    conn,
+                    f"SELECT COUNT(*) FROM {table} "
+                    f"WHERE CAST({col} AS TEXT) >= ? AND CAST({col} AS TEXT) < ?",
+                    (start, end),
+                )
+                out[key] = int(r[0][0] or 0) if r else 0
+            r = _rows(
+                conn,
+                "SELECT COUNT(*) FROM tutor_sessions "
+                "WHERE verdict = 'got' AND CAST(COALESCE(ended_at, created_at) AS TEXT) >= ? "
+                "AND CAST(COALESCE(ended_at, created_at) AS TEXT) < ?",
+                (start, end),
+            )
+            out["got"] = int(r[0][0] or 0) if r else 0
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - 陈述读不出来就少说一句，不是错误
+        log.debug("pet state day facts failed", exc_info=True)
+    try:
+        mtimes = _output_mtimes()
+        today = now.strftime("%Y-%m-%d")
+        out["outputs"] = sum(
+            1 for m in mtimes if datetime.fromtimestamp(m).strftime("%Y-%m-%d") == today
+        )
+    except Exception:  # noqa: BLE001
+        log.debug("pet state day facts output scan failed", exc_info=True)
+    return out
+
+
+def last_digest_point(now: datetime | None = None) -> dict | None:
+    """**昨天**（本地日）拆出来的最新一个点——开工那句问的就是它（M2 · PLAN §3 G2）。
+
+    为什么是昨天、不是最近七天：仪式要的是「昨天喂进去的东西，今天还记得吗」。
+    更早的属于记录，不是此刻该问的一句（与 `tutor.is_recurring_mistake` 的窗口同一条纪律）。
+    没有就返回 None——**那就普通问候**，不硬凑一个问题出来。
+    """
+    now = now or datetime.now()
+    try:
+        import sqlite3
+
+        start, end = pet.local_day_utc_bounds(now - timedelta(days=1))
+        conn = sqlite3.connect(settings.db_path)
+        try:
+            r = _rows(
+                conn,
+                "SELECT point, why FROM digest_points "
+                "WHERE CAST(created_at AS TEXT) >= ? AND CAST(created_at AS TEXT) < ? "
+                "ORDER BY id DESC LIMIT 1",
+                (start, end),
+            )
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        log.debug("pet state last digest point failed", exc_info=True)
+        return None
+    if not r or not r[0][0]:
+        return None
+    return {"title": str(r[0][0])[:200], "why": str(r[0][1] or "")[:300]}
+
+
 def _signals(idle_sec: int | None = None, path: str = "", now: datetime | None = None) -> dict:
     """从真实数据采集信号。全 sync（同 `pet.status()` 的路子），全部 best-effort。
 
@@ -465,18 +774,27 @@ def _signals(idle_sec: int | None = None, path: str = "", now: datetime | None =
         try:
             s.update(_today_counts(conn, now))
             s.update(_activity_span(conn, now))
-            r = _rows(
-                conn,
-                "SELECT COUNT(*) FROM tutor_sessions WHERE stuck != '' AND stuck_resolved_at IS NULL",
-            )
-            s["stuck_open"] = int(r[0][0] or 0) if r else 0
             s.update(_focus_running(conn, now))
             s.update(_pupil_waiting(conn, now))
             s.update(_fresh_mastery(conn, now))
+            # P5：好几天没来 → 久别重逢那句。**只在真为真时才写进信号**（缺键就是没有），
+            # 与其余几项一致：没有那件事，就不必让 `mode()` 多看一眼。
+            s.update(_away(conn, now))
+            # P2：连着三个晚上过十点 → 蔫。**只在真为真时才写进信号**（缺键就是没有），
+            # 与其余几项一致：没有那件事，就不必让 `mode()` 多看一眼。
+            if is_night_owl(_late_nights(conn, now)):
+                s["night_owl"] = True
         finally:
             conn.close()
     except Exception:  # noqa: BLE001 - 状态算不出来，零柒就安静待着
         log.debug("pet state signals failed", exc_info=True)
+
+    # 进程内正在跑的引擎（`task_runs` 里没有它们）。**放在 DB 那块之后**：引擎在跑时
+    # 它就是「此刻在跑什么」最准的答案，所以允许它盖掉上面那个泛泛的 `busy`。
+    engines = running_engines()
+    if engines:
+        s["busy"] = True
+        s["busy_with"] = engine_label(engines[0])
 
     try:
         mtimes = _output_mtimes()

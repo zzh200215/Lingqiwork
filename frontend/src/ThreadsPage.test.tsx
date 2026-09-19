@@ -25,7 +25,7 @@ import { api } from './api'
 
 const STEPS: ThreadStep[] = [
   { key: 'in', label: '进来', kinds: ['material'] },
-  { key: 'learn', label: '搞懂', kinds: ['tutor', 'card'] },
+  { key: 'learn', label: '搞懂', kinds: ['session', 'card'] },
   { key: 'keep', label: '留下', kinds: ['note'] },
   { key: 'deliver', label: '交付', kinds: ['output', 'task'] },
   { key: 'judge', label: '判断', kinds: ['decision'] },

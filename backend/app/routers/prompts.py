@@ -4,7 +4,7 @@
 
 - `/api/prompts`（下面这些 CRUD）= **用户的**片段库（`Prompt` 表，带 `{变量}`，存起来备用）。
   它不驱动系统行为、没有指纹、没有分数。
-- `/api/prompts/registry*` = **系统提示词的登记表**（`core/prompts.py::_SPECS`，32 条）
+- `/api/prompts/registry*` = **系统提示词的登记表**（`core/prompts.py::_SPECS` 里登记着的那些）
   + 对照台。这里的每一条都贴着调用逻辑、有 sha 指纹，改它要过证据。
 
 技能卡绑的是后者（前者绑上去，宠物展示的就只是一堆书签）。
@@ -90,7 +90,7 @@ async def delete_prompt(prompt_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/registry")
 async def registry():
-    """32 条登记提示词，每条带上「有没有 golden set / 有没有基线」。"""
+    """登记表里的每一条提示词，每条带上「有没有 golden set / 有没有基线」。"""
     from app.core import prompt_eval, prompts
 
     fx = prompt_eval.fixtures()
@@ -132,7 +132,12 @@ async def registry():
 
 @router.get("/registry/{key}")
 async def registry_entry(key: str):
-    """一条提示词的全貌：内容（只读）、golden set、断言清单、跑分历史。"""
+    """一条提示词的全貌：内容（只读）、golden set、断言清单、跑分历史。
+
+    **golden set 有两种形状**（`prompt_eval.fixture_kind`）：聊天型是「一句真实输入 +
+    断言」，判分型（`JUDGE_SYSTEM`）是「卡三样 + 重讲原文 + 人工档位」。这里按形状把用例
+    摊开——判分型的用例没有 `user`/`checks`，硬按聊天那份读会把它显示成一条空用例。
+    """
     from app.core import prompt_eval
 
     try:
@@ -140,6 +145,27 @@ async def registry_entry(key: str):
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     fx = prompt_eval.cases_for(key) or {}
+    kind = prompt_eval.fixture_kind(key)
+    if kind == "grade":
+        cases = [
+            {
+                "id": c.get("id"),
+                "intent": c.get("intent", ""),
+                "front": c.get("front", ""),
+                "back": c.get("back", ""),
+                "excerpt": c.get("excerpt", ""),
+                "retell": c.get("retell", ""),
+                "grade": c.get("grade"),
+                "contested": bool(c.get("contested")),
+                "why": c.get("why", ""),
+            }
+            for c in (fx.get("cases") or [])
+        ]
+    else:
+        cases = [
+            {"id": c.get("id"), "intent": c.get("intent", ""), "user": c.get("user", ""), "checks": c.get("checks") or []}
+            for c in (fx.get("cases") or [])
+        ]
     return {
         "name": entry.name,
         "module": entry.module,
@@ -150,10 +176,9 @@ async def registry_entry(key: str):
         "fixture": fx.get("file", ""),
         "note": fx.get("_note", ""),
         "domain": fx.get("domain", ""),
-        "cases": [
-            {"id": c.get("id"), "intent": c.get("intent", ""), "user": c.get("user", ""), "checks": c.get("checks") or []}
-            for c in (fx.get("cases") or [])
-        ],
+        # 用例是哪种形状：界面据此换一套说法（断言 vs 人工档位），不是自己猜
+        "case_kind": kind,
+        "cases": cases,
         "checks": prompt_eval.check_names(),
         "runs": await prompt_eval.history(key, limit=10),
     }
@@ -230,11 +255,22 @@ async def run_check(key: str, body: CheckIn | None = None):
 
     带 `variant` = 拿一段候选内容比一比：它**不进配置、不进登记表**，只留在这次 run 里当证据。
     每次跑 = golden set 条数次模型调用，是要花钱的——报告里给调用次数、耗时与区间。
+
+    **走哪条重放路由这套用例的形状决定，不由调用方挑**：聊天型走 `prompt_eval`（对回复跑
+    断言），判分型（`JUDGE_SYSTEM`）走 `judge_eval`（跟人工档位比对）。两个模块共用同一张
+    结果表，所以界面上那一条提示词的基线与历史是连着的。
     """
-    from app.core import prompt_eval
+    from app.core import judge_eval, prompt_eval
 
     body = body or CheckIn()
     try:
+        runner = judge_eval.check if prompt_eval.is_grading(key) else prompt_eval.check
+        if runner is judge_eval.check:
+            return await judge_eval.check(
+                variant=body.variant,
+                variant_label=body.variant_label,
+                model_id=(body.model_id or ""),
+            )
         return await prompt_eval.check(
             key,
             variant=body.variant,

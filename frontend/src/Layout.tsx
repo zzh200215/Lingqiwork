@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Link, Outlet, useNavigate } from 'react-router-dom'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Brain, ChevronDown, Moon, Search, Sun } from 'lucide-react'
 
+import CommandPalette from './CommandPalette'
 import PetWidget from './PetWidget'
 import { api } from './api'
-import { useModule } from './routes'
+import { NAV, navCrumbs, navState, useModule } from './routes'
 
 // Theme + shared sidebar layout for all pages
 
@@ -24,7 +26,7 @@ function ThemeToggle() {
       className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
       title={dark ? '切到亮色' : '切到暗色'}
     >
-      {dark ? '☀️' : '🌙'}
+      {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </button>
   )
 }
@@ -32,31 +34,136 @@ function ThemeToggle() {
 function Logo() {
   return (
     <Link to="/" title="回对话" className="flex items-center gap-2">
-      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-base shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
-        🧠
+      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
+        <Brain className="h-[18px] w-[18px]" />
       </div>
       <span className="text-[15px] font-semibold tracking-tight">AI 工作台</span>
     </Link>
   )
 }
 
-// 导航五区（2026-09-13 收缩）：今天要过的、学、干活、攒下的、设置——
-// 一眼能数完，每区一件事。被收走的都还活着，只是不在导航里：
-// 对话 → 「＋ 新对话」/「最近对话」/点 logo；事 → 工作 · 跟进；成长 → 宠物「零柒」；
-// 仪表盘 / 笔记 / 知识库 → 资产页的入口卡。
-const NAV = [
-  { href: '/review', label: '今日', icon: '☀️', key: 'review' },
-  { href: '/tutor', label: '学', icon: '🎓', key: 'tutor' },
-  { href: '/work', label: '工作', icon: '🗂', key: 'work' },
-  { href: '/assets', label: '资产', icon: '📦', key: 'assets' },
-  { href: '/settings', label: '设置', icon: '⚙️', key: 'settings' },
-] as const
+// 导航（2026-09-18 改版）：**可展开的分组**，分组表在 `routes.tsx`（唯一真相）。
+//
+// 上一版是五个平铺的大区，毛病是「功能全藏在页面里的标签栏里」——工作页六个标签、
+// 零柒五个、设置七个，侧栏却只看得见五个字。现在子功能就摆在模块下面，
+// 页面里那套标签栏已经删掉（侧栏是唯一入口），而地址一个都没改。
+//
+// 展开状态：**当前所在的那一组默认展开**，其余收起；手动开合过的记在 localStorage
+// （只记「手动的那几次」，没记过的仍然跟着当前组走——不然切页时展开状态会打架）。
+const OPEN_KEY = 'nav-open'
+
+function loadOpen(): Record<string, boolean> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(OPEN_KEY) || '{}')
+    return raw && typeof raw === 'object' ? (raw as Record<string, boolean>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <ChevronDown
+      aria-hidden="true"
+      className={`h-3.5 w-3.5 transition-transform ${open ? '' : '-rotate-90'}`}
+    />
+  )
+}
+
+// 每组一个专属色：图标坐在淡色 chip 里，扫一眼就知道自己在哪个区
+const GROUP_CHIP: Record<string, { bg: string; fg: string }> = {
+  review: { bg: 'bg-amber-100 dark:bg-amber-400/15', fg: 'text-amber-600 dark:text-amber-300' },
+  tutor: { bg: 'bg-sky-100 dark:bg-sky-400/15', fg: 'text-sky-600 dark:text-sky-300' },
+  work: { bg: 'bg-violet-100 dark:bg-violet-400/15', fg: 'text-violet-600 dark:text-violet-300' },
+  assets: { bg: 'bg-emerald-100 dark:bg-emerald-400/15', fg: 'text-emerald-600 dark:text-emerald-300' },
+  companion: { bg: 'bg-pink-100 dark:bg-pink-400/15', fg: 'text-pink-600 dark:text-pink-300' },
+  settings: { bg: 'bg-neutral-200/70 dark:bg-neutral-700/50', fg: 'text-neutral-500 dark:text-neutral-300' },
+}
+
+/** 顶栏（2026-09-18 版面改版）：左边是「你在哪」，右边是全局动作。
+ *
+ *  **为什么要有它**：原来「当前在哪一页」只体现在侧栏那一格的高亮上，而每一页
+ *  又各自在正文顶部念一遍自己的名字——信息重复、还占掉一行高度。现在这一段收进顶栏，
+ *  页面正文从内容开始（参考项目 Robot Admin 的 `C_Header` 就是这个分工：面包屑在顶栏，
+ *  内容区不放页名）。
+ *  2026-09-19：右侧加了全局搜索入口（Ctrl+K 命令面板）——顶栏从「只报位置」
+ *  升级成「能办事」。 */
+function TopBar({ page, onOpenSearch }: { page: string; onOpenSearch: () => void }) {
+  const { pathname, search } = useLocation()
+  const crumbs = navCrumbs(pathname, search)
+  return (
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-neutral-200/70 bg-white/85 px-6 backdrop-blur-md dark:border-neutral-800/70 dark:bg-neutral-900/70">
+      <nav aria-label="面包屑" className="flex min-w-0 items-center gap-2 text-sm">
+        {crumbs.href ? (
+          <Link
+            to={crumbs.href}
+            data-crumb="module"
+            className="shrink-0 rounded-md px-1.5 py-0.5 font-medium text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-violet-700 dark:text-neutral-200 dark:hover:bg-neutral-800 dark:hover:text-violet-300"
+          >
+            {crumbs.module}
+          </Link>
+        ) : (
+          <span data-crumb="module" className="shrink-0 px-1.5 font-medium text-neutral-700 dark:text-neutral-200">
+            {crumbs.module}
+          </span>
+        )}
+        {crumbs.item ? (
+          <>
+            <span className="shrink-0 text-neutral-300 dark:text-neutral-600">/</span>
+            <span data-crumb="item" className="truncate text-neutral-500 dark:text-neutral-400">
+              {crumbs.item}
+            </span>
+          </>
+        ) : null}
+      </nav>
+
+      <div className="flex-1" />
+      <button
+        onClick={onOpenSearch}
+        data-topbar-search=""
+        title="全局搜索（Ctrl+K）"
+        className="flex h-9 items-center gap-2 rounded-xl border border-neutral-200/80 bg-white/60 px-3 text-sm text-neutral-400 transition-colors hover:border-violet-300 hover:text-neutral-600 dark:border-neutral-700/70 dark:bg-neutral-800/40 dark:hover:border-violet-500/40 dark:hover:text-neutral-300"
+      >
+        <Search className="h-4 w-4" />
+        <span className="hidden md:inline">搜索</span>
+        <kbd className="hidden rounded-md border border-neutral-200 px-1.5 py-0.5 text-[10px] dark:border-neutral-700 md:inline">
+          Ctrl K
+        </kbd>
+      </button>
+      <span
+        data-topbar-page={page}
+        className="hidden text-[11px] tabular-nums text-neutral-300 sm:block dark:text-neutral-600"
+      >
+        数据不出本机
+      </span>
+      <ThemeToggle />
+    </header>
+  )
+}
 
 export default function Layout() {
   // 由当前路径推导，不是 prop：埋点和「最近对话」都要**每次路由变化**重新触发
   const page = useModule()
   const navigate = useNavigate()
+  const location = useLocation()
   const [conversations, setConversations] = useState<{ id: number; title: string }[]>([])
+  const [open, setOpen] = useState<Record<string, boolean>>(loadOpen)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+
+  const active = navState(location.pathname, location.search)
+  const isOpen = (key: string) => open[key] ?? key === active.group
+
+  function toggle(key: string) {
+    setOpen((prev) => {
+      const next = { ...prev, [key]: !(prev[key] ?? key === active.group) }
+      try {
+        localStorage.setItem(OPEN_KEY, JSON.stringify(next))
+      } catch {
+        /* 存不下就只在这一次会话里生效——不值得为此挡住导航 */
+      }
+      return next
+    })
+  }
 
   // open-count baseline. best-effort: a failing telemetry call must
   // never delay or break the page it is reporting on
@@ -72,12 +179,24 @@ export default function Layout() {
       .catch(() => {})
   }, [page])
 
+  // Ctrl+K 只挂在非会话页：会话页有自己的 Ctrl+K（搜会话），别跟它抢
+  useEffect(() => {
+    if (page === 'chat') return
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [page])
+
   return (
-    <div className="flex h-full">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-neutral-200/80 bg-neutral-50/60 dark:border-neutral-800/80 dark:bg-neutral-900/40">
-        <div className="flex items-center justify-between px-4 pb-2 pt-4">
+    <div className="flex h-full bg-[color:var(--page-bg)]">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-neutral-200/70 bg-white/70 dark:border-neutral-800/70 dark:bg-neutral-900/50">
+        <div className="flex items-center px-4 pb-2 pt-4">
           <Logo />
-          <ThemeToggle />
         </div>
 
         <div className="px-3 pb-3 pt-2">
@@ -94,46 +213,103 @@ export default function Layout() {
           </button>
         </div>
 
-        <nav className="flex flex-col gap-1 px-3">
-          {NAV.map((n) => (
-            <Link
-              key={n.key}
-              to={n.href}
-              className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
-                page === n.key
-                  ? 'bg-violet-100 font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
-                  : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
-              }`}
-            >
-              <span className="text-[15px] leading-none">{n.icon}</span>
-              {n.label}
-            </Link>
-          ))}
-        </nav>
+        {/* 导航与「最近对话」共用一块滚动区：分组展开之后这一列会变长，
+            不给它滚动的话，底部那块（本地用户）会被顶出屏幕。 */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <nav className="flex flex-col gap-0.5 px-3">
+            {NAV.map((g) => {
+              const on = isOpen(g.key)
+              const inGroup = g.key === active.group
+              const chip = GROUP_CHIP[g.key] ?? GROUP_CHIP.settings
+              const GroupIcon = g.icon
+              const groupCls = inGroup
+                ? 'bg-violet-50 font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
+                : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
+              return (
+                <div key={g.key} className="relative">
+                  {inGroup ? (
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-violet-500"
+                    />
+                  ) : null}
+                  <div className={`flex items-center rounded-xl ${groupCls}`}>
+                    <Link
+                      to={g.href}
+                      data-nav-group={g.key}
+                      data-nav-active={inGroup ? '1' : undefined}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-sm"
+                    >
+                      <span className={`wb-chip h-6 w-6 rounded-lg ${chip.bg} ${chip.fg}`}>
+                        <GroupIcon className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="truncate">{g.label}</span>
+                    </Link>
+                    {g.items.length > 0 ? (
+                      <button
+                        onClick={() => toggle(g.key)}
+                        data-nav-toggle={g.key}
+                        aria-expanded={on}
+                        aria-label={`${on ? '收起' : '展开'}${g.label}`}
+                        title={on ? '收起' : '展开'}
+                        className="mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-200/60 hover:text-neutral-600 dark:hover:bg-neutral-700/60 dark:hover:text-neutral-200"
+                      >
+                        <Chevron open={on} />
+                      </button>
+                    ) : null}
+                  </div>
 
-        {page !== 'chat' && conversations.length > 0 && (
-          <div className="mt-4 border-t border-neutral-200/80 px-3 pt-3 dark:border-neutral-800/80">
-            <p className="px-3 pb-1.5 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-              最近对话
-            </p>
-            <nav className="flex flex-col gap-0.5">
-              {conversations.map((c) => (
-                <Link
-                  key={c.id}
-                  to={'/?conv=' + c.id}
-                  className="truncate rounded-lg px-3 py-1.5 text-sm text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200"
-                >
-                  {c.title}
-                </Link>
-              ))}
-            </nav>
-          </div>
-        )}
+                  {g.items.length > 0 && on ? (
+                    <div data-nav-items={g.key} className="mt-0.5 flex flex-col gap-0.5 pb-0.5 pl-4">
+                      {g.items.map((i) => {
+                        const ItemIcon = i.icon
+                        return (
+                          <Link
+                            key={i.href}
+                            to={i.href}
+                            data-nav-item={i.href}
+                            data-nav-active={i.href === active.href ? '1' : undefined}
+                            className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-[13px] transition-colors ${
+                              i.href === active.href
+                                ? 'bg-violet-50 font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
+                                : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
+                            }`}
+                          >
+                            <ItemIcon className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                            <span className="truncate">{i.label}</span>
+                          </Link>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </nav>
 
-        <div className="flex-1" />
+          {page !== 'chat' && conversations.length > 0 && (
+            <div className="mt-4 border-t border-neutral-200/80 px-3 pt-3 dark:border-neutral-800/80">
+              <p className="px-3 pb-1.5 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                最近对话
+              </p>
+              <nav className="flex flex-col gap-0.5">
+                {conversations.map((c) => (
+                  <Link
+                    key={c.id}
+                    to={'/?conv=' + c.id}
+                    className="truncate rounded-lg px-3 py-1.5 text-sm text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200"
+                  >
+                    {c.title}
+                  </Link>
+                ))}
+              </nav>
+            </div>
+          )}
+        </div>
+
         <div className="border-t border-neutral-200/80 p-4 dark:border-neutral-800/80">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-neutral-300 to-neutral-400 text-xs font-semibold text-neutral-600 dark:from-neutral-700 dark:to-neutral-800 dark:text-neutral-300">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-semibold text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
               ME
             </div>
             <div className="min-w-0 flex-1">
@@ -145,8 +321,15 @@ export default function Layout() {
       </aside>
       {/* 跨模块分栏（SplitPane）已整体移除（2026-09-13）：用得少，且开侧栏时主区
           变窄却仍按**窗口**宽度选断点，排版不匹配。滚动/高度容器在 RouteShell
-          （routes.tsx）里，这里只把页面放回来。 */}
-      <Outlet />
+          （routes.tsx）里，这里只把页面放回来。
+          2026-09-18 版面改版：外面多了一层「顶栏 + 内容」的竖排——顶栏是全局的
+          （面包屑 + 主题），内容区照旧由 RouteShell 管滚动。 */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* 对话页自带页头（会话标题、模型、工具那一排），再顶一条就重复了 */}
+        {page === 'chat' ? null : <TopBar page={page} onOpenSearch={() => setPaletteOpen(true)} />}
+        <Outlet />
+      </div>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <PetWidget />
     </div>
   )

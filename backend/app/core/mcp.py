@@ -281,6 +281,13 @@ async def _save_artifact(args: dict) -> str:
     chunks = 0
     if action != "未变":
         dest.write_text(body_text, encoding="utf-8")
+        # 环二表达层：**新落一份成品**才说一句（`存为` / `另存`）。`更新` 是把这一轮刚存的
+        # 那份改写一遍、「未变」更是没落盘——同一个文件说两遍就是复读，而且架子上也没多一份。
+        # 落点算不算成品由 `pet.is_output_path` 判：`compose` → `notes/` 不算（与成长值同口径）。
+        if action in ("存为", "另存"):
+            from app.core import pet
+
+            pet.note_output(title or dest.stem, rel)
         try:
             from app.core import indexer
 

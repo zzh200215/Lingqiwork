@@ -88,6 +88,10 @@ class PrefsIn(BaseModel):
     pet_greet_enabled: bool | None = None
     pet_morning_time: str | None = None
     pet_evening_time: str | None = None
+    # P2：语气微调（按喂养分布改用词，不夸不评）
+    pet_tone: bool | None = None
+    # Z4：称号旁那一行风味小注（同一份喂养分布，摆成一句事实）
+    pet_flavor: bool | None = None
     # 复习卡片
     cards_new_per_day: int | None = None
     cards_review_per_day: int | None = None

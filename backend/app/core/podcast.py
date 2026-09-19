@@ -34,6 +34,11 @@ SKIP_PREFIXES = ("clippings/", "digests/", "feeds/")
 FILE_RE = re.compile(r"^pod-\d{8}-\d{6}-[0-9a-f]{6}\.wav$")
 _ID_ALPHABET = "0123456789abcdef"
 
+# 两个音色的默认值。原来写死在 `generate_from_blocks_iter` 里；单音色念稿（M4 周报）
+# 要用同一个「零柒的声音」，所以提成常量——两处各写一个默认值，迟早有一处改漏。
+HOST_VOICE = "zh-CN-YunxiNeural"  # 云希 · 轻松男声
+GUEST_VOICE = "zh-CN-XiaoxiaoNeural"  # 晓晓 · 自然女声
+
 _SCRIPT_SYSTEM = (
     "你是一档中文知识播客的编剧。根据给定的笔记材料，写一段双人对话脚本：\n"
     "- host 是主持人：负责开场、串场、追问和结尾总结，口语自然；\n"
@@ -223,6 +228,88 @@ def _new_id() -> str:
     return f"pod-{now}-{tail}"
 
 
+def _entry(
+    pid: str,
+    title: str,
+    sources: list[str],
+    turns: list[dict],
+    duration: float,
+    out: Path,
+) -> dict:
+    """索引里一条播客的形状——**两个入口共用**（对话播客 / 单音色念稿）。Pure。
+
+    存进 `index.json` 的东西只有一种形状，列表页就不必分两种情况读；`title` 兜底
+    也归这一处：没有标题时用第一份材料的文件名，一份材料都没有就用「播客」。
+    """
+    return {
+        "ok": True,
+        "id": pid,
+        "title": (title or "").strip() or (Path(sources[0]).stem if sources else "播客"),
+        "sources": list(sources),
+        "turns": len(turns),
+        "duration_sec": round(duration, 1),
+        "file": out.name,
+        "script": turns,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _split_sentences(text: str, limit: int = MAX_TURNS) -> list[str]:
+    """一段稿子 → 逐句。Pure。
+
+    **为什么按句切**：TTS 的合成单位最好是一句——整段丢进去，句读处会念成一口气；
+    逐句合成还能让每句走各自的缓存（同一句第二次念是零成本）。切分只认中文句末标点
+    与换行，切不出来（没有任何标点）就整段当一句。
+    """
+    out: list[str] = []
+    for raw in (text or "").splitlines():
+        for chunk in re.findall(r"[^。！？!?]+[。！？!?]*", raw.strip()):
+            s = chunk.strip()
+            while len(s) > MAX_TURN_CHARS:  # 没有标点的长段：硬切，别让一句合成撑爆上限
+                out.append(s[:MAX_TURN_CHARS])
+                s = s[MAX_TURN_CHARS:]
+                if len(out) >= limit:
+                    return out
+            if s:
+                out.append(s)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+async def speak_text(text: str, title: str = "", voice: str = "") -> dict:
+    """现成的一段稿子 → 一段音频（**单音色念稿**，M4 · PLAN §3 G4 的「一键转播客」）。
+
+    与 `generate` 的区别只有一处、也是最要紧的一处：**不过模型**。稿子已经是成品文本
+    （周报的句子由 `core/weekly.text()` 出来，是事实的唯一出处），这里要的不是编剧，
+    只是一张嘴——所以没有 provider 的机器上这一条照样能用。
+
+    仍然走同一条渲染与登记（`_synth_turn` / `_decode_24k` / `_assemble_wav` / `index.json`），
+    于是它和别的播客一起出现在陪伴页那张列表里，不必为它开第二种列表。
+    """
+    turns = [{"speaker": "guest", "text": s} for s in _split_sentences(text)]
+    if not turns:
+        return {"ok": False, "error": "没有可念的内容"}
+    voice = voice or HOST_VOICE
+
+    segments: list[bytes] = []
+    for t in turns:
+        path = await _synth_turn(t["text"], voice)
+        pcm = await asyncio.to_thread(_decode_24k, path)
+        if pcm:
+            segments.append(pcm)
+    if not segments:
+        return {"ok": False, "error": "语音合成失败，没有生成任何音频"}
+
+    pid = _new_id()
+    out = PODCAST_DIR / f"{pid}.wav"
+    duration = await asyncio.to_thread(_assemble_wav, segments, out)
+    entry = _entry(pid, title, [], turns, duration, out)
+    _save_index([entry, *_load_index()])
+    log.info("speech rendered: %s (%d sentences, %.1fs)", pid, len(turns), duration)
+    return entry
+
+
 @usage_ledger.traced("podcast")
 async def generate(
     paths: list[str], host_voice: str = "", guest_voice: str = "", title: str = ""
@@ -277,8 +364,8 @@ async def generate_from_blocks_iter(
         yield "done", {"ok": False, "error": str(e)}
         return
 
-    host = host_voice or "zh-CN-YunxiNeural"
-    guest = guest_voice or "zh-CN-XiaoxiaoNeural"
+    host = host_voice or HOST_VOICE
+    guest = guest_voice or GUEST_VOICE
     segments: list[bytes] = []
     for i, t in enumerate(turns, 1):
         yield "stage", {"stage": "tts", "index": i, "total": len(turns)}
@@ -295,17 +382,7 @@ async def generate_from_blocks_iter(
     out = PODCAST_DIR / f"{pid}.wav"
     duration = await asyncio.to_thread(_assemble_wav, segments, out)
 
-    entry = {
-        "ok": True,
-        "id": pid,
-        "title": (title or "").strip() or Path(blocks[0][0]).stem,
-        "sources": [rel for rel, _ in blocks],
-        "turns": len(turns),
-        "duration_sec": round(duration, 1),
-        "file": out.name,
-        "script": turns,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-    }
+    entry = _entry(pid, title, [rel for rel, _ in blocks], turns, duration, out)
     items = [entry, *_load_index()]
     _save_index(items)
     log.info("podcast generated: %s (%d turns, %.1fs)", pid, len(turns), duration)

@@ -2,14 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import AttachToThread from './AttachToThread'
+import { CONCEPT_STATE, CONCEPT_STATES, type ConceptState } from './conceptState'
 import FeedbackButtons from './FeedbackButtons'
+import InjectedLine from './InjectedLine'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
 import OutputCard from './OutputCard'
 import RunPanel from './RunPanel'
+import { TUTOR_TABS, type TutorTab } from './routes'
 import {
   api,
   type CardDraft,
   type CardSources,
+  type InterviewBank,
+  type InterviewReportResult,
+  type InterviewReportSections,
   type RoundtableResult,
   type TutorConceptRow,
   type TutorDigestPoint,
@@ -112,10 +118,163 @@ export function RecallChip({ hits }: { hits: TutorRecallHit[] }) {
   )
 }
 
+/** 「又卡住」的标：概念行上一个琥珀色小 chip。传 `null` 就不画。
+ *
+ *  **它为什么在这里、而不是新开一栏**：这个信号本来就是「卡住」那一档里更窄的一批
+ *  （接住过卡在哪、最近一次还是半懂、就在这几天），另起一栏等于把同一批概念摆两遍。
+ *  判据在后端一处（`tutor.is_recurring_mistake`），也是零柒那句「又卡住了」的同一判据——
+ *  界面上的标与它嘴里的话因此**永远是同一批**。
+ *
+ *  title 里写的是事实（接住过几次），不是「你还欠几次」：这是标记，不是待办。 */
+export function RepeatChip({ c }: { c: TutorConceptRow | null }) {
+  if (!c) return null
+  return (
+    <span
+      data-concept-repeat={c.concept}
+      title={`接住过你卡在哪 ${c.recalled} 次，最近一次还是半懂——零柒那句「又卡住了」说的就是这一批`}
+      className="shrink-0 rounded-full bg-amber-50 px-1.5 text-[10px] text-amber-600 dark:bg-amber-500/10 dark:text-amber-300"
+    >
+      又卡住
+    </span>
+  )
+}
+
+/** 报告的三栏（空的整栏不摆）。抽成纯函数是为了让 JSX 里那层索引别再猜类型。 */
+export function reportGroups(
+  s: InterviewReportSections
+): { label: string; items: string[]; teachable: boolean }[] {
+  return [
+    { label: '答得稳的', items: s.solid ?? [], teachable: false },
+    { label: '卡壳的', items: s.stuck ?? [], teachable: true },
+    { label: '建议回头搞懂', items: s.teach_next ?? [], teachable: true },
+  ].filter((g) => g.items.length > 0)
+}
+
+/** 面试陪练的收尾行（M3 · PLAN §3 G3）：进度 + 出复盘报告 + 报告本身。
+ *
+ *  三件事都在这里说清楚：
+ *  - **进度是数出来的**（助手轮次），不是另一个计数器；
+ *  - 报告落 `vault/reports/`（**不算"成品"**：不计成长值、不上小屋架子、没有那句
+ *    「交出去了」——它是给你自己看的，界面上不吹成一件交付）；
+ *  - 每一条卡壳/建议再讲都能**一键开一场教学**——那才是「进卡点清单」的现有路径
+ *    （教学里记的卡点才进卡点清单；面试不是教学，不替它造记录）。
+ */
+export function InterviewRow({
+  sid,
+  turns,
+  busy,
+  onTeach,
+}: {
+  sid: number | null
+  turns: number
+  busy: boolean
+  onTeach: (topic: string) => void
+}) {
+  const [busyReport, setBusyReport] = useState(false)
+  const [rep, setRep] = useState<InterviewReportResult | null>(null)
+  const [msg, setMsg] = useState('')
+
+  const make = async () => {
+    if (sid === null || busyReport) return
+    setBusyReport(true)
+    setMsg('')
+    try {
+      const r = await api.interviewReport(sid)
+      if (!r.ok) {
+        setMsg(r.reason || '报告没生成出来')
+        return
+      }
+      setRep(r)
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyReport(false)
+    }
+  }
+
+  const asked = Math.max(0, turns - 1) // 第一轮是开场那句话，问过的题 = 助手轮次
+  const s = rep?.sections
+
+  return (
+    <div data-interview-row className="space-y-2 pb-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+          面试
+        </span>
+        <span className="text-[11px] text-neutral-400">
+          问过 {asked} 题{asked > 0 && asked < 5 ? '（5–8 题一场）' : ''}
+        </span>
+        <button
+          data-interview-report
+          onClick={() => void make()}
+          disabled={busy || busyReport || turns === 0}
+          title="读完整场对话出一份复盘报告（一次模型调用），落到 vault/reports/"
+          className="rounded-lg border border-violet-300 px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+        >
+          {busyReport ? '写报告中…' : rep ? '再出一份' : '出复盘报告'}
+        </button>
+        {msg ? <span className="text-[11px] text-amber-600 dark:text-amber-400">{msg}</span> : null}
+      </div>
+
+      {s ? (
+        <div
+          data-interview-report-body
+          className="space-y-2 rounded-xl border border-violet-200 bg-violet-50/40 p-3 text-xs dark:border-violet-500/30 dark:bg-violet-500/5"
+        >
+          {s.summary ? (
+            <p className="text-neutral-700 dark:text-neutral-200">{s.summary}</p>
+          ) : null}
+          {reportGroups(s).map((g) => (
+            <div key={g.label}>
+              <p className="pb-0.5 text-[11px] font-medium text-neutral-500 dark:text-neutral-400">
+                {g.label}
+              </p>
+              <ul className="space-y-0.5">
+                {g.items.map((x) => (
+                  <li key={x} className="flex items-baseline gap-2">
+                    <span className="min-w-0 flex-1 text-neutral-700 dark:text-neutral-200">
+                      · {x}
+                    </span>
+                    {/* 卡壳的那两栏才有「去搞懂」：报告里点一下，**开一场教学**
+                        （现有路径）——那条路记的卡点才进卡点清单 */}
+                    {g.teachable ? (
+                      <button
+                        data-teach={x}
+                        onClick={() => onTeach(x)}
+                        title="开一场教学专门搞懂它（卡点会进卡点清单）"
+                        className="shrink-0 text-[11px] text-violet-600 hover:underline dark:text-violet-300"
+                      >
+                        去搞懂 →
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          {rep?.path ? (
+            <p className="pt-0.5 text-[11px] text-neutral-400">
+              报告已落{' '}
+              <a
+                href={`/notes?path=${encodeURIComponent(rep.path)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-violet-600 hover:underline dark:text-violet-300"
+              >
+                {rep.path}
+              </a>
+              （{rep.chars} 字）· 题库文件没有被改过
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /** Server turns carry role+content only; sources ride along on the reply the
  * turn was streamed for, so 取材来源 stays attached to the bubble that used it. */
 type Turn = TutorTurn & { sources?: TutorMaterialSource[] }
-
 /** chroma 元数据里的 title 是文件名去后缀（「index」），没有信息量；路径尾部两段才认得出位置 */
 export function shortSource(source: string): string {
   const parts = source.split('/').filter(Boolean)
@@ -253,10 +412,10 @@ export function ConceptMerge({
 }
 
 export default function TutorPage() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [sid, setSid] = useState<number | null>(null)
   const [topic, setTopic] = useState('')
-  const [mode, setMode] = useState<'socratic' | 'feynman' | 'future'>('socratic')
+  const [mode, setMode] = useState<'socratic' | 'feynman' | 'future' | 'interview'>('socratic')
   const [modelOk, setModelOk] = useState(true)
   const [turns, setTurns] = useState<Turn[]>([])
   const [hits, setHits] = useState<TutorRecallHit[]>([])
@@ -268,6 +427,19 @@ export default function TutorPage() {
   const [ended, setEnded] = useState<{ concept: string; domain: string; stuck: string; transfer: string; nearby: TutorEndResult['material_nearby']; merged: TutorEndResult['merged'] } | null>(null)
   const [rows, setRows] = useState<TutorSessionRow[]>([])
   const [learnMap, setLearnMap] = useState<TutorLearningMap | null>(null)
+  // 「又卡住」的那几个概念（近 7 天）。**界面上的标记与零柒那句话同一批**：
+  // 判据在后端一处（`tutor.is_recurring_mistake`），这里只负责画一个标。
+  const [recurring, setRecurring] = useState<TutorConceptRow[]>([])
+  // 「我来讲 · 让它判」（M1）：判中 / 判完那句话。判不了时不静默——说一句退回来。
+  const [judging, setJudging] = useState(false)
+  const [judgeMsg, setJudgeMsg] = useState('')
+  // 面试陪练的题库（只读）：选中那个模式时才拉一次
+  const [bank, setBank] = useState<InterviewBank | null>(null)
+
+  useEffect(() => {
+    if (mode !== 'interview' || bank) return
+    void api.interviewBank().then(setBank).catch(() => {})
+  }, [mode, bank])
   // 展开中的概念（看它历次自评与卡点的演进）；一次只展开一个，右栏窄
   const [openConcept, setOpenConcept] = useState<string | null>(null)
   // 概念的「邻居」按需拉、按概念缓存——没展开就不该有这一次向量计算
@@ -287,6 +459,9 @@ export default function TutorPage() {
   const [rsDraft, setRsDraft] = useState<ReportDraft | null>(null)
   const [rsMsg, setRsMsg] = useState('')
   const [rsSaved, setRsSaved] = useState('')
+  // S1：这三张卡跑的是引擎，所以它们也会吃到技能（按话题匹配出来的工序）。
+  // 手动跑引擎没有运行记录，这一行就是那条路上唯一的窗口；顺带喂给这次的 👍/👎。
+  const [rsInjected, setRsInjected] = useState<string[]>([])
   // 分析 / 方案（拿不准的事，理清楚再出方案）：拉取式——点「帮我理清」才跑。
   // 和研究的区别在于先出 `frame`（我理解你要决定什么），那是给人看的。
   const [dcBusy, setDcBusy] = useState(false)
@@ -295,6 +470,7 @@ export default function TutorPage() {
   const [dcFrame, setDcFrame] = useState<DecideFrame | null>(null)
   const [dcMsg, setDcMsg] = useState('')
   const [dcSaved, setDcSaved] = useState('')
+  const [dcInjected, setDcInjected] = useState<string[]>([])
   // 对质（跨源冲突检测）：把你自己的说法和外部来源摆在一起，看哪两处对不上。同样是
   // 拉取式——点「对质」才跑；材料里没有对不上的时它会直说没有，那不是失败。
   const [cfBusy, setCfBusy] = useState(false)
@@ -303,6 +479,7 @@ export default function TutorPage() {
   const [cfSubject, setCfSubject] = useState('')
   const [cfMsg, setCfMsg] = useState('')
   const [cfSaved, setCfSaved] = useState('')
+  const [cfInjected, setCfInjected] = useState<string[]>([])
   // 三张成文卡跑完后默认收成一行回执（正文只活在 /notes 详情页），这三个开关把它展开回来
   const [rsOpen, setRsOpen] = useState(false)
   const [dcOpen, setDcOpen] = useState(false)
@@ -340,13 +517,26 @@ export default function TutorPage() {
   // 工具卡点开后的独立输入面板：每个工具自己收话题，不再逼你先去顶部输入框
   const [toolOpen, setToolOpen] = useState<'' | 'research' | 'decide' | 'conflict'>('')
   const [toolTopic, setToolTopic] = useState('')
-  // 学习地图的档位筛选：点档位标签只看那一档，再点一次回到全部
-  const [mapFilter, setMapFilter] = useState<
-    null | 'mastered' | 'learning' | 'stuck' | 'untouched'
-  >(null)
+  // 学习地图的档位筛选：点档位标签只看那一档，再点一次回到全部。
+  // 档位名来自 `conceptState.ts`（与零柒小屋的概念卡共用那一份词与色）。
+  const [mapFilter, setMapFilter] = useState<ConceptState | null>(null)
   // 开场屏的三个标签：学（开教学/研究等）、练（模拟测验）、记录（地图与历史）。
   // 一屏只做一类事，页面不再无限往下滚。
-  const [tab, setTab] = useState<'learn' | 'practice' | 'record'>('learn')
+  //
+  // 2026-09-18 导航改版：标签条搬到**侧栏**了，这一档改由 `?tab=` 驱动——
+  // 页面里那排按钮删掉，但 `setTab` 还在（页内好几处「去练一练 / 回记录」的按钮要用它），
+  // 而且**它写的是 URL**：于是页内跳转与侧栏跳转走的是同一条路，不会出现两套状态。
+  const tabParam = searchParams.get('tab')
+  const tab: TutorTab = (TUTOR_TABS.find((t) => t.key === tabParam)?.key as TutorTab) ?? 'learn'
+  const setTab = (t: TutorTab) =>
+    setSearchParams(
+      (p) => {
+        const n = new URLSearchParams(p)
+        n.set('tab', t)
+        return n
+      },
+      { replace: true }
+    )
   // 模拟测验（Quizlet Test 模式）：一份材料 → 出几道题 → 逐题自判 →
   // 没答上的一键开教学补课。出题复用按材料出卡的通路，不落库。
   const [qzMode, setQzMode] = useState<'file' | 'text'>('text')
@@ -381,6 +571,9 @@ export default function TutorPage() {
     api.tutorMap().then(setLearnMap).catch(() => {})
     api.tutorMastery().then(setMastery).catch(() => {})
     api.tutorStuck().then((r) => setStuckRows(r.stuck)).catch(() => {})
+    // 「我老卡的地方」：**与零柒那句「又卡住了」同一批**（同一个后端判据）。
+    // 不在这儿另算一遍——界面上的标记与它嘴里的话必须是同一批，否则「它凭什么这么说」查不到。
+    api.tutorRecurring().then((r) => setRecurring(r.recurring)).catch(() => {})
   }, [])
 
   // 卡点的手动出口：标已解 / 标回待解。右栏是上下文，失败静默。
@@ -401,6 +594,14 @@ export default function TutorPage() {
   // 相邻概念它分不开** —— 那一类只能由人指认。所以这里没有「自动整理」按钮，只有指认。
   const [mergeBusy, setMergeBusy] = useState(false)
   const [mergeMsg, setMergeMsg] = useState('')
+
+  /** 「又卡住」的那几个概念，按名字查。**传整行、不只传一个布尔**：标下面的 title
+   *  要说「接住过几次」，那是这一行里的事实（`recalled`）——拿不到就不该编一个 0。
+   *  与零柒那句话同一批（判据在后端一处），这里只做一次查找。 */
+  const repeatMap = useMemo(
+    () => new Map(recurring.map((c) => [c.concept, c])),
+    [recurring]
+  )
 
   /** 认识的概念名（四档 + 会话历史里出现过的），供「并到…」挑。 */
   const allConcepts = useMemo(() => {
@@ -648,12 +849,15 @@ export default function TutorPage() {
     setRs(null)
     setRsDraft(null)
     setRsSaved('')
+    setRsInjected([])
     setRsMsg('规划检索式…')
     try {
       const r = await streamResearch(
         t,
         (event, data) => {
-          if (event === 'plan')
+          if (event === 'skills')
+            setRsInjected(((data.skills ?? []) as unknown[]).map(String))
+          else if (event === 'plan')
             setRsMsg(`已规划 ${(data.queries as string[] | undefined)?.length ?? 0} 个检索式，检索中…`)
           else if (event === 'gathering') setRsMsg('检索知识库与网络…')
           else if (event === 'sources') {
@@ -736,12 +940,15 @@ export default function TutorPage() {
     setDcDraft(null)
     setDcFrame(null)
     setDcSaved('')
+    setDcInjected([])
     setDcMsg('读题中…')
     try {
       const r = await streamDecide(
         t,
         (event, data) => {
-          if (event === 'frame') {
+          if (event === 'skills')
+            setDcInjected(((data.skills ?? []) as unknown[]).map(String))
+          else if (event === 'frame') {
             setDcFrame(data as unknown as DecideFrame)
             setDcMsg('去取材料…')
           } else if (event === 'gathering') setDcMsg('检索知识库、长期记忆与网络…')
@@ -826,12 +1033,15 @@ export default function TutorPage() {
     setCfDraft(null)
     setCfSubject('')
     setCfSaved('')
+    setCfInjected([])
     setCfMsg('读题中…')
     try {
       const r = await streamConflict(
         t,
         (event, data) => {
-          if (event === 'frame') {
+          if (event === 'skills')
+            setCfInjected(((data.skills ?? []) as unknown[]).map(String))
+          else if (event === 'frame') {
             setCfSubject(String((data as { subject?: string }).subject ?? ''))
             setCfMsg('去取材料…')
           } else if (event === 'gathering') setCfMsg('检索知识库、长期记忆与外部来源…')
@@ -944,9 +1154,12 @@ export default function TutorPage() {
     async (
       topicText: string,
       repo = '',
-      m: 'socratic' | 'feynman' | 'future' = 'socratic',
+      m: 'socratic' | 'feynman' | 'future' | 'interview' = 'socratic',
       // 从「材料拆出的点」开场时带上：后端据此把它标成已教，不再算「未触及」
       originPointId?: number,
+      // 从搁置卡的前置候选点进来时带上（PLAN2 §6 回指采纳的分子）：
+      // 后端只在会话行上记一个事实，不改那张卡、也不多说一个字
+      prereqCardId?: number,
     ) => {
     const t = topicText.trim()
     if (!t || busy) return
@@ -956,7 +1169,7 @@ export default function TutorPage() {
     clearResearch()
     clearDecide()
     try {
-      const s = await api.tutorStart(t, repo, m, originPointId)
+      const s = await api.tutorStart(t, repo, m, originPointId, prereqCardId)
       setSid(s.id)
       setModelOk(s.model_ok)
       setTurns([])
@@ -970,7 +1183,10 @@ export default function TutorPage() {
     }
   }, [busy, send, refreshRail, clearResearch, clearDecide])
 
-  const begin = useCallback(() => beginWith(topic), [beginWith, topic])
+  // ⚠️ `mode` 必须传下去：它不只是界面上的高亮——**后端那一场是哪种声部由它决定**。
+  // 之前这里漏了它（`beginWith(topic)`），于是选了「我来讲（费曼）」再按开始，
+  // 开出来的是苏格拉底会话：页面按费曼摆 UI、模型按老师讲课，两边说的不是一件事。
+  const begin = useCallback(() => beginWith(topic, '', mode), [beginWith, topic, mode])
 
   const submit = useCallback(async () => {
     const t = draft.trim()
@@ -979,23 +1195,62 @@ export default function TutorPage() {
     await send(sid, t)
   }, [draft, sid, busy, send])
 
+  /** 自评落地的**唯一**出口：手动标一档、让它判一档，走的是同一段状态更新。
+   *
+   *  两条入口一条账——判出来的 verdict 与你自己标的没有任何区别（后端也是同一个 `end()`）。 */
+  const applyEnd = useCallback(
+    (v: 'got' | 'half' | 'useless', got: TutorEndResult) => {
+      setVerdict(v)
+      setEnded({
+        concept: got.concept,
+        domain: got.domain ?? '',
+        stuck: got.stuck,
+        transfer: got.transfer ?? '',
+        nearby: got.material_nearby ?? [],
+        merged: got.merged ?? null,
+      })
+      refreshRail()
+    },
+    [refreshRail]
+  )
+
   const mark = useCallback(
     async (v: 'got' | 'half' | 'useless') => {
       if (sid === null || busy) return
       setBusy(true)
       try {
-        const got = await api.tutorEnd(sid, v)
-        setVerdict(v)
-        setEnded({ concept: got.concept, domain: got.domain ?? '', stuck: got.stuck, transfer: got.transfer ?? '', nearby: got.material_nearby ?? [], merged: got.merged ?? null })
-        refreshRail()
+        applyEnd(v, await api.tutorEnd(sid, v))
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e))
       } finally {
         setBusy(false)
       }
     },
-    [sid, busy, refreshRail]
+    [sid, busy, applyEnd]
   )
+
+  /** M1 场景 B：「我来讲 · 让它判」。它读完整场对话给一档，并在**服务端**走同一条
+   *  `end()`（概念/卡点照常回写）——所以这里拿到 `ended` 之后**不再调 tutorEnd**，
+   *  否则会白花第二次提取的钱。判不了就如实说一句，退回你自己标（不编分）。 */
+  const judge = useCallback(async () => {
+    if (sid === null || busy || judging || turns.length === 0) return
+    setJudging(true)
+    setJudgeMsg('')
+    try {
+      const r = await api.tutorJudge(sid)
+      if (!r.judged || !r.ended || !r.verdict) {
+        setJudgeMsg(r.reason || '判分没跑成，你自己标一档')
+        return
+      }
+      applyEnd(r.verdict, r.ended)
+      const gap = (r.missed_points ?? [])[0]
+      setJudgeMsg(`它判：${VERDICT_LABEL[r.verdict]}${gap ? ` · ${gap}` : ''}`)
+    } catch (e) {
+      setJudgeMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setJudging(false)
+    }
+  }, [sid, busy, judging, turns.length, applyEnd])
 
   const open = useCallback(async (id: number) => {
     setErr('')
@@ -1026,12 +1281,15 @@ export default function TutorPage() {
   const sessionParam = searchParams.get('session')
   const newTopic = searchParams.get('new')
   const repoParam = searchParams.get('repo') ?? ''
+  // 从搁置卡的前置候选点进来时带的那个 card id（PLAN2 §6 回指采纳的分子）。
+  // 它只跟着这一次开场走：参数变了要能重新触发，所以守卫的 key 里也算上它。
+  const prereqParam = searchParams.get('prereq') ?? ''
   const handledDeepLink = useRef<string | null>(null)
   useEffect(() => {
     const key = sessionParam
       ? `session:${sessionParam}`
       : newTopic
-        ? `new:${newTopic}|${repoParam}`
+        ? `new:${newTopic}|${repoParam}|${prereqParam}`
         : null
     if (!key) {
       handledDeepLink.current = null
@@ -1040,9 +1298,11 @@ export default function TutorPage() {
     if (handledDeepLink.current === key) return
     handledDeepLink.current = key
     const s = Number(sessionParam)
+    const pid = Number(prereqParam)
+    const prereqId = prereqParam && Number.isFinite(pid) && pid > 0 ? pid : undefined
     if (sessionParam && Number.isFinite(s) && s > 0) void open(s)
-    else if (newTopic) void beginWith(newTopic, repoParam)
-  }, [sessionParam, newTopic, repoParam, open, beginWith])
+    else if (newTopic) void beginWith(newTopic, repoParam, 'socratic', undefined, prereqId)
+  }, [sessionParam, newTopic, repoParam, prereqParam, open, beginWith])
 
   const reset = useCallback(() => {
     abortRef.current?.abort()
@@ -1093,6 +1353,10 @@ export default function TutorPage() {
               >
                 {rsSaved ? '已存进知识库' : rsBusy ? '保存中…' : '存进知识库'}
               </button>
+              <InjectedLine
+                names={rsInjected}
+                className="rounded-full border border-sky-200 px-2 py-0.5 text-[10px] text-sky-700 dark:border-sky-500/30 dark:text-sky-300"
+              />
             </>
           }
           footer={
@@ -1102,6 +1366,7 @@ export default function TutorPage() {
                 promptSha={rs.prompt_sha}
                 modelId={rs.model_id}
                 artifactRef={rsSaved}
+                injected={rsInjected}
               />
             ) : undefined
           }
@@ -1174,6 +1439,10 @@ export default function TutorPage() {
                   {dcSaved ? '已存进知识库' : dcBusy ? '保存中…' : '存进知识库'}
                 </button>
               ) : null}
+              <InjectedLine
+                names={dcInjected}
+                className="rounded-full border border-violet-200 px-2 py-0.5 text-[10px] text-violet-700 dark:border-violet-500/30 dark:text-violet-300"
+              />
             </>
           }
           footer={
@@ -1183,6 +1452,7 @@ export default function TutorPage() {
                 promptSha={dc.prompt_sha}
                 modelId={dc.model_id}
                 artifactRef={dcSaved}
+                injected={dcInjected}
               />
             ) : undefined
           }
@@ -1287,6 +1557,10 @@ export default function TutorPage() {
                   {cfSaved ? '已存进知识库' : cfBusy ? '保存中…' : '存进知识库'}
                 </button>
               ) : null}
+              <InjectedLine
+                names={cfInjected}
+                className="rounded-full border border-teal-200 px-2 py-0.5 text-[10px] text-teal-700 dark:border-teal-500/30 dark:text-teal-300"
+              />
             </>
           }
           footer={
@@ -1296,6 +1570,7 @@ export default function TutorPage() {
                 promptSha={cf.prompt_sha}
                 modelId={cf.model_id}
                 artifactRef={cfSaved}
+                injected={cfInjected}
               />
             ) : undefined
           }
@@ -1582,6 +1857,7 @@ export default function TutorPage() {
                     <span className="min-w-0 flex-1 truncate text-xs text-neutral-700 dark:text-neutral-200">
                       {c.concept}
                     </span>
+                    <RepeatChip c={repeatMap.get(c.concept) ?? null} />
                     <span
                       className={`shrink-0 text-[10px] ${
                         c.verdict === 'got'
@@ -1613,6 +1889,22 @@ export default function TutorPage() {
                     {c.sessions} 场{c.recalled > 0 ? ` · 接上过 ${c.recalled} 次` : ''}
                   </span>
                 </button>
+                {/* PLAN2 T1 场景 B：卡片轨的现状就在这一行里——**在概念按钮外面**，
+                    因为按钮点的是「展开历次记录」，这一行点的是「去看这些卡」，两件事。
+                    没有卡的概念后端连这个键都不带（只摆非零），这里也就不显示。 */}
+                {c.cards_summary ? (
+                  <Link
+                    data-concept-cards={c.concept}
+                    to={`/review?${c.cards_summary.topics
+                      .map((t) => `topic=${encodeURIComponent(t)}`)
+                      .join('&')}`}
+                    title="去复习页看这个概念名下的卡"
+                    className="block truncate pb-1 pr-5 text-[10px] text-sky-600 hover:underline dark:text-sky-400/90"
+                  >
+                    {c.cards_summary.n} 张卡 · {c.cards_summary.mature} 成熟 · 近 7 天重来{' '}
+                    {c.cards_summary.again_7d} 次
+                  </Link>
+                ) : null}
                 {/* 卡点的出口主要是自动回写（同一概念后来说通了），这里是手动兜底：
                     「我不打算再管这个了」。悬停才现身，免得右栏每行都挂个按钮。 */}
                 {c.stuck ? (
@@ -1628,7 +1920,7 @@ export default function TutorPage() {
                   <div className="mb-1 ml-2 border-l border-neutral-200 pl-2 dark:border-neutral-700">
                     {/* 把这条概念挂到某件事上——念头是看到它的时候冒出来的，所以就在这里 */}
                     <AttachToThread
-                      kind="tutor"
+                      kind="session"
                       ref={String(c.last_session_id)}
                       className="block pb-1"
                     />
@@ -1707,6 +1999,13 @@ export default function TutorPage() {
       learnMap.stuck.length +
       learnMap.untouched.length
     : 0
+  // 档位标签上的数：四档各几个。**从地图那一份里数**（不另算一份）。
+  const mapCounts: Record<ConceptState, number> = {
+    mastered: learnMap?.mastered.length ?? 0,
+    learning: learnMap?.learning.length ?? 0,
+    stuck: learnMap?.stuck.length ?? 0,
+    untouched: learnMap?.untouched.length ?? 0,
+  }
 
   // 会话历史列表：开场屏概览和会话右栏共用同一份（两处不会同时出现）。
   // 工具面板的执行：面板里收话题，跑哪个工具由打开的那张卡决定
@@ -1786,41 +2085,37 @@ export default function TutorPage() {
             </div>
           </div>
           {/* 档位标签：点一个只看那一档，再点一次回到全部——地图先是概览，
-              需要时才下钻 */}
+              需要时才下钻。**词与色在 `conceptState.ts` 一份**（小屋的概念卡读同一份）。 */}
           <div className="flex flex-wrap gap-1.5 pb-2">
-            {([
-              ['mastered', '已掌握', learnMap.mastered.length, 'border-emerald-300 bg-emerald-50 text-emerald-700 ring-emerald-200 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30'],
-              ['learning', '在学', learnMap.learning.length, 'border-sky-300 bg-sky-50 text-sky-700 ring-sky-200 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/30'],
-              ['stuck', '卡住', learnMap.stuck.length, 'border-amber-300 bg-amber-50 text-amber-700 ring-amber-200 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'],
-              ['untouched', '未触及', learnMap.untouched.length, 'border-neutral-300 bg-neutral-100 text-neutral-600 ring-neutral-200 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-300 dark:ring-neutral-500/30'],
-            ] as const).map(([key, label, n, cls]) => (
+            {CONCEPT_STATES.map((s) => (
               <button
-                key={key}
-                onClick={() => setMapFilter(mapFilter === key ? null : key)}
-                title={mapFilter === key ? '再点一下回到全部' : `只看${label}`}
+                key={s.key}
+                onClick={() => setMapFilter(mapFilter === s.key ? null : s.key)}
+                title={mapFilter === s.key ? '再点一下回到全部' : `只看${s.label}`}
                 className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
-                  mapFilter === key
-                    ? `${cls} font-medium ring-2`
+                  mapFilter === s.key
+                    ? `${s.chip} font-medium ring-2`
                     : 'border-neutral-200 text-neutral-500 hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-500'
                 }`}
               >
-                {label} {n}
+                {s.label} {mapCounts[s.key]}
               </button>
             ))}
           </div>
           {(mapFilter === null || mapFilter === 'mastered')
-            ? mapGroup('已掌握', 'text-emerald-600 dark:text-emerald-400', learnMap.mastered)
+            ? mapGroup(CONCEPT_STATE.mastered.label, CONCEPT_STATE.mastered.text, learnMap.mastered)
             : null}
           {(mapFilter === null || mapFilter === 'learning')
-            ? mapGroup('在学', 'text-sky-600 dark:text-sky-400', learnMap.learning)
+            ? mapGroup(CONCEPT_STATE.learning.label, CONCEPT_STATE.learning.text, learnMap.learning)
             : null}
           {(mapFilter === null || mapFilter === 'stuck')
-            ? mapGroup('卡住', 'text-amber-600 dark:text-amber-400', learnMap.stuck)
+            ? mapGroup(CONCEPT_STATE.stuck.label, CONCEPT_STATE.stuck.text, learnMap.stuck)
             : null}
           {(mapFilter === null || mapFilter === 'untouched') && learnMap.untouched.length > 0 ? (
             <div className="pt-1.5">
-              <p className="px-1 pb-0.5 text-[10px] font-medium text-neutral-500">
-                未触及 <span className="text-neutral-400">{learnMap.untouched.length}</span>
+              <p className={`px-1 pb-0.5 text-[10px] font-medium ${CONCEPT_STATE.untouched.text}`}>
+                {CONCEPT_STATE.untouched.label}{' '}
+                <span className="text-neutral-400">{learnMap.untouched.length}</span>
               </p>
               {learnMap.untouched.slice(0, CONCEPT_RAIL_CAP).map((p) => (
                 <button
@@ -1925,37 +2220,23 @@ export default function TutorPage() {
       <div className="flex min-w-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {sid === null ? (
-            <div className="flex-1 overflow-y-auto px-6 py-8">
-              {/* 开场屏 = 一屏式主页：学 / 练 / 记录 三个标签，一屏只做一类事 */}
-              <div className="mx-auto flex max-w-5xl flex-col gap-8">
-                <div className="mx-auto flex gap-1 rounded-xl bg-neutral-100 p-1 dark:bg-neutral-800/60">
-                  {(
-                    [
-                      ['learn', '学'],
-                      ['practice', '练'],
-                      ['record', '记录'],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <button
-                      key={key}
-                      data-tutor-tab={key}
-                      onClick={() => setTab(key)}
-                      className={`rounded-lg px-6 py-1.5 text-sm transition-colors ${
-                        tab === key
-                          ? 'bg-white font-medium text-neutral-800 shadow-sm dark:bg-neutral-900 dark:text-neutral-100'
-                          : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
+            <div className="wb-page flex-1 overflow-y-auto px-6 py-6">
+              {/* 开场屏 = 一屏式主页：学 / 练 / 记录 三个标签，一屏只做一类事。
+                  2026-09-18 版面改版：容器从 5xl（1024px）放到 1600px，与别的页对齐——
+                  它原来是全站最窄的一页，1920 窗口下两侧空掉一半还多。 */}
+              <div className="mx-auto flex max-w-[1600px] flex-col gap-6">
+                {/* 「学 / 练 / 记录」那排标签已经搬到**侧栏**（2026-09-18 导航改版）：
+                    同一件事不留两个入口。这一档仍然走 `?tab=`，所以
+                    `/tutor?tab=record` 这种深链、以及页内那几处 setTab 都照旧。 */}
                 {tab === 'learn' ? (
                 <section className="mx-auto w-full max-w-2xl pt-2 text-center">
-                <h1 className="pb-1 text-2xl font-semibold tracking-tight">你想搞懂什么？</h1>
+                <h1 className="pb-1 text-2xl font-semibold tracking-tight">
+                  {mode === 'interview' ? '面试什么方向？' : '你想搞懂什么？'}
+                </h1>
                 <p className="pb-4 text-sm text-neutral-500">
-                  说一个具体的东西。它会先问你现在怎么理解，再讲。
+                  {mode === 'interview'
+                    ? '它扮面试官：一次只问一个问题，答得含糊就追一层。散场出一份复盘报告。'
+                    : '说一个具体的东西。它会先问你现在怎么理解，再讲。'}
                 </p>
                 {/* 模式切换：学（苏格拉底）还是讲（费曼）。是会话级选择，不是设置。 */}
                 <div className="mb-3 flex justify-center gap-2 text-xs">
@@ -1991,7 +2272,32 @@ export default function TutorPage() {
                   >
                     🔮 未来的你
                   </button>
+                  {/* M3 面试陪练：只问不教，散场出复盘报告。题库是**他自己的**东西
+                      （面试准备.md + 半懂/又卡住的概念 + 到期卡），只读。 */}
+                  <button
+                    data-mode="interview"
+                    onClick={() => setMode('interview')}
+                    className={`rounded-full border px-3 py-1.5 transition-colors ${
+                      mode === 'interview'
+                        ? 'border-amber-500 bg-amber-500/10 font-medium text-amber-600 dark:text-amber-300'
+                        : 'border-neutral-300 text-neutral-500 hover:border-amber-300 dark:border-neutral-700'
+                    }`}
+                    title="它扮面试官：一次一问、答得含糊就追一层，一场 5–8 题，散场出一份复盘报告到 vault/reports/"
+                  >
+                    🎤 面试陪练
+                  </button>
                 </div>
+                {/* 选中面试陪练时看一眼题库（**只读**）：它问什么，你自己得能查得到。
+                    只在选中时拉——不选它的人不该为它付一次请求。 */}
+                {mode === 'interview' ? (
+                  <p data-interview-bank className="pb-2 text-[11px] text-neutral-400">
+                    {bank
+                      ? `题库：${
+                          bank.file ? `${bank.file} ${bank.questions.length} 条` : '没有 面试准备.md'
+                        } · 半懂/又卡住 ${bank.concepts.length} 个 · 到期卡 ${bank.cards.length} 张`
+                      : '看一眼题库…'}
+                  </p>
+                ) : null}
                 <div className="flex gap-2">
                   <input
                     value={topic}
@@ -2001,7 +2307,11 @@ export default function TutorPage() {
                     }}
                     autoFocus
                     data-tutor-topic
-                    placeholder="例如：asyncio 里 await 到底把控制权交给了谁"
+                    placeholder={
+                      mode === 'interview'
+                        ? '例如：Python 后端'
+                        : '例如：asyncio 里 await 到底把控制权交给了谁'
+                    }
                     className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3.5 py-2.5 text-left text-sm outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
                   />
                   <button
@@ -2416,6 +2726,58 @@ export default function TutorPage() {
 
                 {tab === 'record' ? (
                 <>
+                {/* 全空的时候只摆一张欢迎卡：四个「还没有」的空盒子各自漂在页面上，
+                    不如把「从哪开始」一次说清。三条入口全是真链接，不造假数据。 */}
+                {(!learnMap || mapCount === 0) &&
+                (!mastery || mastery.events.length === 0) &&
+                stuckRows.length === 0 &&
+                (!stats || stats.sessions === 0) ? (
+                  <section className="wb-card-hero rounded-2xl p-6">
+                    <h2 className="text-base font-semibold text-neutral-800 dark:text-neutral-100">
+                      从一场教学开始
+                    </h2>
+                    <p className="mt-1 max-w-2xl text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
+                      这里会记下你学到哪了：说通的概念、挂着的卡点、每一次会话。
+                      现在这页还是白的——下面三条路都能让它长出内容。
+                    </p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <Link
+                        to="/tutor"
+                        className="rounded-xl border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
+                      >
+                        <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                          🗣 开一场教学
+                        </p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                          挑一个概念讲给零柒听——说通了它就记住，地图上多一颗星。
+                        </p>
+                      </Link>
+                      <Link
+                        to="/notes"
+                        className="rounded-xl border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
+                      >
+                        <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                          📝 消化一份材料
+                        </p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                          在笔记页划词挖空、让它出题——学的东西带着出处，以后可考。
+                        </p>
+                      </Link>
+                      <Link
+                        to="/companion?tab=audio"
+                        className="rounded-xl border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
+                      >
+                        <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
+                          🎙 拿卡点录一期播客
+                        </p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                          没解的卡点让它讲成人话——通勤路上也能把没懂的过一遍。
+                        </p>
+                      </Link>
+                    </div>
+                  </section>
+                ) : (
+                <>
                 {/* 学习概览：数据块、概念地图、最近搞懂、卡点清单、会话历史——
                     都收在「记录」标签下，一屏看完自己学到哪了。 */}
                 {stats && stats.sessions + stats.concepts > 0 ? (
@@ -2432,7 +2794,7 @@ export default function TutorPage() {
                     ] as const).map(([label, value, hint]) => (
                       <div
                         key={label}
-                        className="rounded-2xl border border-neutral-200/80 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900/60"
+                        className="wb-card p-4"
                       >
                         <p className="text-[11px] text-neutral-400">{label}</p>
                         <p className="pb-0.5 text-xl font-semibold text-neutral-800 dark:text-neutral-100">
@@ -2445,7 +2807,7 @@ export default function TutorPage() {
                 ) : null}
 
                 <section className="grid items-start gap-6 lg:grid-cols-2">
-                  <div className="rounded-2xl border border-neutral-200/80 p-4 dark:border-neutral-800">
+                  <div className="wb-card p-4">
                     {conceptsPanel}
                     {!learnMap || mapCount === 0 ? (
                       <p className="px-1 py-2 text-xs leading-relaxed text-neutral-400">
@@ -2456,7 +2818,7 @@ export default function TutorPage() {
                   <div className="flex flex-col gap-6">
                     {/* 最近搞懂：学会一个东西的「时刻」。从半懂到懂的格外标出来——
                         那是这份记录里最值钱的线索 */}
-                    <div className="rounded-2xl border border-neutral-200/80 p-4 dark:border-neutral-800">
+                    <div className="wb-card p-4">
                       <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
                         最近搞懂
                       </p>
@@ -2487,7 +2849,7 @@ export default function TutorPage() {
                     </div>
                     {/* 待解的卡点：全库的卡点集中在这里，逐条可以关掉；做成播客、
                         开圆桌的入口在左边地图的标题行 */}
-                    <div className="rounded-2xl border border-neutral-200/80 p-4 dark:border-neutral-800">
+                    <div className="wb-card p-4">
                       <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
                         待解的卡点 {stuckRows.filter((s) => !s.resolved_at).length > 0 ? stuckRows.filter((s) => !s.resolved_at).length : ''}
                       </p>
@@ -2499,8 +2861,13 @@ export default function TutorPage() {
                             .map((s) => (
                               <li key={s.id} className="group/st flex items-start gap-2">
                                 <span className="min-w-0 flex-1">
-                                  <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">
-                                    {s.concept}
+                                  <span className="flex items-baseline gap-1.5">
+                                    <span className="min-w-0 flex-1 truncate text-sm text-neutral-700 dark:text-neutral-200">
+                                      {s.concept}
+                                    </span>
+                                    {/* 同一个标也出现在这里：这条卡点所属的概念要正是
+                                        「又卡住」的那一批，扫描这一列时才不会看漏 */}
+                                    <RepeatChip c={repeatMap.get(s.concept) ?? null} />
                                   </span>
                                   <span className="block text-[11px] leading-relaxed text-neutral-400">
                                     ↳ {s.stuck}
@@ -2526,7 +2893,7 @@ export default function TutorPage() {
                 </section>
 
                 {/* 学过的：统计一句话 + 完整会话历史，通栏铺开 */}
-                <section className="rounded-2xl border border-neutral-200/80 p-4 dark:border-neutral-800">
+                <section className="wb-card p-4">
                   <div className="flex items-baseline justify-between pb-2">
                     <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
                       学过的
@@ -2542,6 +2909,8 @@ export default function TutorPage() {
                   </div>
                   {historyList}
                 </section>
+                </>
+                )}
                 </>
                 ) : null}
               </div>
@@ -2640,7 +3009,17 @@ export default function TutorPage() {
               <div className="border-t border-neutral-200/80 px-6 py-3 dark:border-neutral-800/80">
                 <div className="mx-auto max-w-3xl">
                   {/* 自评在输入框上方，不在会话末尾：标完还能继续问，半懂改成搞懂了
-                      也只是再点一次。它是记录这次的结果，不是「交作业」的按钮。 */}
+                      也只是再点一次。它是记录这次的结果，不是「交作业」的按钮。
+                      **面试陪练没有自评**：面试不是教学，那是另一套收尾（出复盘报告）。 */}
+                  {mode === 'interview' ? (
+                    <InterviewRow
+                      sid={sid}
+                      turns={turns.length}
+                      busy={busy}
+                      onTeach={(topic) => void beginWith(topic, '', 'socratic')}
+                    />
+                  ) : (
+                  <>
                   <div className="flex flex-wrap items-center gap-2 pb-2">
                     <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
                       这次
@@ -2658,6 +3037,22 @@ export default function TutorPage() {
                         {v.label}
                       </button>
                     ))}
+                    {/* M1 场景 B：讲完了不想自己评？让它读一遍全文给一档。
+                        它判完走的是**同一条 end()**——概念/卡点、「又卡住」全都照常。 */}
+                    <button
+                      data-judge
+                      onClick={() => void judge()}
+                      disabled={busy || judging || turns.length === 0}
+                      title="读完整场对话判一档（一次模型调用）；判不了会退回来让你自己标"
+                      className="rounded-lg border border-violet-300 px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                    >
+                      {judging ? '判中…' : '让它判'}
+                    </button>
+                    {judgeMsg ? (
+                      <span data-judge-msg className="text-[11px] text-neutral-400">
+                        {judgeMsg}
+                      </span>
+                    ) : null}
                     {verdict ? (
                       <span className="text-[11px] text-neutral-400">
                         {verdict === 'useless'
@@ -2666,6 +3061,15 @@ export default function TutorPage() {
                             ? `记下了：${ended.concept}`
                             : '记下了'}
                       </span>
+                    ) : null}
+                    {/* R3 · PLAN5 §3：把**这一场会话**挂到某件事上。
+                        放在这里是因为念头出现的时刻就是「刚聊完这一场」——
+                        概念卡里那个入口要你先展开一张卡才看得见，而一场课讲完的那一刻
+                        你手里正好有一个 sid。**不做自动挂接**（PLAN5 §4-7 一事一处：
+                        归到哪件事是判断，判断留给人点）。
+                        只在评过之后摆：没评之前这一场还没「成」，挂上去的是半场。 */}
+                    {verdict && sid !== null ? (
+                      <AttachToThread kind="session" ref={String(sid)} className="inline-flex" />
                     ) : null}
                     {ended && ended.nearby.length > 0 ? (
                       <span className="text-[11px] text-neutral-400">
@@ -2685,6 +3089,8 @@ export default function TutorPage() {
                       </span>
                     ) : null}
                   </div>
+                  </>
+                  )}
                   {/* 讲法快捷指令：一听没跟上时最常见的四句，一键发出。
                       最后「考我一题」是反转——让它出题，不是继续听讲。 */}
                   <div className="flex flex-wrap items-center gap-1.5 pb-1.5">

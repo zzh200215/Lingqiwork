@@ -3,10 +3,28 @@ import { Link, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import {
+  Columns2,
+  Eye,
+  FileText,
+  Headphones,
+  ImagePlus,
+  Layers,
+  List,
+  MessageSquare,
+  type LucideIcon,
+  Pencil,
+  PenLine,
+  Podcast,
+  ScrollText,
+  Sparkles,
+} from 'lucide-react'
 import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
 import FeedbackButtons from './FeedbackButtons'
-import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry } from './api'
+import InjectedLine from './InjectedLine'
+import VoiceTriage from './VoiceTriage'
+import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry, type VoicePending } from './api'
 import { ago } from './reltime'
 import { streamCompose, streamPodcastGenerate, type ReportDraft } from './stream'
 
@@ -17,10 +35,17 @@ interface NoteFile {
   mtime: number
 }
 const ACTION_LABEL: Record<AiAction, string> = {
-  continue: '✍️ AI 续写',
-  polish: '✨ AI 润色',
-  summarize: '📋 AI 摘要',
-  rewrite: '✏️ 选区改写',
+  continue: 'AI 续写',
+  polish: 'AI 润色',
+  summarize: 'AI 摘要',
+  rewrite: '选区改写',
+}
+/** 每个动作一个线性图标——emoji 从 chrome 里退役，语义由图标承担 */
+const ACTION_ICON: Record<AiAction, LucideIcon> = {
+  continue: PenLine,
+  polish: Sparkles,
+  summarize: ScrollText,
+  rewrite: Pencil,
 }
 
 interface SelRange {
@@ -90,6 +115,9 @@ export default function NotesPage() {
     model_id?: string
     filename: string
   } | null>(null)
+  // S1：这次产出吃到了哪份工序（引擎匹配出来的）。手动跑引擎没有运行记录，
+  // 所以它是那条路上唯一的窗口——顺带喂给这次 👍/👎（说得出来才带，说不出就是「不知道」）。
+  const [composeInjected, setComposeInjected] = useState<string[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const composeAbortRef = useRef<AbortController | null>(null)
   const chatAbortRef = useRef<AbortController | null>(null)
@@ -100,6 +128,8 @@ export default function NotesPage() {
 
   const [searchParams, setSearchParams] = useSearchParams()
   const pathParam = searchParams.get('path')
+  // 那一问的载荷（`null` = 还没读到 / 读不到 → 那一块不渲染）
+  const [voice, setVoice] = useState<VoicePending | null>(null)
   // 落地时是否带着 `?path=` —— 带了就由深链 effect 开，没带才自动开第一篇。
   // 用 ref 定格初值：这个判断只该在挂载时做一次。
   const initialHadPath = useRef(!!pathParam)
@@ -110,6 +140,12 @@ export default function NotesPage() {
     return files
   }, [])
 
+  // 那一问（R2 · PLAN5 §3）：还没归类的语音备忘。**拉取式**——页面打开时取一次，
+  // 回答完一份再取一次；失败就整块不渲染（增强不挡路，§4-9）。
+  const refreshVoice = useCallback(() => {
+    api.voiceNotes().then(setVoice).catch(() => setVoice(null))
+  }, [])
+
   useEffect(() => {
     refreshFiles()
       .then((fs) => {
@@ -117,8 +153,9 @@ export default function NotesPage() {
         if (!initialHadPath.current && fs.length) void openNote(fs[0].path)
       })
       .catch((e) => setError(String(e)))
+    refreshVoice()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshFiles])
+  }, [refreshFiles, refreshVoice])
 
   // 深链：`/notes?path=notes/xxx.md`（RAG 引用、知识库命中、复习页都往这跳）。
   // **必须 key 在 search 上**：SPA 里同路由换 path 不会重挂这个组件，挂在 `[]` 上的
@@ -240,12 +277,16 @@ export default function NotesPage() {
     setComposeBusy(true)
     setComposeMsg('在翻你自己的材料…')
     setComposeMeta(null)
+    setComposeInjected([])
     setError('')
     try {
       const r = await streamCompose(
         topic.trim(),
         (event, data) => {
-          if (event === 'sources')
+          if (event === 'skills')
+            // S1：命中即注入。没命中这一帧根本不发——所以这里不会被清成「无」
+            setComposeInjected(((data.skills ?? []) as unknown[]).map(String))
+          else if (event === 'sources')
             setComposeMsg(
               `取到 ${(data.sources as unknown[] | undefined)?.length ?? 0} 条材料，成文中…`
             )
@@ -707,7 +748,17 @@ export default function NotesPage() {
               title="从你自己的材料（知识库 / 长期记忆 / 日记）生成一篇笔记"
               className="w-full rounded-md border border-violet-300 px-2 py-1 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
             >
-              {composeBusy ? '🪄 生成中…' : '🪄 从我的材料生成'}
+              {composeBusy ? (
+                <>
+                  <Sparkles className="mr-1 inline h-3 w-3" />
+                  生成中…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="mr-1 inline h-3 w-3" />
+                  从我的材料生成
+                </>
+              )}
             </button>
             <p className="pt-1 text-[10px] leading-relaxed text-neutral-400">
               {composeMsg || 'vault 全部 .md · 自动进 RAG 索引'}
@@ -722,11 +773,15 @@ export default function NotesPage() {
             <input
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}
-              placeholder="🔍 全文搜索笔记…"
+              placeholder="全文搜索笔记…"
               className="w-full rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
             />
           </div>
           <div className="flex-1 overflow-y-auto px-2 pb-3">
+            {/* 那一问（R2 · PLAN5 §3）：语音备忘是材料还是工作留痕。搜索时让位给结果 */}
+            {searchQ.trim() ? null : (
+              <VoiceTriage v={voice} onChanged={refreshVoice} onOpen={(p) => void openNote(p)} />
+            )}
             {searchQ.trim() ? (
               <>
                 <p className="px-2 pb-1 text-[10px] uppercase tracking-wider text-neutral-400">
@@ -739,7 +794,8 @@ export default function NotesPage() {
                     className="mb-1 block w-full rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800/70"
                   >
                     <span className="block truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
-                      📄 {h.path}
+                      <FileText className="mr-1 inline h-3 w-3 text-neutral-400" />
+                      {h.path}
                       <span className="ml-1 text-[10px] text-violet-500">×{h.count}</span>
                     </span>
                     <span className="mt-0.5 line-clamp-2 block text-[11px] leading-snug text-neutral-400">
@@ -768,7 +824,8 @@ export default function NotesPage() {
                         }`}
                       >
                         <button className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => openNote(f.path)}>
-                          <span className="truncate">📄 {f.path}</span>
+                          <FileText className="h-3 w-3 shrink-0 text-neutral-400" />
+                          <span className="truncate">{f.path}</span>
                         </button>
                         <span className="ml-1 shrink-0 text-[10px] text-neutral-400">{relTime(f.mtime)}</span>
                         <button
@@ -806,13 +863,13 @@ export default function NotesPage() {
                   key={m}
                   onClick={() => setViewMode(m)}
                   title={m === 'edit' ? '编辑' : m === 'split' ? '分屏' : '预览'}
-                  className={`px-2 py-1 text-xs transition-colors ${
+                  className={`px-2 py-1 transition-colors ${
                     viewMode === m
                       ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300'
                       : 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200'
                   }`}
                 >
-                  {m === 'edit' ? '✏️' : m === 'split' ? '⊞' : '👁'}
+                  {m === 'edit' ? <Pencil className="h-3.5 w-3.5" /> : m === 'split' ? <Columns2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 </button>
               ))}
             </div>
@@ -825,15 +882,23 @@ export default function NotesPage() {
                   : 'border-neutral-200 text-neutral-500 hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400'
               }`}
             >
-              ☰ 大纲
+              <List className="mr-1 inline h-3 w-3" />
+              大纲
             </button>
             {composeMeta ? (
-              <FeedbackButtons
-                kind="compose"
-                promptSha={composeMeta.prompt_sha}
-                modelId={composeMeta.model_id}
-                artifactRef={composeMeta.filename}
-              />
+              <>
+                <InjectedLine
+                  names={composeInjected}
+                  className="shrink-0 text-[11px] text-teal-700 dark:text-teal-300"
+                />
+                <FeedbackButtons
+                  kind="compose"
+                  promptSha={composeMeta.prompt_sha}
+                  modelId={composeMeta.model_id}
+                  artifactRef={composeMeta.filename}
+                  injected={composeInjected}
+                />
+              </>
             ) : null}
             <span className="ml-auto shrink-0 text-[11px] text-neutral-400">
               {flash ? (
@@ -841,7 +906,7 @@ export default function NotesPage() {
               ) : aiBusy ? (
                 `${ACTION_LABEL[aiBusy]} 中…`
               ) : imgBusy ? (
-                '🖼️ 生成配图中…'
+                '生成配图中…'
               ) : saving ? (
                 '保存中…'
               ) : dirty ? (
@@ -861,23 +926,37 @@ export default function NotesPage() {
               </button>
             ) : (
               <>
-                {(['continue', 'polish', 'summarize'] as AiAction[]).map((a) => (
-                  <button
-                    key={a}
-                    onClick={() => runAi(a)}
-                    disabled={!activePath || imgBusy}
-                    className="shrink-0 rounded-md border border-violet-200 px-2 py-1 text-xs text-violet-600 transition-colors hover:border-violet-400 hover:bg-violet-50 disabled:opacity-40 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
-                  >
-                    {ACTION_LABEL[a]}
-                  </button>
-                ))}
+                {(['continue', 'polish', 'summarize'] as AiAction[]).map((a) => {
+                  const Icon = ACTION_ICON[a]
+                  return (
+                    <button
+                      key={a}
+                      onClick={() => runAi(a)}
+                      disabled={!activePath || imgBusy}
+                      className="shrink-0 rounded-md border border-violet-200 px-2 py-1 text-xs text-violet-600 transition-colors hover:border-violet-400 hover:bg-violet-50 disabled:opacity-40 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                    >
+                      <Icon className="mr-1 inline h-3 w-3" />
+                      {ACTION_LABEL[a]}
+                    </button>
+                  )
+                })}
                 <button
                   onClick={insertImage}
                   disabled={!activePath || imgBusy}
                   title="按描述生成一张图片并插入光标处"
                   className="shrink-0 rounded-md border border-fuchsia-200 px-2 py-1 text-xs text-fuchsia-600 transition-colors hover:border-fuchsia-400 hover:bg-fuchsia-50 disabled:opacity-40 dark:border-fuchsia-500/30 dark:text-fuchsia-300 dark:hover:bg-fuchsia-500/10"
                 >
-                  {imgBusy ? '🖼️ 生成中…' : '🖼️ 配图'}
+                  {imgBusy ? (
+                    <>
+                      <ImagePlus className="mr-1 inline h-3 w-3" />
+                      生成中…
+                    </>
+                  ) : (
+                    <>
+                      <ImagePlus className="mr-1 inline h-3 w-3" />
+                      配图
+                    </>
+                  )}
                 </button>
                 <button
                   onClick={() => setChatOpen((v) => !v)}
@@ -889,7 +968,8 @@ export default function NotesPage() {
                       : 'border-sky-200 text-sky-600 hover:border-sky-400 hover:bg-sky-50 dark:border-sky-500/30 dark:text-sky-300 dark:hover:bg-sky-500/10'
                   }`}
                 >
-                  💬 对话
+                  <MessageSquare className="mr-1 inline h-3 w-3" />
+                  对话
                 </button>
                 <button
                   onClick={togglePod}
@@ -901,7 +981,8 @@ export default function NotesPage() {
                       : 'border-amber-200 text-amber-600 hover:border-amber-400 hover:bg-amber-50 dark:border-amber-500/30 dark:text-amber-300 dark:hover:bg-amber-500/10'
                   }`}
                 >
-                  🎙 播客
+                  <Podcast className="mr-1 inline h-3 w-3" />
+                  播客
                 </button>
                 <button
                   onClick={toggleCards}
@@ -913,7 +994,8 @@ export default function NotesPage() {
                       : 'border-violet-200 text-violet-600 hover:border-violet-400 hover:bg-violet-50 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10'
                   }`}
                 >
-                  🎴 出卡
+                  <Layers className="mr-1 inline h-3 w-3" />
+                  出卡
                 </button>
               </>
             )}
@@ -944,7 +1026,8 @@ export default function NotesPage() {
                   title="把选中的部分挖成填空卡（不调模型）"
                   className="rounded-full border border-sky-300 px-2 py-0.5 text-[11px] text-sky-600 transition-colors hover:bg-sky-50 disabled:opacity-50 dark:border-sky-500/50 dark:text-sky-300 dark:hover:bg-sky-500/10"
                 >
-                  🎴 挖空
+                  <Layers className="mr-1 inline h-3 w-3" />
+                  挖空
                 </button>
                 <button
                   onClick={() => setSelRange(null)}
@@ -1064,7 +1147,8 @@ export default function NotesPage() {
               <div className="mx-4 mb-3 rounded-lg border border-violet-200 bg-violet-50/70 p-3 dark:border-violet-500/30 dark:bg-violet-500/10">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-violet-700 dark:text-violet-300">
                   <span>
-                    ✏️ 改写预览 · 原 {rewrite.end - rewrite.start} 字 → 新 {rewrite.text.length} 字
+                    <Pencil className="mr-1 inline h-3 w-3" />
+                    改写预览 · 原 {rewrite.end - rewrite.start} 字 → 新 {rewrite.text.length} 字
                   </span>
                   <div className="flex gap-2">
                     <button
@@ -1112,7 +1196,10 @@ export default function NotesPage() {
         {chatOpen && (
           <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
             <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
-              <h2 className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">💬 笔记对话</h2>
+              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+                <MessageSquare className="h-3.5 w-3.5" />
+                笔记对话
+              </h2>
               <div className="flex items-center gap-2">
                 {chatMsgs.length > 0 && !chatBusy && (
                   <button
@@ -1209,7 +1296,10 @@ export default function NotesPage() {
         {podOpen && (
           <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
             <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
-              <h2 className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">🎙 双人播客</h2>
+              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+                <Podcast className="h-3.5 w-3.5" />
+                双人播客
+              </h2>
               <button
                 onClick={togglePod}
                 className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
@@ -1289,7 +1379,17 @@ export default function NotesPage() {
                 disabled={podBusy || !podSources.length}
                 className="mt-2 w-full rounded-md bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 py-1.5 text-xs font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
               >
-                {podBusy ? `🎙 ${podStage}…` : '🎙 生成播客'}
+                {podBusy ? (
+                  <>
+                    <Podcast className="mr-1 inline h-3 w-3" />
+                    {podStage}…
+                  </>
+                ) : (
+                  <>
+                    <Podcast className="mr-1 inline h-3 w-3" />
+                    生成播客
+                  </>
+                )}
               </button>
               {podMsg && <p className="mt-2 text-[11px] text-red-500">{podMsg}</p>}
             </div>
@@ -1297,12 +1397,13 @@ export default function NotesPage() {
               {podList.map((p) => (
                 <div
                   key={p.id}
-                  className="rounded-lg border border-neutral-200/80 bg-white/80 p-2.5 dark:border-neutral-800 dark:bg-neutral-900/60"
+                  className="wb-card p-2.5"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
-                        🎧 {p.title}
+                      <p className="flex items-center gap-1.5 truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
+                        <Headphones className="h-3 w-3 shrink-0 text-neutral-400" />
+                        {p.title}
                       </p>
                       <p className="mt-0.5 text-[10px] text-neutral-400">
                         {p.turns} 轮 · {Math.floor(p.duration_sec / 60)}分{Math.round(p.duration_sec % 60)}秒 ·{' '}
@@ -1356,8 +1457,9 @@ export default function NotesPage() {
         {cardsOpen && activePath && (
           <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
             <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2 dark:border-neutral-800/80">
-              <h2 className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-                🎴 出复习卡
+              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+                <Layers className="h-3.5 w-3.5" />
+                出复习卡
               </h2>
               <button
                 onClick={() => setCardsOpen(false)}

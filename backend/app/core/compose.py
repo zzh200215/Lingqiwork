@@ -199,12 +199,20 @@ async def run(
         "kb": sum(1 for s in sources if s.get("kind") == "kb"),
     }
 
+    # S1 引擎吃 skill：匹配是确定性的、跑在引擎自己的 `run()` 里（`core/skill_match.py`）；
+    # 没命中就一个字都不多。手动这条路没有运行记录，所以注入清单随 SSE 事件给界面。
+    from app.core import skill_match
+
+    inj = skill_match.injection(topic)
+    if inj["names"]:
+        yield "skills", skill_match.event_data(inj)
+
     yield "writing", {}
     rep = None
     async for _ev, _payload in _report.synthesize_streaming(
         topic,
         sources,
-        _SYNTH_PROMPT,
+        skill_match.with_skills(_SYNTH_PROMPT, inj),
         model_id,
         stream_fn=stream_fn,
         native_fn=native_fn,

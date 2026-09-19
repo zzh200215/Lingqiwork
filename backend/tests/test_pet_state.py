@@ -51,7 +51,9 @@ def scratch(monkeypatch):
 def _mk_messages(scratch, stamps: list[str]) -> None:
     conn = sqlite3.connect(ps.settings.db_path)
     try:
-        conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, created_at TEXT)")
+        # `IF NOT EXISTS`：同一条用例里想换一批消息时，先 `_clear_messages` 再灌，
+        # 不必为了建表这件事新开一条用例（夜猫子那条用例要正反两组数据）。
+        conn.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, created_at TEXT)")
         conn.executemany("INSERT INTO messages (created_at) VALUES (?)", [(s,) for s in stamps])
         conn.commit()
     finally:
@@ -190,6 +192,115 @@ def test_busy_beats_the_path():
     st = ps.compute({"busy": True, "path": "/tutor"}, NOON)
     assert st["mode"] == "busy"
     assert st["action"] == "running-right"
+
+
+# ---------- 有活停着等你（P4 补的那一格）----------
+
+
+def test_gated_beats_busy():
+    """两件事同时为真时，**需要你的那件**先说话。
+
+    「有活在跑」不需要你，「有活停着等你」需要——顺序反了就成了「它忙着呢」。
+    """
+    st = ps.compute({"gated": 1, "busy": True, "path": "/work"}, NOON)
+    assert st["mode"] == "gated"
+    assert st["action"] == "waiting"
+    assert "等你点头" in st["line"]
+
+
+def test_celebrating_still_beats_gated():
+    """刚交出一份成品是十分钟的事，卡点是持久的事实——先喊成品那句。"""
+    assert ps.compute({"gated": 1, "fresh_output_min": 1}, NOON)["mode"] == "celebrating"
+
+
+def test_the_gated_line_does_not_count_what_you_owe():
+    """**不报件数**：一报就成了「你还欠 N 件」的口吻，那是这个仓库封存过的机制。"""
+    one = ps.compute({"gated": 1}, NOON)["line"]
+    three = ps.compute({"gated": 3}, NOON)["line"]
+    assert one == three == "有一步停着，等你点头。"
+
+
+def test_no_gate_is_not_a_gate():
+    assert ps.compute({"gated": 0, "path": "/work"}, NOON)["mode"] == "working"
+    assert ps.compute({"path": "/work"}, NOON)["mode"] == "working"
+
+
+def test_a_running_task_becomes_gated_at_the_gate_status(scratch):
+    """状态串**只有 `tasks._GATE_STATUS` 一份**；这条走真表，锁住那个值没写错。"""
+    from app.core.tasks import _GATE_STATUS
+
+    start, _ = ps._utc_day_bounds(NOON)
+    when = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat(sep=" ")
+    _mk_task_runs(scratch, [(when, _GATE_STATUS)])
+    st = ps.snapshot(now=NOON)
+    assert st["mode"] == "gated"
+    assert st["action"] == "waiting"
+    assert st["gated"] == 1
+
+
+# ---------- 在跑什么：`task_runs` 看不到的那一半 ----------
+
+
+def test_a_running_engine_is_busy_and_names_itself(scratch):
+    """页面点出来的六个引擎**不写 `task_runs`**，但它们正是「有活正在跑」的真凭据。
+
+    （`inflight` 是进程内状态：跑完就空，重启即清。）
+    """
+    from app.core import inflight
+
+    assert inflight.try_acquire("recap")
+    try:
+        st = ps.snapshot(now=NOON)
+    finally:
+        inflight.release("recap")
+    assert st["mode"] == "busy"
+    assert st["busy_with"] == "复盘"  # 标签来自 `mcp._ARTIFACT_KINDS`，不另抄一份
+    assert "复盘正在跑" in st["line"]
+
+
+def test_engine_label_falls_back_to_the_key():
+    assert ps.engine_label("who-knows") == "who-knows"
+
+
+def test_the_generic_busy_line_is_kept_for_nameless_runs(scratch):
+    """定时任务那一跳没有名字（`task_runs` 只知道有一行在跑）——退回一句泛的。"""
+    start, _ = ps._utc_day_bounds(NOON)
+    when = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat(sep=" ")
+    _mk_task_runs(scratch, [(when, "running")])
+    st = ps.snapshot(now=NOON)
+    assert st["busy_with"] == ""
+    assert st["line"] == "活正在跑，我去盯着。"
+
+
+def test_the_fingerprint_changes_when_work_starts_and_stops(scratch):
+    """指纹只回答「有没有变化」——它是事件流决定要不要叫醒界面的依据。"""
+    from app.core import inflight
+
+    idle = ps.work_fingerprint(now=NOON)
+    assert ps.work_fingerprint(now=NOON) == idle  # 没变就是没变
+    assert inflight.try_acquire("decide")
+    try:
+        running = ps.work_fingerprint(now=NOON)
+    finally:
+        inflight.release("decide")
+    assert running != idle and "decide" in running
+    assert ps.work_fingerprint(now=NOON) == idle  # 跑完了又回到原样
+
+
+def test_the_fingerprint_sees_a_gate(scratch):
+    from app.core.tasks import _GATE_STATUS
+
+    start, _ = ps._utc_day_bounds(NOON)
+    when = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat(sep=" ")
+    _mk_task_runs(scratch, [(when, _GATE_STATUS)])
+    assert "gated:1" in ps.work_fingerprint(now=NOON)
+
+
+def test_a_broken_db_does_not_break_the_fingerprint(scratch, monkeypatch):
+    junk = scratch / "junk.db"
+    junk.write_text("this is not a database", encoding="utf-8")
+    monkeypatch.setattr(ps.settings, "db_path", junk)
+    assert isinstance(ps.work_fingerprint(now=NOON), str)  # 不抛，最多多刷一次
 
 
 def test_being_away_beats_the_path():
@@ -496,7 +607,7 @@ def test_state_route_returns_the_documented_shape(scratch):
     from app.routers import pet as pet_router
 
     out = asyncio.run(pet_router.pet_state(idle_sec=None, path="/work"))
-    assert set(out) == {"mode", "action", "energy", "line", "path"}
+    assert set(out) == {"mode", "action", "energy", "line", "path", "busy_with", "gated"}
     assert out["mode"] == "working"
 
 
@@ -538,7 +649,7 @@ def test_state_endpoint_is_served_over_http(scratch, monkeypatch):
     body = r.json()
     assert body["mode"] == "learning"
     assert body["action"] == "review"
-    assert set(body) == {"mode", "action", "energy", "line", "path"}
+    assert set(body) == {"mode", "action", "energy", "line", "path", "busy_with", "gated"}
 
 
 def test_state_endpoint_is_token_guarded(scratch, monkeypatch):
@@ -551,3 +662,301 @@ def test_state_endpoint_is_token_guarded(scratch, monkeypatch):
     from app.main import app
 
     assert TestClient(app).get("/api/pet/state").status_code == 401
+
+
+# ---------- 事件流（SSE）：有事发生就立刻说 ----------
+
+
+def _seed_event(scratch, text: str) -> int:
+    """往 `pet_events` 塞一行台词，返回它的 id（`since_id` 就是按它筛的）。"""
+    conn = sqlite3.connect(ps.settings.db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pet_events "
+            "(id INTEGER PRIMARY KEY, created_at TEXT, kind TEXT, text TEXT, detail TEXT, "
+            "name TEXT DEFAULT '')"
+        )
+        cur = conn.execute(
+            "INSERT INTO pet_events (created_at, kind, text, detail) VALUES (?,?,?,?)",
+            (datetime.now().astimezone().isoformat(timespec="seconds"), "task_done", text, ""),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def _fast_stream(monkeypatch) -> None:
+    """把 2 秒的空转压成 10 毫秒——这条流是**无限**的，测试只取头几帧。"""
+    from app.routers import pet as pet_router
+
+    monkeypatch.setattr(pet_router, "PET_STREAM_POLL", 0.01)
+    monkeypatch.setattr(pet_router, "PET_STREAM_PING", 0.03)
+
+
+def _frames(gen, n: int) -> list[str]:
+    async def _go() -> list[str]:
+        out: list[str] = []
+        try:
+            async for f in gen:
+                out.append(f)
+                if len(out) >= n:
+                    break
+        finally:
+            await gen.aclose()
+        return out
+
+    return asyncio.run(_go())
+
+
+def test_the_stream_says_hello_with_the_poll_interval(scratch, monkeypatch):
+    from app.routers import pet as pet_router
+
+    _fast_stream(monkeypatch)
+    first = _frames(pet_router._pet_stream(0), 1)[0]
+    assert first.startswith("event: hello\n")
+    assert '"poll"' in first
+
+
+def test_the_stream_pushes_new_lines_in_the_order_they_were_said(scratch, monkeypatch):
+    """两条新台词一次送出去时**按说的顺序**（`feed` 是最新在前，直接转发会把话倒着说）。"""
+    from app.routers import pet as pet_router
+
+    _fast_stream(monkeypatch)
+    _seed_event(scratch, "第一句")
+    _seed_event(scratch, "第二句")
+
+    frames = _frames(pet_router._pet_stream(0), 3)
+    assert frames[0].startswith("event: hello")
+    assert "第一句" in frames[1] and "第二句" in frames[2]
+
+
+def test_the_stream_does_not_replay_what_you_already_have(scratch, monkeypatch):
+    """`since_id` 之后才有话说；没有新东西时只发注释心跳（客户端会跳过它）。"""
+    from app.routers import pet as pet_router
+
+    _fast_stream(monkeypatch)
+    last = _seed_event(scratch, "已经看过了")
+    frames = _frames(pet_router._pet_stream(last), 2)
+    assert "已经看过了" not in "".join(frames)
+    assert frames[1].startswith(": ping")
+
+
+def test_the_stream_tells_the_client_when_work_starts(scratch, monkeypatch):
+    """有活开始跑 → 一条 `work` ——界面据此立刻重算状态，不用等下一个 15 秒。"""
+    from app.core import inflight
+
+    from app.routers import pet as pet_router
+
+    _fast_stream(monkeypatch)
+
+    async def _go() -> list[str]:
+        gen = pet_router._pet_stream(0)
+        out = [await gen.__anext__()]  # hello（此刻没有活）
+        assert inflight.try_acquire("research")
+        try:
+            out.append(await gen.__anext__())  # work（有活开始跑了）
+        finally:
+            inflight.release("research")
+            await gen.aclose()
+        return out
+
+    frames = asyncio.run(_go())
+    assert frames[0].startswith("event: hello")
+    assert frames[1].startswith("event: work")
+    assert "research" in frames[1]
+
+
+def test_the_stream_route_is_mounted_and_guarded(scratch, monkeypatch):
+    """路由真的挂上了、真的过鉴权。
+
+    **通的那半条刻意不在这儿验**：`TestClient` 会把整个响应体收完才把控制权还给你，
+    而这条流是无限的——`next(iter_lines())` 就是挂在那儿（实测 300 秒不返回）。
+    生成器本身由上面几条直接驱动（`_frames`）覆盖；浏览器那条路与既有的
+    `/api/pet/chat` 是同一种 `StreamingResponse`，那条已经在用。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.core import auth
+
+    monkeypatch.setenv("WB_API_TOKEN", "test-token-123")
+    monkeypatch.setattr(auth, "_cached", None)
+    from app.main import app
+
+    assert "/api/pet/stream" in app.openapi()["paths"]  # 走 FastAPI 自己的路由表
+    assert TestClient(app).get("/api/pet/stream").status_code == 401
+
+
+# ---------- P2 · 夜猫子信号：连着三个晚上过十点，它就蔫 ----------
+#
+# 口径两条，都在这里钉死：**只看已结束的日子**（今天 22:00 后这件事今天还没发生），
+# **只看 `messages` 一个来源**（一个模块里「活跃」只有一个意思）。
+
+
+def _at(days_ago: int, hour: int, minute: int = 0) -> str:
+    """`days_ago` 天前的**本地** `hour:minute` → 库里那种 naive UTC 文本。"""
+    d = (datetime.now().astimezone() - timedelta(days=days_ago)).replace(
+        hour=hour, minute=minute, second=0, microsecond=0
+    )
+    return _utc_text(d)
+
+
+def _clear_messages(scratch) -> None:
+    """同一条用例里要换一批消息时用：`_mk_messages` 建表不带 `IF NOT EXISTS`。"""
+    conn = sqlite3.connect(ps.settings.db_path)
+    try:
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_is_late_night_reads_the_local_hour():
+    """22:00 这条线按**本地**时刻判（库里存的是 naive UTC，差一个时区就会判反）。"""
+    late = datetime(2026, 9, 14, 22, 0).astimezone(timezone.utc).replace(tzinfo=None)
+    early = datetime(2026, 9, 14, 21, 59).astimezone(timezone.utc).replace(tzinfo=None)
+    assert ps.is_late_night(late) is True
+    assert ps.is_late_night(early) is False
+    # 那天一条活动都没有 → **不算**：没开过工作台的那天，凭什么说人家熬夜
+    assert ps.is_late_night(None) is False
+
+
+def test_is_night_owl_needs_three_nights_in_a_row():
+    assert ps.is_night_owl([True, True, True]) is True
+    assert ps.is_night_owl([True, True, False]) is False  # 中间断一晚就不算
+    assert ps.is_night_owl([False, True, True]) is False
+    assert ps.is_night_owl([True, True]) is False  # 还不够三天
+    assert ps.is_night_owl([]) is False
+
+
+def test_is_night_owl_only_looks_at_the_last_three():
+    """更早熬过的夜不算数——作息说的是**最近**，不是历史。"""
+    assert ps.is_night_owl([False, False, True, True, True]) is True
+
+
+def test_three_late_nights_and_it_slumps(scratch):
+    _mk_messages(scratch, [_at(1, 23), _at(2, 22, 30), _at(3, 23, 45)])
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+
+    st = ps.snapshot(now=now)
+    assert st["mode"] == "night_owl"
+    assert st["action"] == "failed"  # 蔫：与 `tired` 同一个姿势，靠台词区分
+    assert "蔫" in st["line"]
+    # 事实是无主语的陈述，**没有劝、没有算账**
+    for bad in ("早睡", "该睡", "还欠", "连续 3", "注意身体"):
+        assert bad not in st["line"]
+
+
+def test_tonight_does_not_count_until_it_is_over(scratch):
+    """今天 22:00 之后这件事，在今天还没过完时不算一格——不然这个信号白天永远为假。"""
+    _mk_messages(scratch, [_at(0, 23), _at(1, 23), _at(2, 23)])  # 缺的是前天那一格
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+    assert ps.snapshot(now=now)["mode"] != "night_owl"
+    assert ps.snapshot(now=now)["mode"] == "sleepy" or ps.snapshot(now=now)["mode"] == "idle"
+
+
+def test_a_quiet_evening_breaks_the_streak(scratch):
+    """前天/昨天都晚，大前天十点前就收了 → 断了一晚，不算。"""
+    _mk_messages(scratch, [_at(1, 23), _at(2, 23), _at(3, 20)])
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+    assert ps.snapshot(now=now)["mode"] != "night_owl"
+
+
+def test_a_day_with_no_activity_at_all_breaks_the_streak(scratch):
+    _mk_messages(scratch, [_at(1, 23), _at(3, 23)])  # 前天一条都没有
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+    assert ps.snapshot(now=now)["mode"] != "night_owl"
+
+
+def test_ten_pm_sharp_counts_and_2159_does_not(scratch):
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+    _mk_messages(scratch, [_at(1, 22), _at(2, 22), _at(3, 22)])
+    assert ps.snapshot(now=now)["mode"] == "night_owl"
+
+    _clear_messages(scratch)
+    _mk_messages(scratch, [_at(1, 21, 59), _at(2, 21, 59), _at(3, 21, 59)])
+    assert ps.snapshot(now=now)["mode"] != "night_owl"
+
+
+def test_night_owl_beats_tired_but_not_tonight(scratch):
+    """顺序即优先级：连着晚睡压过「今天坐太久了」，但压不过「此刻就是深夜」。"""
+    assert ps.compute({"night_owl": True, "active_span_min": 600}, NOON)["mode"] == "night_owl"
+    late = datetime(2026, 9, 14, 23, 30)
+    assert ps.compute({"night_owl": True, "active_span_min": 600}, late)["mode"] == "sleepy"
+    # 有活停着等你／在跑，照样盖过它
+    assert ps.compute({"night_owl": True, "gated": 1}, NOON)["mode"] == "gated"
+    assert ps.compute({"night_owl": True, "busy": True}, NOON)["mode"] == "busy"
+
+
+def test_the_night_owl_says_nothing_out_loud(scratch):
+    """🚩 纯派生、**不发通知**：算一遍状态，宠物那边一个字都不该多出来。"""
+    _mk_messages(scratch, [_at(1, 23), _at(2, 23), _at(3, 23)])
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+    assert ps.snapshot(now=now)["mode"] == "night_owl"
+    assert pet.feed(limit=20) == []
+
+
+# ---------- 久别重逢（P5）：好几天没来，它认得这趟是回来 ----------
+
+
+def test_returning_beats_the_path_and_idle():
+    st = ps.compute({"away_days": 5, "away_topic": "asyncio 事件循环", "path": "/work"}, NOON)
+    assert st["mode"] == "returning"
+    assert st["action"] == "waving"  # 挥手是问候的姿势——和 feed 事件共用同一个素材
+    assert "5 天没见" in st["line"]
+    assert "asyncio 事件循环" in st["line"]
+
+
+def test_returning_without_a_topic_stays_dry():
+    """拆点不在离开前后那阵子就不提——「N 天没见」单摆着，也不替记忆编一句。"""
+    assert ps.compute({"away_days": 12}, NOON)["line"] == "12 天没见。"
+
+
+def test_busy_still_beats_returning():
+    assert ps.compute({"away_days": 5, "busy": True}, NOON)["mode"] == "busy"
+    assert ps.compute({"away_days": 5, "gated": 1}, NOON)["mode"] == "gated"
+    assert ps.compute({"away_days": 5, "focus_running": True}, NOON)["mode"] == "focusing"
+
+
+def test_mode_trusts_the_collector_on_away_days():
+    """「几天算久别」的门槛在 `_away`（采集层）；`mode()` 只认「有没有这个信号」。"""
+    assert ps.compute({"away_days": 2}, NOON)["mode"] == "returning"
+
+
+def test_five_days_away_becomes_a_reunion(scratch):
+    """真库采集：最后一次活动是 5 天前 → returning，并带上「走的时候在拆什么」。"""
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+    _mk_messages(scratch, [_utc_text(now - timedelta(days=5))])
+    # 拆点就发生在离开那天——它才有资格当「走的时候你在拆的」
+    conn = sqlite3.connect(ps.settings.db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS digest_points "
+            "(id INTEGER PRIMARY KEY, point TEXT, created_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO digest_points (point, created_at) VALUES (?,?)",
+            ("asyncio 事件循环", _utc_text(now - timedelta(days=5) + timedelta(minutes=30))),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    st = ps.snapshot(now=now)
+    assert st["mode"] == "returning"
+    assert "5 天没见" in st["line"]
+    assert "asyncio 事件循环" in st["line"]
+
+
+def test_away_threshold_is_two_days(scratch):
+    """36 小时前还在 → 不算重逢（那叫摸鱼）。门槛钉在 `AWAY_DAYS=2` 天。"""
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+    _mk_messages(scratch, [_utc_text(now - timedelta(hours=36))])
+    assert ps.snapshot(now=now)["mode"] != "returning"
+
+
+def test_chatting_with_the_pet_counts_as_showing_up(scratch):
+    """跟零柒聊过天就算来过——只聊天不记笔记的人，不该被说「没见」。"""
+    now = datetime.now().astimezone().replace(hour=14, minute=0, second=0, microsecond=0)
+    _mk_messages(scratch, [_utc_text(now - timedelta(days=9))])
+    pet.save_chat_turn("在吗", "在。")  # 刚聊过：pet_chats 才是最近的来过
+    assert ps.snapshot(now=now)["mode"] != "returning"

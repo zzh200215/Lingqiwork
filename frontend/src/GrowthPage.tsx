@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import EChart from './EChart'
 import PageShell from './PageShell'
 import {
   api,
@@ -32,6 +33,32 @@ const PART_ICON: Record<string, string> = {
 
 // 心情 1–5 的表情，index 0 = 1 分（与宠物面板同一个量表）。
 const MOOD_FACES = ['😞', '😕', '😐', '🙂', '😄']
+
+/** EXP 进度环：hero 卡右边的那个圈。SVG 手绘——一个百分比不值得拉起 echarts。 */
+function ExpRing({ progress }: { progress: number }) {
+  const r = 30
+  const c = 2 * Math.PI * r
+  const clamped = Math.max(0, Math.min(1, progress))
+  return (
+    <svg viewBox="0 0 72 72" className="h-16 w-16 shrink-0" role="img" aria-label={`升级进度 ${Math.round(clamped * 100)}%`}>
+      <circle cx="36" cy="36" r={r} fill="none" strokeWidth="6" className="stroke-neutral-200/80 dark:stroke-neutral-800" />
+      <circle
+        cx="36"
+        cy="36"
+        r={r}
+        fill="none"
+        strokeWidth="6"
+        strokeLinecap="round"
+        strokeDasharray={`${c * clamped} ${c}`}
+        transform="rotate(-90 36 36)"
+        className="stroke-violet-500 transition-[stroke-dasharray] duration-500"
+      />
+      <text x="36" y="40" textAnchor="middle" className="fill-neutral-700 text-[13px] font-semibold dark:fill-neutral-200">
+        {Math.round(clamped * 100)}%
+      </text>
+    </svg>
+  )
+}
 
 function partDetail(key: string, c: Record<string, number>): string {
   if (key === 'learning') return `掌握 ${c.mastered ?? 0} 个 · 教学 ${c.sessions ?? 0} 场`
@@ -97,31 +124,82 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
   const events = mastery?.events ?? []
   const habitRows = (habits?.habits ?? []).filter((h) => h.scheduled)
   const hasAnything = growth.exp > 0
+  // bento：里程碑没有数据时整卡不摆，三联变两联——剩下两张平分一行，不留空洞。
+  const hasMilestones = (room?.things.length ?? 0) > 0
+  const trioSpan = hasMilestones ? 'xl:col-span-4' : 'xl:col-span-6'
+  const hasMood = !!mood && (mood.recent?.length ?? 0) > 0
 
   const body = (
     <>
-      {/* 等级卡：只写累计与「正在靠近」，不写「还差 N」 */}
-      <section className="rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900">
-        <div className="flex items-baseline gap-3">
-          <span className="text-3xl font-semibold tabular-nums">Lv.{growth.level}</span>
-          <span className="text-lg text-neutral-700 dark:text-neutral-200">{growth.title}</span>
-          <div className="flex-1" />
-          <span className="text-sm tabular-nums text-neutral-500 dark:text-neutral-400">
-            累计 EXP {growth.exp}
-          </span>
-        </div>
-        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
-          <div
-            className="h-full rounded-full bg-violet-500 transition-all"
-            style={{ width: `${Math.round(growth.progress * 100)}%` }}
-          />
-        </div>
-        {growth.next_title && (
-          <p className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
-            正在靠近「{growth.next_title}」
-          </p>
-        )}
-      </section>
+      {/* 第一行 bento：等级 hero（8 列）+ EXP 来源条形图（4 列）——
+          「哪条线在养它」一张图说完。卡上只写累计与「正在靠近」，不写「还差 N」。 */}
+      <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
+        <section
+          className={`wb-card-hero flex items-center gap-5 rounded-2xl p-5 ${
+            hasAnything && growth.parts.length > 0 ? 'xl:col-span-8' : 'xl:col-span-12'
+          }`}
+        >
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-3">
+              <span className="text-3xl font-semibold tabular-nums">Lv.{growth.level}</span>
+              <span className="text-lg text-neutral-700 dark:text-neutral-200">{growth.title}</span>
+              <div className="flex-1" />
+              <span className="text-sm tabular-nums text-neutral-500 dark:text-neutral-400">
+                累计 EXP {growth.exp}
+              </span>
+            </div>
+            {growth.next_title && (
+              <p className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+                正在靠近「{growth.next_title}」
+              </p>
+            )}
+            {/* Z4：喂养分布摆成一句事实，就在称号下面。**空串就一个字都不摆**——
+                数不出来时那一行干脆不出现（不猜、不硬凑）；它不评、不夸，也不改称号本身。 */}
+            {growth.flavor ? (
+              <p
+                data-growth-flavor
+                className="mt-2 text-xs text-neutral-500 dark:text-neutral-400"
+              >
+                {growth.flavor}
+              </p>
+            ) : null}
+          </div>
+          <ExpRing progress={growth.progress} />
+        </section>
+
+        {hasAnything && growth.parts.length > 0 ? (
+          <section className="wb-card flex flex-col p-4 xl:col-span-4">
+            <h2 className="pb-1 text-sm font-semibold text-neutral-700 dark:text-neutral-200">EXP 来源</h2>
+            <p className="pb-1 text-[11px] text-neutral-400">哪条线在养它</p>
+            <div className="min-h-0 flex-1">
+              <EChart
+                height={Math.max(140, growth.parts.length * 40)}
+                ariaLabel="EXP 来源分布"
+                option={{
+                  tooltip: { trigger: 'axis' },
+                  grid: { left: 8, right: 36, top: 6, bottom: 6, containLabel: true },
+                  xAxis: { type: 'value' },
+                  yAxis: {
+                    type: 'category',
+                    data: growth.parts.map((p) => p.label),
+                    axisTick: { show: false },
+                  },
+                  series: [
+                    {
+                      type: 'bar',
+                      data: growth.parts.map((p) => p.exp),
+                      barMaxWidth: 13,
+                      itemStyle: { borderRadius: [0, 7, 7, 0] },
+                      // 数字不写在图上——下面那排来源格子已经摆了 +N，同一个数说两遍会互相打架
+                      label: { show: false },
+                    },
+                  ],
+                }}
+              />
+            </div>
+          </section>
+        ) : null}
+      </div>
 
       {!hasAnything && (
         <p className="text-sm text-neutral-400 dark:text-neutral-500">
@@ -129,22 +207,21 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
         </p>
       )}
 
-      {/* 四个来源 */}
+      {/* 来源格子：整行 KPI 排——每条线一块砖，+N 与它的细节在一起。 */}
       {growth.parts.length > 0 && (
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {growth.parts.map((p) => (
-            <div
-              key={p.key}
-              className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
-            >
-              <div className="text-lg">{PART_ICON[p.key] ?? '·'}</div>
-              <div className="mt-1 text-sm font-medium text-neutral-700 dark:text-neutral-200">
+            <div key={p.key} className="wb-card p-4">
+              <span className="wb-chip h-7 w-7 rounded-lg bg-violet-100 text-base text-violet-600 dark:bg-violet-400/15 dark:text-violet-300">
+                {PART_ICON[p.key] ?? '·'}
+              </span>
+              <div className="mt-2 text-sm font-medium text-neutral-700 dark:text-neutral-200">
                 {p.label}
               </div>
-              <div className="mt-1 text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">
+              <div className="mt-1 text-2xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">
                 +{p.exp}
               </div>
-              <div className="mt-0.5 text-[11px] text-neutral-400 dark:text-neutral-500">
+              <div className="mt-0.5 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
                 {partDetail(p.key, growth.counts)}
               </div>
             </div>
@@ -152,158 +229,189 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
         </section>
       )}
 
-      {/* 里程碑：不是聊天流，是**跨过门槛的那些时刻**（第 5 份成品、第一次讲通……）。
-          与小屋是同一份 things——那边看「攒下了什么」，这边看「什么时候攒到的」。 */}
-      {(room?.things.length ?? 0) > 0 && (
-        <section>
+      {/* 中段 bento：里程碑 / 最近搞懂 / 坚持——三块并排（里程碑空则两块对半），
+          各自带空态文案，谁也不孤零零浮在空白里。 */}
+      <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
+        {/* 里程碑：不是聊天流，是**跨过门槛的那些时刻**（第 5 份成品、第一次讲通……）。
+            与小屋是同一份 things——那边看「攒下了什么」，这边看「什么时候攒到的」。 */}
+        {hasMilestones && (
+          <section className={`wb-card flex flex-col p-4 ${trioSpan}`}>
+            <div className="mb-2 flex items-baseline gap-2">
+              <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">里程碑</h2>
+              <div className="flex-1" />
+              <Link to="/companion?tab=room" className="text-xs text-violet-500 hover:underline">
+                去小屋
+              </Link>
+            </div>
+            <ol
+              data-milestones
+              className="ml-1.5 flex-1 space-y-0 border-l border-neutral-200 dark:border-neutral-800"
+            >
+              {room!.things.map((t) => (
+                <li key={t.id} data-milestone={t.id} className="relative pb-3 pl-4 last:pb-0">
+                  <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-violet-400 ring-2 ring-white dark:ring-neutral-950" />
+                  <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                    <span>{t.icon}</span>
+                    <span className="text-neutral-700 dark:text-neutral-200">{t.label}</span>
+                    <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                      {t.detail}
+                    </span>
+                    <span className="ml-auto shrink-0 text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+                      {t.at.slice(0, 10)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+
+        {/* 最近搞懂：学习线的产出 */}
+        <section className={`wb-card flex flex-col p-4 ${trioSpan}`}>
           <div className="mb-2 flex items-baseline gap-2">
-            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">里程碑</h2>
+            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">最近搞懂</h2>
             <div className="flex-1" />
-            <Link to="/companion?tab=room" className="text-xs text-violet-500 hover:underline">
-              去小屋
+            <Link to="/tutor" className="text-xs text-violet-500 hover:underline">
+              去学
             </Link>
           </div>
-          <ol
-            data-milestones
-            className="ml-1.5 space-y-0 border-l border-neutral-200 dark:border-neutral-800"
-          >
-            {room!.things.map((t) => (
-              <li key={t.id} data-milestone={t.id} className="relative pb-3 pl-4 last:pb-0">
-                <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-violet-400 ring-2 ring-white dark:ring-neutral-950" />
-                <div className="flex items-baseline gap-2 text-sm">
-                  <span>{t.icon}</span>
-                  <span className="text-neutral-700 dark:text-neutral-200">{t.label}</span>
-                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
-                    {t.detail}
-                  </span>
+          {events.length === 0 ? (
+            <p className="flex-1 text-sm text-neutral-400 dark:text-neutral-500">
+              还没有一个概念走到「搞懂」——说通两次才算数。
+            </p>
+          ) : (
+            <ul className="-mx-4 flex-1 divide-y divide-neutral-100 dark:divide-neutral-800/70">
+              {events.map((e) => (
+                <li key={e.concept} className="flex items-center gap-2 px-4 py-2.5 text-sm">
+                  <span className="text-neutral-700 dark:text-neutral-200">{e.concept}</span>
+                  {e.from_half && (
+                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400">
+                      从半懂到懂
+                    </span>
+                  )}
                   <div className="flex-1" />
-                  <span className="shrink-0 text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
-                    {t.at.slice(0, 10)}
+                  <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
+                    {e.sessions} 场 · {e.at.slice(0, 10)}
                   </span>
-                </div>
-              </li>
-            ))}
-          </ol>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
-      )}
 
-      {/* 最近搞懂：学习线的产出 */}
-      <section>
-        <div className="mb-2 flex items-baseline gap-2">
-          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">最近搞懂</h2>
-          <div className="flex-1" />
-          <Link to="/tutor" className="text-xs text-violet-500 hover:underline">
-            去学
-          </Link>
-        </div>
-        {events.length === 0 ? (
-          <p className="text-sm text-neutral-400 dark:text-neutral-500">
-            还没有一个概念走到「搞懂」——说通两次才算数。
-          </p>
-        ) : (
-          <ul className="divide-y divide-neutral-100 rounded-xl border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
-            {events.map((e) => (
-              <li key={e.concept} className="flex items-center gap-2 px-4 py-2.5 text-sm">
-                <span className="text-neutral-700 dark:text-neutral-200">{e.concept}</span>
-                {e.from_half && (
-                  <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400">
-                    从半懂到懂
-                  </span>
-                )}
-                <div className="flex-1" />
-                <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
-                  {e.sessions} 场 · {e.at.slice(0, 10)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* 坚持：习惯线。只写累计与真实连续天数，不写「连续 0 天」 */}
-      <section>
-        <div className="mb-2 flex items-baseline gap-2">
-          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">坚持</h2>
-          <div className="flex-1" />
-          <Link to="/review" className="text-xs text-violet-500 hover:underline">
-            去打卡
-          </Link>
-        </div>
-        {habitRows.length === 0 ? (
-          <p className="text-sm text-neutral-400 dark:text-neutral-500">
-            还没有习惯。今日页可以一键播种三条。
-          </p>
-        ) : (
-          <ul className="divide-y divide-neutral-100 rounded-xl border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
-            {habitRows.map((h) => (
-              <li key={h.id} className="flex items-center gap-2 px-4 py-2.5 text-sm">
-                <span>{h.icon}</span>
-                <span className="text-neutral-700 dark:text-neutral-200">{h.name}</span>
-                <div className="flex-1" />
-                {h.streak > 0 && (
-                  <span className="text-xs text-orange-500 dark:text-orange-400">
-                    连续 {h.streak} 天
-                  </span>
-                )}
-                <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
-                  累计 {h.history.length} 天
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* 心情：插件记下的那条线。只画记过的天，不画「漏了几天」 */}
-      {mood && (mood.recent?.length ?? 0) > 0 && (
-        <section>
+        {/* 坚持：习惯线。只写累计与真实连续天数，不写「连续 0 天」 */}
+        <section className={`wb-card flex flex-col p-4 ${trioSpan}`}>
           <div className="mb-2 flex items-baseline gap-2">
-            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">心情</h2>
+            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">坚持</h2>
             <div className="flex-1" />
-            <span className="text-xs text-neutral-400 dark:text-neutral-500">
-              最近 {mood.recent!.length} 天
-            </span>
+            <Link to="/review" className="text-xs text-violet-500 hover:underline">
+              去打卡
+            </Link>
           </div>
-          <div className="flex flex-wrap items-center gap-1 rounded-xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
-            {mood.recent!.map((d) => (
-              <span key={d.day} title={`${d.day} · ${d.value}/${mood.scale ?? 5}`} className="text-lg">
-                {MOOD_FACES[d.value - 1] ?? '·'}
-              </span>
-            ))}
-          </div>
+          {habitRows.length === 0 ? (
+            <p className="flex-1 text-sm text-neutral-400 dark:text-neutral-500">
+              还没有习惯。今日页可以一键播种三条。
+            </p>
+          ) : (
+            <ul className="-mx-4 flex-1 divide-y divide-neutral-100 dark:divide-neutral-800/70">
+              {habitRows.map((h) => (
+                <li key={h.id} className="flex items-center gap-2 px-4 py-2.5 text-sm">
+                  <span>{h.icon}</span>
+                  <span className="text-neutral-700 dark:text-neutral-200">{h.name}</span>
+                  <div className="flex-1" />
+                  {h.streak > 0 && (
+                    <span className="text-xs text-orange-500 dark:text-orange-400">
+                      连续 {h.streak} 天
+                    </span>
+                  )}
+                  <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
+                    累计 {h.history.length} 天
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
-      )}
+      </div>
 
-      {/* 最近交出去：工作线的产出 */}
-      <section>
-        <div className="mb-2 flex items-baseline gap-2">
-          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">最近交出去</h2>
-          <div className="flex-1" />
-          <Link to="/work" className="text-xs text-violet-500 hover:underline">
-            去工作
-          </Link>
-        </div>
-        {outputs.length === 0 ? (
-          <p className="text-sm text-neutral-400 dark:text-neutral-500">
-            还没有交出去的东西。
-          </p>
-        ) : (
-          <ul className="divide-y divide-neutral-100 rounded-xl border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
-            {outputs.map((o) => (
-              <li key={o.path} className="flex items-center gap-2 px-4 py-2.5 text-sm">
-                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                  {o.label}
-                </span>
-                <span className="truncate text-neutral-700 dark:text-neutral-200">{o.title}</span>
-                <div className="flex-1" />
-                <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
-                  {o.date}
-                </span>
-              </li>
-            ))}
-          </ul>
+      {/* 底行 bento：心情曲线 / 最近交出去——心情没记时交出去独占整行，不留空洞。 */}
+      <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
+        {/* 心情：插件记下的那条线。只画记过的天，不画「漏了几天」——
+            2026-09-19 起画成阶梯线（表情进 tooltip），比一排 emoji 多出「走势」这一维。 */}
+        {hasMood && mood && (
+          <section className="wb-card p-4 xl:col-span-6">
+            <div className="mb-2 flex items-baseline gap-2">
+              <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">心情</h2>
+              <div className="flex-1" />
+              <span className="text-xs text-neutral-400 dark:text-neutral-500">
+                最近 {mood.recent!.length} 天
+              </span>
+            </div>
+            <EChart
+              height={150}
+              ariaLabel="最近心情走势"
+              option={{
+                tooltip: {
+                  trigger: 'axis',
+                  formatter: (ps: unknown) => {
+                    const p = Array.isArray(ps) ? (ps[0] as { name: string; value: number }) : null
+                    if (!p) return ''
+                    return `${p.name} · ${MOOD_FACES[p.value - 1] ?? '·'} ${p.value}/${mood.scale ?? 5}`
+                  },
+                },
+                grid: { left: 30, right: 14, top: 12, bottom: 24 },
+                xAxis: {
+                  type: 'category',
+                  data: mood.recent!.map((d) => d.day.slice(5)),
+                  axisTick: { show: false },
+                },
+                yAxis: { type: 'value', min: 1, max: mood.scale ?? 5, minInterval: 1 },
+                series: [
+                  {
+                    type: 'line',
+                    step: 'middle',
+                    data: mood.recent!.map((d) => d.value),
+                    symbolSize: 7,
+                    lineStyle: { width: 2.5 },
+                    areaStyle: { opacity: 0.12 },
+                  },
+                ],
+              }}
+            />
+          </section>
         )}
-      </section>
+
+        {/* 最近交出去：工作线的产出 */}
+        <section className={`wb-card flex flex-col p-4 ${hasMood ? 'xl:col-span-6' : 'xl:col-span-12'}`}>
+          <div className="mb-2 flex items-baseline gap-2">
+            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">最近交出去</h2>
+            <div className="flex-1" />
+            <Link to="/work" className="text-xs text-violet-500 hover:underline">
+              去工作
+            </Link>
+          </div>
+          {outputs.length === 0 ? (
+            <p className="flex-1 text-sm text-neutral-400 dark:text-neutral-500">
+              还没有交出去的东西。
+            </p>
+          ) : (
+            <ul className="-mx-4 divide-y divide-neutral-100 dark:divide-neutral-800/70">
+              {outputs.map((o) => (
+                <li key={o.path} className="flex items-center gap-2 px-4 py-2.5 text-sm">
+                  <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                    {o.label}
+                  </span>
+                  <span className="truncate text-neutral-700 dark:text-neutral-200">{o.title}</span>
+                  <div className="flex-1" />
+                  <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
+                    {o.date}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
     </>
   )
 
@@ -313,7 +421,6 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
     <PageShell
       title="成长"
       description="你和这件事的关系——只累计，不记账。"
-      maxWidth="3xl"
       bodyClassName="space-y-6"
     >
       {body}

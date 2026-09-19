@@ -15,8 +15,9 @@ from app.models import ScheduledTask, TaskRun
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
-# 这一步做什么：跑提示词 / 转写录音 / 把一个成文引擎按表跑一遍（引擎名见 core.tasks）。
-_VALID_ACTIONS = ("prompt", "transcribe") + core.ENGINE_ACTIONS
+# 这一步做什么：跑提示词 / 转写录音（会议闭环的第一步，录音留着） /
+# 转写语音备忘（R2：只留文本、删掉录音） / 把一个成文引擎按表跑一遍（引擎名见 core.tasks）。
+_VALID_ACTIONS = ("prompt", "transcribe", "transcribe_note") + core.ENGINE_ACTIONS
 
 
 def _clean_whitelist(v: str) -> str:
@@ -211,6 +212,8 @@ def _out(t: ScheduledTask) -> dict:
         "require_approval": bool(t.require_approval),
         "action": t.action or "prompt",
         "landing_dir": t.landing_dir or "",
+        # 这条流程处理的是哪件「事」（M2）。工作链起链时写进来，前端拿它给一个「去这件事」的入口。
+        "thread_id": t.thread_id,
         "conversation_id": t.conversation_id,
         "last_run": t.last_run.isoformat(timespec="seconds") if t.last_run else None,
         "last_status": t.last_status,
@@ -242,6 +245,8 @@ def _run_out(r: TaskRun) -> dict:
         "grounded": r.grounded,
         "judge_reason": r.judge_reason or "",
         "run_dir": r.run_dir or "",
+        # S2（PLAN3 §9.3 决策7）：这趟运行在处理哪件「事」——「读成技能」按它把三步合成一次输入
+        "thread_id": r.thread_id,
         "log": log_entries,
     }
 
@@ -349,20 +354,74 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 class RunIn(BaseModel):
     """手动起一次运行时的可选参数。`topic` 覆盖行里的 prompt——工作流第一步靠它
-    接住你当场输入的题目，而不改掉 preset 模板。"""
+    接住你当场输入的题目，而不改掉 preset 模板。
+
+    `thread`（M2）：这次运行是在处理哪件「事」。给了就按它的名字**复用或新建**一条，
+    落到这条流程的行上——这一步的成品就挂到它上面，下游由链条一路继承（见 `_start_chain`）。
+    """
 
     topic: str = ""
+    thread: str = ""
+
+
+async def _start_chain(db: AsyncSession, task_id: int, thread_name: str) -> dict:
+    """给一条流程起链：先把它该处理的「这件事」落到**链头**的行上，再交给 `run_task`。
+
+    为什么落链头而不是只回一个 id：链条下游是 `_fire_chain` 一路传下去、根本读不到 HTTP
+    入参；而**手动重跑下游某一步**（卡点驳回之后想再跑一遍）也得知道这是哪件事——
+    那一步的行上没有值，只能顺着 `chain_next_id` 回链头去问。
+
+    行里只是「这条流程在忙哪件事」的界面提示；**一趟运行的真值记在 `task_runs.thread_id`**
+    （`core.tasks._create_run`）。两处都要有：一个管跨刷新看得见，一个管过卡点不丢。
+    """
+    from app.core import threads
+
+    row = await db.get(ScheduledTask, task_id)
+    if row is None:
+        raise HTTPException(404, "task not found")
+    try:
+        thread = await threads.resolve(thread_name)
+    except ValueError as e:  # 空题目 / 全是空白 —— 400，而不是悄悄不挂
+        raise HTTPException(400, str(e)) from e
+    # 回链头（最多走 5 跳，与 `_CHAIN_MAX_DEPTH` 同量级）：头部是唯一一个起链时被写过的地方
+    head, seen = row, {row.id}
+    for _ in range(5):
+        if head.thread_id or not head.chain_next_id:
+            break
+        nxt = (
+            await db.execute(
+                select(ScheduledTask).where(ScheduledTask.chain_next_id == head.id)
+            )
+        ).scalars().first()
+        if nxt is None or nxt.id in seen:
+            break
+        seen.add(nxt.id)
+        head = nxt
+    if head.thread_id != thread["id"]:
+        head.thread_id = thread["id"]
+    row.thread_id = thread["id"]
+    await db.commit()
+    return thread
 
 
 @router.post("/{task_id}/run")
 async def run_now(
     task_id: int, body: RunIn | None = None, db: AsyncSession = Depends(get_db)
 ):
-    if not await db.get(ScheduledTask, task_id):
+    row = await db.get(ScheduledTask, task_id)
+    if not row:
         raise HTTPException(404, "task not found")
-    return await core.run_task(
+    # 起链时先落「这件事」，再跑：跑出来的成品才有地方挂（顺序不能反）。
+    # **给了就一定要落成**：全是空白也交给 `resolve` 去拒（400），而不是自己 strip 一下
+    # 当没给——那等于「你说了要挂，系统没挂还不告诉你」（实测就是这么漏过去的）。
+    thread: dict | None = None
+    if body and body.thread:
+        thread = await _start_chain(db, task_id, body.thread)
+    out = await core.run_task(
         task_id, manual=True, trigger="manual", topic=(body.topic if body else "")
     )
+    out["thread"] = thread
+    return out
 
 
 async def _review(run_id: int, approve: bool) -> dict:
@@ -458,6 +517,10 @@ async def install_meeting_preset(db: AsyncSession = Depends(get_db)):
 # 首步用引擎（research 自落 research/），后两步用 prompt 吃上游交接**并**落进自己的基地——
 # `_run_engine` 不吃上游（只看 prompt 当话题），而 prompt 路径会把上游产出当系统消息注入，
 # 所以「方案」读得到「调研」、「汇报稿」读得到「方案」。每步 require_approval：跑完停下等你点头。
+#
+# `landing_dir` 在这条链上不是可有可无的装饰：**三步的成品分别落 research/ decisions/ deliver/**，
+# 那正是 M2 认的「产出目录」——挂到「一件事」上的是真成品，不是 `tasks/` 里的运行留痕。
+# （尾步尤其明显：落 tasks/ 的话，你要的汇报稿得去翻一堆执行记录才找得到。）
 _WORK_STEPS: tuple[tuple[str, str, str, str], ...] = (
     (
         "工作·调研",
@@ -502,7 +565,7 @@ async def install_work_preset(db: AsyncSession = Depends(get_db)):
             cron="0 9 * * *",  # 占位：chain 不注册调度，纯手动点火
             action=action,
             landing_dir=landing,
-            save_to_vault=True,
+            save_to_vault=True,  # 正文落它的基地（`landing_dir`）：decisions/ 与 deliver/
             tools_enabled=False,
             mode="simple",
             require_approval=True,  # 每步跑完停下等人点头
@@ -519,6 +582,48 @@ async def install_work_preset(db: AsyncSession = Depends(get_db)):
         await db.refresh(step)
     core.reschedule()
     return {"created": len(made), "tasks": [_out(s) for s in made]}
+
+
+# 语音进料（R2 · PLAN5 §3）：**一步**，不是一条链——录音进去，文本出来，就完了。
+#
+# 与会议闭环的区别是这条 preset 的全部意义：会议要**留着原声**并往下走三步（纪要 / 待办 /
+# 跟进稿），所以它用 `action="transcribe"`；语音备忘只留文本（`action="transcribe_note"`，
+# 转写完删掉录音），没有下游、没有卡点、没有落点目录（落点由 `voice_note` 自己算）。
+VOICE_DIR = "voice"
+VOICE_INBOX = f"{VOICE_DIR}/inbox"
+_VOICE_NAME = "语音备忘"
+
+
+@router.post("/preset/voice")
+async def install_voice_preset(db: AsyncSession = Depends(get_db)):
+    """一键装好语音进料：`voice/inbox/` 目录 + 一个监听它的任务。**幂等**。
+
+    装好之后，把录音（手机导出的 m4a、语音备忘录…）丢进 `vault/voice/inbox/`，
+    它就会转成文本落到 `vault/voice/YYYY-MM-DD-HHMM.md`，**原录音随后被删掉**。
+    """
+    rows = (await db.execute(select(ScheduledTask).order_by(ScheduledTask.id))).scalars().all()
+    if any(t.name == _VOICE_NAME for t in rows):
+        return {"created": 0, "tasks": [_out(t) for t in rows if t.name == _VOICE_NAME]}
+
+    (VAULT_DIR / VOICE_INBOX).mkdir(parents=True, exist_ok=True)
+
+    task = ScheduledTask(
+        name=_VOICE_NAME,
+        prompt="把落进 voice/inbox/ 的录音转成文本。",  # 转写不看指令，这行只给人看
+        cron="0 9 * * *",  # 占位：watch 任务不靠 cron 跑
+        action="transcribe_note",
+        landing_dir="",  # 落点由 `voice_note` 算（voice/YYYY-MM-DD-HHMM.md），不经 tasks/
+        save_to_vault=False,  # 同上：这一路自己落盘，别再往 tasks/ 抄一份
+        tools_enabled=False,
+        mode="simple",
+        trigger_kind="watch",
+        watch_path=VOICE_INBOX,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    core.reschedule()
+    return {"created": 1, "tasks": [_out(task)]}
 
 
 class ParseIn(BaseModel):

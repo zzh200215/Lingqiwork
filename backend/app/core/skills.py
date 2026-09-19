@@ -189,6 +189,16 @@ def update(name: str, content: str) -> dict:
     return {"name": target.name, "description": parsed["description"], "chars": len(parsed["body"])}
 
 
+def install(text: str, *, name: str = "", overwrite: bool = False) -> dict:
+    """装一份 SKILL.md（**本地文本**这条路）。
+
+    与 `install_from_url` 的区别只是「文本从哪来」：那条从网上下，这条从手里给
+    （`core/candidates.py` 把一份材料读成能力候选，落的就是这里）。校验与写盘
+    仍然是 `_install_text` 那一处 —— 名字合法性、frontmatter、同名冲突都只有一份规则。
+    """
+    return _install_text(name, text, overwrite)
+
+
 def _to_raw_github(url: str) -> str:
     """github.com blob URL -> raw.githubusercontent.com (other URLs pass through)."""
     m = re.match(

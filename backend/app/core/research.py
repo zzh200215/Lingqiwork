@@ -504,12 +504,20 @@ async def run(
         if added == 0:
             break  # 信息饱和：这一轮在预算内没带回新东西
 
+    # S1 引擎吃 skill：匹配是确定性的、跑在引擎自己的 `run()` 里（`core/skill_match.py`）。
+    # 上面那个 `synthesize()` 包装不注入——它是测试与演练用的缝，不是生产路径。
+    from app.core import skill_match
+
+    inj = skill_match.injection(topic)
+    if inj["names"]:
+        yield "skills", skill_match.event_data(inj)
+
     yield "writing", {}
     report = None
     async for _ev, _payload in _report.synthesize_streaming(
         topic,
         sources,
-        _SYNTH_PROMPT,
+        skill_match.with_skills(_SYNTH_PROMPT, inj),
         model_id,
         stream_fn=stream_fn,
         native_fn=native_fn,

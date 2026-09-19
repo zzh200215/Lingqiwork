@@ -16,6 +16,18 @@ vi.mock('./api', () => ({
     tutorStart: vi.fn(),
     tutorEnd: vi.fn(),
     petGrowth: vi.fn(),
+    // 聊天/教它/有声三档的右栏：各自取、各自空、各自坏——挂载路径会碰这四个
+    listConversations: vi.fn().mockResolvedValue([]),
+    petFeed: vi.fn().mockResolvedValue({ events: [] }),
+    tutorMastery: vi.fn().mockResolvedValue({ events: [], mastered: 0, learning: 0, sessions: 0 }),
+    weeklyReport: vi.fn().mockRejectedValue(new Error('测试里没有周报')),
+    // 「陪你干活」卡：插件面板与插件命令（专注/喝水/心情的真功能入口）
+    petPlugins: vi.fn().mockResolvedValue({ plugins: [] }),
+    petPluginCommand: vi.fn(),
+    // P5 落库之后：整页聊天挂载时从库里铺上一场的对话（默认没有）
+    petChats: vi.fn().mockResolvedValue({ chats: [] }),
+    // 小屋那一页现在还要问一次「此刻」——两处画的是同一只宠物（姿势 + 台词）
+    petState: vi.fn().mockResolvedValue({ mode: 'idle', action: 'idle', energy: 80, line: '', path: '' }),
     petRoom: vi.fn().mockResolvedValue({
       things: [],
       carried: null,
@@ -23,6 +35,8 @@ vi.mock('./api', () => ({
       today: { meals: [], date: '2026-09-14' },
       skills: [],
       form: [],
+      concepts: { cards: [], total: 0 },
+      flavor: '',
       empty: true,
     }),
   },
@@ -50,7 +64,7 @@ const POD: PodcastEntry = {
 }
 
 function growth(exp: number, level: number, title = '初识'): PetGrowth {
-  return { exp, level, title, next_title: '', progress: 0, parts: [], counts: {} }
+  return { exp, level, title, next_title: '', progress: 0, parts: [], counts: {}, flavor: '' }
 }
 
 function stuckRow(id: number, concept: string): TutorStuckRow {
@@ -126,6 +140,8 @@ beforeEach(() => {
     today: { meals: [], date: '2026-09-14' },
     skills: [],
     form: [],
+    concepts: { cards: [], total: 0 },
+    flavor: '',
     empty: true,
   })
   // 一轮完整的 SSE：delta 然后 done。少了 done 帧，`streamTutorSay` 会判定
@@ -168,6 +184,64 @@ describe('CompanionPage', () => {
     expect(screen.getByText('开始计时了。')).toBeTruthy()
   })
 
+  it('Z1：整页聊天的第二句也带上第一轮（两个入口同一条协议）', async () => {
+    const bodies: { message?: string; history?: unknown }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: unknown, init?: { body?: string }) => {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')))
+        return Promise.resolve(
+          sseResponse(['event: delta\ndata: {"text": "嗯，我在。"}\n\n', 'event: done\ndata: {}\n\n'])
+        )
+      })
+    )
+    renderPage()
+    fireEvent.change(await screen.findByPlaceholderText(/跟零柒说点什么/), {
+      target: { value: '我今天干了啥' },
+    })
+    fireEvent.keyDown(screen.getByPlaceholderText(/跟零柒说点什么/), { key: 'Enter' })
+    await waitFor(() => expect(screen.getByText('嗯，我在。')).toBeTruthy())
+
+    fireEvent.change(screen.getByPlaceholderText(/跟零柒说点什么/), {
+      target: { value: '那第 2 条呢' },
+    })
+    fireEvent.keyDown(screen.getByPlaceholderText(/跟零柒说点什么/), { key: 'Enter' })
+    await waitFor(() => expect(bodies.length).toBe(2))
+
+    expect(bodies[1].message).toBe('那第 2 条呢')
+    expect(bodies[1].history).toEqual([
+      { role: 'user', text: '我今天干了啥' },
+      { role: 'pet', text: '嗯，我在。' },
+    ])
+  })
+
+  it('陪你干活：记一杯水直接走插件命令，进度和零柒的话当场更新', async () => {
+    const waterPlugin = {
+      name: 'water',
+      label: '喝水提醒',
+      enabled: true,
+      permissions: ['command', 'panel'],
+      commands: ['drink'],
+      panel: { kind: 'counter' as const, unit: '杯', target: 8, value: 2 },
+      quota: { used: 0, cap: 4 },
+    }
+    vi.mocked(api.petPlugins).mockResolvedValue({ plugins: [waterPlugin] })
+    vi.mocked(api.petPluginCommand).mockResolvedValue({
+      ok: true,
+      name: 'water',
+      command: 'drink',
+      panel: { kind: 'counter' as const, unit: '杯', target: 8, value: 3 },
+      said: '好，第三杯了。',
+    })
+    renderPage()
+    fireEvent.click(await screen.findByTitle('记一杯水'))
+    await waitFor(() =>
+      expect(api.petPluginCommand).toHaveBeenCalledWith('water', 'drink', undefined)
+    )
+    expect(await screen.findByText('3/8 杯')).toBeTruthy()
+    expect(screen.getByText('零柒：好，第三杯了。')).toBeTruthy()
+  })
+
   it('成长标签整页搬进来，且是无头的——页头只有「陪伴」', async () => {
     renderPage('growth')
     const stub = await screen.findByTestId('growth-stub')
@@ -177,10 +251,9 @@ describe('CompanionPage', () => {
   it('小屋标签：它攒下的东西是第五张脸（空屋子也给一句实话）', async () => {
     renderPage('room')
     expect(await screen.findByText('小屋还是空的。')).toBeTruthy()
-    // 五张脸都在标签条上
-    for (const label of ['聊天', '教它', '成长', '小屋', '有声']) {
-      expect(screen.getByText(label)).toBeTruthy()
-    }
+    // 五张脸的入口搬到**侧栏**了（2026-09-18 导航改版）：页面里不再摆第二排标签。
+    // 「五个都在」那条断言因此挪去了 `Layout.test.tsx`（那里才是它们现在住的地方）。
+    expect(screen.queryByText('教它')).toBeNull()
   })
 
   it('有声：播客一期一行，能听能删', async () => {
@@ -220,7 +293,8 @@ describe('CompanionPage · 教它', () => {
   it('你卡着的东西是选题建议，点一下就直接开讲', async () => {
     vi.mocked(api.tutorStuck).mockResolvedValue({ stuck: [stuckRow(1, '协程挂起后去哪')] })
     renderPage('teach')
-    fireEvent.click(await screen.findByText('协程挂起后去哪'))
+    // 2026-09-19 起右栏「教它什么好」也摆同一批选题——点主区那颗 chip（第一处）
+    fireEvent.click((await screen.findAllByText('协程挂起后去哪'))[0])
     await waitFor(() =>
       expect(api.tutorStart).toHaveBeenCalledWith('协程挂起后去哪', '', 'feynman')
     )

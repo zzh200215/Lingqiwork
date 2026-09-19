@@ -129,7 +129,9 @@ def test_href_lands_on_the_thing_itself():
     assert th._href("card", "7") == "/review?card=7"
     assert th._href("decision", "9") == "/dashboard?decision=9"
     assert th._href("task", "3") == "/work?task=3"
-    assert th._href("tutor", "5") == "/tutor?session=5"
+    # 这一格的左右两边**故意不一样**：kind 是 `session`（R3 从 `tutor` 改名），
+    # 而路由仍然是 `/tutor`——页面路径是另一件事，改名去动路由与书签本份不做。
+    assert th._href("session", "5") == "/tutor?session=5"
     # 笔记 / 产出本来就有 path 深链，直接落文件
     assert th._href("note", "notes/a.md") == "/notes?path=notes/a.md"
     assert th._href("output", "deliver/b.md") == "/notes?path=deliver/b.md"
@@ -211,6 +213,158 @@ async def test_name_cannot_be_blank():
         await th.detail(9999)
     with pytest.raises(LookupError):
         await th.delete(9999)
+
+
+# ---------- 产物挂到一条「一件事」（M2，docs/work-module.md） ----------
+
+
+async def test_resolve_reuses_the_thread_whose_name_matches():
+    """题目就是这件事的名字：同名复用，不从第二件同名的事开始。"""
+    t = await th.create("RAG 评测")
+    hit = await th.resolve("RAG 评测的坑")  # 子串包含，与建议挂接同一把尺子
+    assert hit["id"] == t["id"] and hit["created"] is False
+
+    fresh = await th.resolve("向量库选型")
+    assert fresh["created"] is True and fresh["id"] != t["id"]
+
+    async with SessionLocal() as db:
+        assert len((await db.execute(select(Thread))).scalars().all()) == 2
+
+
+async def test_resolve_never_takes_back_an_archived_thread():
+    """归档是你说「这件事完了」——它不该被下一轮工作又捡回去。"""
+    t = await th.create("RAG")
+    await th.update(t["id"], archived=True)
+    again = await th.resolve("RAG")
+    assert again["created"] is True and again["id"] != t["id"]
+
+
+async def test_resolve_requires_a_title():
+    for blank in ("", "   ", None):
+        with pytest.raises(ValueError):
+            await th.resolve(blank)  # type: ignore[arg-type]
+
+
+async def test_a_session_attached_to_a_thread_reads_back_with_its_topic():
+    """R3 的**接通性**测试：`kind="session"` 要能真的挂上、读回来、还能被教学那条线认出来。
+
+    这条不是重复上面那些单点断言（`KINDS` 里有没有、`_href` 对不对），它盯的是
+    **整条链**：写（`attach` 的 kind 守卫）→ 读（`_resolve` 那个 renaming 过的分支）
+    → 反向消费（`tutor._neighbors_via_thread` 按同一个 kind 查）。
+
+    为什么值得单独一条：改名 `tutor`→`session` 时，**每一处单独看都能改对，
+    整条链却可能断在某一处漏改**——而那种断裂的表现是「挂接静默失败」或者
+    「挂上了但标题是空、图标是灰的」，两条都不会报错。这里一次把三处都走一遍。
+    """
+    from app.models import TutorSession
+
+    t = await th.create("读 asyncio")
+    async with SessionLocal() as db:
+        s = TutorSession(topic="asyncio 事件循环", concept="事件循环", verdict="got")
+        db.add(s)
+        await db.commit()
+        await db.refresh(s)
+        sid = s.id
+
+    r = await th.attach(t["id"], "session", str(sid))
+    assert r["attached"] is True
+    # 幂等：同一条挂两次只留一条（与其它 kind 同一条规矩）
+    assert (await th.attach(t["id"], "session", str(sid)))["attached"] is False
+
+    items = (await th.detail(t["id"], suggest=False))["items"]
+    assert len(items) == 1
+    item = items[0]
+    assert item["kind"] == "session"
+    assert item["ref"] == str(sid)
+    # **读得回来**：`_resolve` 里那个改名过的分支拿 TutorSession.topic 当标题；
+    # 改漏了这里会 exists=False 且标题空（挂接看着挂上了，其实是个死引用）
+    assert item["exists"] is True
+    assert item["title"] == "asyncio 事件循环"
+    assert item["href"] == f"/tutor?session={sid}"
+
+    # 反向消费：教学那条线按**同一个 kind** 找「同一件事上的其它概念」。
+    #
+    # ⚠️ 这里直接考 `_neighbors_via_thread`，**不考 `concept_neighbors`**：
+    #    后者还要过 `concepts()` 那层派生视图（按 verdict 过滤、按 `CONCEPTS_CAP` 截断），
+    #    而那层的行为与本条要验的东西无关——用它当断言会变成「测派生视图的容量」。
+    #    要验的是「改名之后，挂事这条路读得回来」，缝就在这个函数上。
+    from app.core import tutor
+
+    async with SessionLocal() as db:
+        s2 = TutorSession(topic="JS 闭包", concept="闭包", verdict="got")
+        db.add(s2)
+        await db.commit()
+        await db.refresh(s2)
+        sid2 = s2.id
+    await th.attach(t["id"], "session", str(sid2))
+
+    # 同一件事上的另一个概念读得回来（`kind == "session"` 那两处查询）
+    assert await tutor._neighbors_via_thread([sid]) == {"闭包"}
+    # 而**没挂上**的会话不会被算进来（否则「同一件事」这个证据就是编的）
+    assert await tutor._neighbors_via_thread([999999]) == set()
+
+    # 旧名字不再是一个合法的 kind：两个名字并存 = 同一个东西两套写法（§4-7 要防的分叉）
+    with pytest.raises(ValueError):
+        await th.attach(t["id"], "tutor", str(sid))
+
+
+async def test_attach_output_only_takes_products():
+    """**成品**才挂：`tasks/` 是运行留痕、inbox 是待处理的材料、交接文件是中间的工序。
+
+    挂错了，「这件事到哪了」里就会混进一堆其实不属于它的东西——这个仓库吃过两次口径
+    不一致的亏（小屋架子 vs 工作页清单、`is_output_path` 的收口），所以这里钉住。
+    """
+    t = await th.create("选型")
+    ok = await th.attach_output(t["id"], "research/2026-09-20-选型.md")
+    assert ok["attached"] is True
+    assert (await th.detail(t["id"], suggest=False))["items"][0]["ref"] == "research/2026-09-20-选型.md"
+
+    for bad in (
+        "tasks/x.md",  # 运行留痕，不是成品
+        "meetings/inbox/a.md",  # 待处理的材料
+        "tasks/handoff/a-to-b.md",  # 中间的工序
+        "notes/2026-09-20-成文.md",  # 成文不算（不是工作链的产出）
+        "deliver",  # 目录本身，不是一份成品
+        "",
+        "   ",
+    ):
+        out = await th.attach_output(t["id"], bad)
+        assert out["attached"] is False, bad
+
+    assert (await th.detail(t["id"], suggest=False))["total"] == 1  # 那七条一条都没进去
+
+
+def test_is_product_knows_a_meeting_from_its_inbox():
+    """M5：一场会议的产物算成品，`meetings/inbox/` 不算——判据只有一处（`is_product`）。
+
+    会议这条路径是后加的（在这之前 `meetings` 根本不在成品目录里），而它多一层结构，
+    所以「算不算成品」不能只看顶层目录：`meetings/<日期>-<录音名>/<文件>.md` 才是成品。
+    """
+    assert th.is_product("meetings/2026-09-13-周会/会议·纪要-2026-09-13-1030.md") is True
+    assert th.is_product("meetings/inbox/待处理.md") is False
+    assert th.is_product("meetings/2026-09-13-周会") is False  # 目录本身不是一份成品
+    assert th.is_product("research/2026-09-20-选型.md") is True
+    assert th.is_product("tasks/x.md") is False
+    assert th.is_product("") is False
+
+
+async def test_attach_output_is_idempotent_and_survives_a_missing_thread():
+    """同一份产物挂两次只留一条；这件事不在了也只是不挂，不抛。"""
+    t = await th.create("X")
+    assert (await th.attach_output(t["id"], "deliver/a.md"))["attached"] is True
+    assert (await th.attach_output(t["id"], "deliver/a.md"))["attached"] is False
+    assert (await th.detail(t["id"], suggest=False))["total"] == 1
+
+    gone = await th.attach_output(9999, "deliver/a.md")
+    assert gone["attached"] is False and "这件事不在了" in gone["reason"]
+
+
+async def test_attach_output_refuses_a_path_that_escapes_the_vault():
+    """越界的引用不挂（`_clean_ref` 那层守卫），而且要说清为什么没挂。"""
+    t = await th.create("X")
+    out = await th.attach_output(t["id"], "../secrets.md")
+    assert out["attached"] is False and out["reason"] == "ref 越界"
+    assert (await th.detail(t["id"], suggest=False))["total"] == 0
 
 
 # ---------- 成本按事记（§4-16） ----------

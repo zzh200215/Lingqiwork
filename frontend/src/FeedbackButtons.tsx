@@ -20,11 +20,20 @@ export default function FeedbackButtons({
   promptSha,
   modelId,
   artifactRef,
+  injected,
 }: {
   kind: 'research' | 'compose' | 'recap' | 'decide' | 'conflict' | 'deliver'
   promptSha?: string
   modelId?: string
   artifactRef?: string
+  /**
+   * S1（PLAN3 §9.2 决策4）：这份产出吃着技能生成的没有。
+   *
+   * **三态，别用 bool**：不传 = **不知道**（比如从产出清单事后点的，那时手上没有注入
+   * 信息）；`[]` = 确实没注入；`['技能名']` = 有注入。把「不知道」记成「没注入」，
+   * 质量卡上那一行就是编出来的数。
+   */
+  injected?: string[]
 }) {
   const [sent, setSent] = useState<'good' | 'bad' | null>(null)
   const [badOpen, setBadOpen] = useState(false)
@@ -41,6 +50,8 @@ export default function FeedbackButtons({
         model_id: modelId ?? '',
         reason: why,
         ref: artifactRef ?? '',
+        // 只有调用方说得出「有没有注入」时才带这一项（`undefined` = 不知道）
+        ...(injected ? { injected: JSON.stringify(injected) } : {}),
       })
       setSent(verdict)
       setBadOpen(false)

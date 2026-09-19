@@ -49,6 +49,18 @@ _SPECS: list[tuple[str, str, str, str]] = [
         "prompt",
     ),
     ("app.core.tutor", "FUTURE_PROMPT", "「未来的你」：以一年后的自己口吻与用户对话，讲经历不给建议", "prompt"),
+    (
+        "app.core.interview",
+        "INTERVIEW_PROMPT",
+        "面试陪练人设（M3）：只问不教、一次一问、同一薄弱点最多追三层、5-8 题收尾",
+        "prompt",
+    ),
+    (
+        "app.core.interview",
+        "_REPORT_PROMPT",
+        "面试复盘报告（M3）：四个格子（总的/答得稳的/卡壳的/建议再讲），只许写对话里出现过的",
+        "system",
+    ),
     ("app.core.tutor", "_EXTRACT_PROMPT", "教学会话收尾时提取 概念/领域/自评/卡点（concept 必须带领域词，domain 就是那个限定词）", "system"),
     ("app.core.tutor", "_SUMMARY_SYSTEM", "教学会话中段压缩摘要（≤300 字，保概念/讲通点/卡点）", "system"),
     # ---- 研究（学习闭环：学 → 研究 → 产出）----
@@ -74,6 +86,18 @@ _SPECS: list[tuple[str, str, str, str]] = [
     # ---- 卡片 / 协作 ----
     ("app.core.cards", "_GEN_SYSTEM", "生成复习卡（从学习材料出题）", "system"),
     ("app.core.cards", "_REMEDY_SYSTEM", "薄弱来源补救：反复答错的材料重出卡", "system"),
+    (
+        "app.core.retell",
+        "JUDGE_SYSTEM",
+        "重讲判分（M1）：对照卡片答案判四档 + 缺口，判不了就 fallback 不编分",
+        "system",
+    ),
+    (
+        "app.core.retell",
+        "SESSION_JUDGE_SYSTEM",
+        "我来讲判分（M1）：读对话全文判 got/half/useless，判不了就 fallback",
+        "system",
+    ),
     ("app.core.collab", "_DEFAULT_SYSTEM", "协作团队默认成员角色", "system"),
     ("app.core.collab", "_REVIEW_SYSTEM", "协作评审：审阅文稿，指事实/逻辑/结构/遗漏", "system"),
     ("app.core.collab", "_REVISION_INSTRUCTION", "协作修订：按评审意见改稿", "instruction"),
@@ -85,6 +109,30 @@ _SPECS: list[tuple[str, str, str, str]] = [
         "app.routers.pet",
         "_PET_TOOL_RULE",
         "零柒的工具规矩（P3）：该调就调、别替用户决定、别复述工具输出、报错照实说",
+        "instruction",
+    ),
+    (
+        "app.core.pet_tone",
+        "TONE_RULE",
+        "零柒的语气微调（P2）：按喂养分布改用词，不夸、不评、不猜（运行时追加，不改人设常量）",
+        "instruction",
+    ),
+    (
+        "app.core.pet_context",
+        "FACTS_HEAD",
+        "零柒的「今天」（Z1）：今天已发生的事实——用它回答「我今天干了啥」，没写的不要编",
+        "instruction",
+    ),
+    (
+        "app.core.pet_context",
+        "LINES_HEAD",
+        "零柒的「今天」（Z1）：它最近说过的话——已经说过，别重复，可以当事实引用",
+        "instruction",
+    ),
+    (
+        "app.core.pet_context",
+        "HISTORY_NOTE",
+        "零柒的「今天」（Z1）：历史在场时说明「你们正在连着聊」，别回「我看不见之前的对话」",
         "instruction",
     ),
     # ---- 仪表盘 / 笔记 ----
@@ -138,6 +186,18 @@ def inventory() -> list[Prompt]:
 def inline_notes() -> list[tuple[str, int, str]]:
     """内联 prompt 的「位置 + 用途」清单（不含内容）。"""
     return list(_INLINE)
+
+
+def fingerprint(module: str, attr: str) -> str:
+    """一条**已登记**提示词的指纹（sha256 前 12 位）。`""` = 模块加载不出来 / 没登记。
+
+    **登记表是唯一出处**：谁要指纹就问它，别自己拿内容再算一遍——算了就有两份算法，
+    其中一份迟早会漂（`test_prompts.py` 钉的正是这份指纹）。
+    """
+    for p in inventory():
+        if p.module == module and p.name == attr:
+            return p.sha or ""
+    return ""
 
 
 def summary() -> dict:

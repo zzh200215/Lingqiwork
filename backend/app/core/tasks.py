@@ -45,6 +45,15 @@ _RESULT_CAP = 20000
 _HANDOFF_CAP = 15000
 _CHAIN_MAX_DEPTH = 5
 _RUNS_KEEP = 20  # run history rows kept per task
+
+# 「一场一场落目录」的流程（M5）：它们的落点目录自带一件「事」的名字，见
+# `thread_name_for_run_dir`。会议闭环是第一个——也是目前唯一一个。
+MEETING_DIR = "meetings"
+# 会议目录里**不是一场会议**的那一格：等着被处理的录音与材料（`routers/work.py` 列会议时
+# 也跳过它、`threads.is_product` 也不把它当成品——三处说的是同一件事，所以有测试钉着
+# 这三个词相等）。
+MEETING_INBOX = "inbox"
+_PER_INSTANCE_DIRS = (MEETING_DIR,)
 _RETRY_DELAY_SECONDS = 30
 DEFAULT_AGENT_ROUNDS = 12
 MAX_AGENT_ROUNDS = 30
@@ -276,12 +285,17 @@ async def run_task(
     watch_files: list[str] | None = None,
     run_dir: str = "",
     topic: str = "",
+    thread_id: int | None = None,
 ) -> dict:
     """Execute one task now. Never raises: failures land in last_status/task_runs.
 
     `topic`（可选）：这一次运行用的题目，覆盖行里的 `prompt`。工作流第一步是「引擎 + 你当场
     输入的题目」——把题目写进行里会永久改掉 preset 模板、破坏幂等，所以走**运行期覆盖**，
     单次生效、用完即弃（和 `watch_files` / `run_dir` 同类）。
+
+    `thread_id`（可选，M2）：这一跳在处理的哪件「事」。链条上**上游说了算**（通过 `_fire_chain`
+    传下来，同 `run_dir`）；没传就用行里那个（工作流入口起链时写进去的）。两者都没有 =
+    这次运行的成品不挂到任何事上。
     """
     async with SessionLocal() as db:
         task = await db.get(ScheduledTask, task_id)
@@ -306,6 +320,9 @@ async def run_task(
             "require_approval": bool(task.require_approval),
             "action": task.action or "prompt",
             "landing_dir": task.landing_dir or "",
+            # 这条流程处理的是哪件「事」（M2）。起链时由工作流入口写进行里，下游靠它
+            # 把产物挂到同一件事上；没人写就是 None（自动挂接整个不发生）。
+            "thread_id": task.thread_id,
         }
         # 运行期题目覆盖（工作流第一步「你当场输入的题目」）。行里的 prompt 是模板，不动。
         if (topic or "").strip():
@@ -320,10 +337,22 @@ async def run_task(
     # 四步因此写进同一个文件夹，那才是「同一场会议」。只有链条的第一跳才解析。
     snapshot["watch_files"] = [str(p) for p in (watch_files or [])]
     snapshot["run_dir"] = run_dir or _resolve_run_dir(snapshot, snapshot["watch_files"])
+    # 链条上「这件事是哪件」也由上游说了算（同 run_dir 的道理）：行里那个只是起链时写的，
+    # 上游传下来的才是这一趟的真值。
+    if thread_id is not None:
+        snapshot["thread_id"] = int(thread_id)
+    # 「这一趟在处理哪件『事』」还有第二个名字来源（M5）：**一场一场落目录的流程自带名字**。
+    # 会议闭环落 `meetings/<日期>-<录音名>/`，那个子目录就是这一场会议——于是会议结论也能
+    # 进主线（挂到一条以会议名命名的「事」上），不必让你手打标签。只有链条的第一跳才需要
+    # 解析：下游的 `thread_id` 由上游传下来（上面的分支已经赋值了）。
+    if snapshot.get("thread_id") is None:
+        snapshot["thread_id"] = await _thread_for_run_dir(snapshot["run_dir"])
 
     if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
         WATCH_HOOK(task_id)  # suppress self-trigger from our own writes
-    run_id = await _create_run(task_id, trigger, upstream_task_id, snapshot["mode"])
+    run_id = await _create_run(
+        task_id, trigger, upstream_task_id, snapshot["mode"], snapshot.get("thread_id")
+    )
 
     started = datetime.now()
     attempts = 1 if manual else 1 + max(0, min(int(snapshot["retry"] or 0), 3))
@@ -366,6 +395,12 @@ async def run_task(
                 vault_file = _write_vault(
                     snapshot["name"], answer, started, snapshot.get("run_dir") or ""
                 )
+            # M2：这一步的成品挂到这条流程正在处理的那件「事」上。判据只有一条：
+            # **这一步真的落了盘**。落点是不是「一份成品」由 `threads.attach_output`
+            # 按目录判（`tasks/` 那种运行留痕不算）——两边各管一件事，不重复也不打架。
+            # best-effort：挂接挂了不能把一次成功的运行变成失败。
+            if vault_file:
+                await _attach_to_thread(snapshot.get("thread_id"), vault_file)
             # 人工卡点（§4-12）：这一步跑完了，但**不**往下走——等人点头。
             # 这一步的产出照样落盘/进会话，因为它正是要给人看的东西。
             gate = bool(snapshot["require_approval"])
@@ -379,7 +414,7 @@ async def run_task(
             if not gate:
                 await _fire_chain(
                     task_id, snapshot, answer, chain_depth, manual, chain_path,
-                    snapshot.get("run_dir") or "",
+                    snapshot.get("run_dir") or "", snapshot.get("thread_id"),
                 )
                 if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
                     WATCH_HOOK(task_id)
@@ -415,7 +450,12 @@ async def run_task(
             from app.core import pet
 
             if status == "ok":
-                pet.emit("task_done", name=snapshot["name"], detail=(answer or "")[:120])
+                # 落了成品的那一路，零柒那句话**由写盘的人说过了**（`_write_vault` /
+                # 引擎的 `report.save`）——这里就别再补一句「跑完了」：一个事件一句话。
+                # 判据与自动挂接、成长值共用 `pet.is_output_path`，路径说是成品，
+                # 就一定有人开过口（`pet.note_output` 的 docstring 记着这条约定）。
+                if not (vault_file and pet.is_output_path(vault_file)):
+                    pet.emit("task_done", name=snapshot["name"], detail=(answer or "")[:120])
             else:
                 pet.emit("task_failed", name=snapshot["name"], detail=error[:160])
         except Exception:  # noqa: BLE001
@@ -464,7 +504,25 @@ async def run_task(
         "tokens_out": tokens_out,
         "log": log_entries,
         "awaiting_approval": gate,
+        "thread_id": snapshot.get("thread_id"),
     }
+
+
+async def _attach_to_thread(thread_id: int | None, filename: str) -> None:
+    """把这一步的成品挂到这条流程正在处理的那件「事」上（M2）。
+
+    没有这件事、落点不是成品、挂接本身出错 —— 一律**安静地不挂**。自动挂接是顺手做的
+    事，不是这一步的产出：它挂了不该让一次成功的运行变成失败（与 `_distill` / `_score_run`
+    同一条纪律）。「挂到哪了」由 `ThreadItem` 自己回答，不另记一份真值。
+    """
+    if not thread_id:
+        return
+    try:
+        from app.core import threads
+
+        await threads.attach_output(int(thread_id), filename)
+    except Exception:  # noqa: BLE001 - 挂接失败不该影响任务结果
+        log.warning("attach %s to thread %s failed", filename, thread_id, exc_info=True)
 
 
 async def _distill(t: dict, answer: str) -> None:
@@ -496,12 +554,15 @@ async def _distill(t: dict, answer: str) -> None:
 
 async def _fire_chain(
     task_id: int, snapshot: dict, answer: str, chain_depth: int, manual: bool,
-    chain_path: frozenset[int] = frozenset(), run_dir: str = "",
+    chain_path: frozenset[int] = frozenset(), run_dir: str = "", thread_id: int | None = None,
 ) -> int | None:
     """Hand the answer to the downstream task (vault file) and run it.
 
     Manual runs continue the chain in the background so the HTTP response
     returns after the first stage; scheduled runs wait for the whole pipeline.
+
+    `thread_id` 与 `run_dir` 同路：从上游那一跳传下来（M2），下游的成品因此挂到**同一件**
+    「事」上，而不是各自去读自己行里那个运行期字段。
     """
     nxt_id = snapshot.get("chain_next_id")
     if not nxt_id or chain_depth >= _CHAIN_MAX_DEPTH:
@@ -535,7 +596,7 @@ async def _fire_chain(
             await run_task(
                 nxt_id, trigger="chain", upstream_task_id=task_id,
                 chain_depth=chain_depth + 1, chain_path=chain_path | {task_id},
-                run_dir=inherit,
+                run_dir=inherit, thread_id=thread_id,
             )
         except Exception:  # noqa: BLE001 - the pipeline must not crash the caller
             log.exception("chain handoff to task %s failed", nxt_id)
@@ -549,9 +610,14 @@ async def _fire_chain(
     return nxt_id
 
 
-async def _create_run(task_id: int, trigger: str, upstream: int | None, mode: str) -> int:
+async def _create_run(
+    task_id: int, trigger: str, upstream: int | None, mode: str, thread_id: int | None = None
+) -> int:
     async with SessionLocal() as db:
-        row = TaskRun(task_id=task_id, trigger=trigger, upstream_task_id=upstream, mode=mode)
+        row = TaskRun(
+            task_id=task_id, trigger=trigger, upstream_task_id=upstream, mode=mode,
+            thread_id=thread_id,
+        )
         db.add(row)
         await db.commit()
         await db.refresh(row)
@@ -626,6 +692,50 @@ async def _last_failure(task_id: int) -> str:
     if row is None or row.status != "error":
         return ""
     return (row.error or "").strip()
+
+
+def run_topic(task_prompt: str, thread_name: str = "") -> str:
+    """一趟运行的**题目**：有那件「事」就用它的名字（起链时按你输入的题目落地），否则用任务指令。Pure.
+
+    S2 的「读成技能」与 S3 的试用记录都要这个题目，所以规则只留这一处——各写一遍迟早
+    给出两个题目（链条第 2/3 步的 `prompt` 是模板，不是用户输入的题目）。
+    """
+    return (thread_name or "").strip() or (task_prompt or "").strip()
+
+
+def thread_name_for_run_dir(run_dir: str) -> str:
+    """这一趟运行的落点目录能不能自己给出一件「事」的名字。Pure.
+
+    会议闭环落 `meetings/<日期>-<录音名>/`——那个子目录**就是这一场会议**，名字现成
+    （`_resolve_run_dir` 用录音名 + 日期拼的），于是「会议结论进主线」不必让你手打标签。
+    必须有且正好两层，而且第二段不能是 `inbox`（那是等着被处理的那一格，不是一场会议）；
+    `meetings/a/b` 是更深的中间目录，也不是。
+
+    别的流程没有这种「一场一场」的形状：普通任务落 `tasks/`（运行留痕）、引擎的成品直接进
+    各自的产出目录——一律返回空串（没有名字来源就不硬安一个）。
+    """
+    parts = [p for p in (run_dir or "").split("/") if p]
+    if len(parts) == 2 and parts[0] in _PER_INSTANCE_DIRS and parts[1] != MEETING_INBOX:
+        return parts[1].strip()
+    return ""
+
+
+async def _thread_for_run_dir(run_dir: str) -> int | None:
+    """落点目录自带名字时，把这一趟挂到那条「事」上（复用或新建）。
+
+    顺手做的事：**出错就返回 None**，不让一次成功的运行变成失败（与 `_attach_to_thread`
+    / `_distill` / `_score_run` 同一条纪律）。
+    """
+    name = thread_name_for_run_dir(run_dir)
+    if not name:
+        return None
+    try:
+        from app.core import threads
+
+        return int((await threads.resolve(name))["id"])
+    except Exception:  # noqa: BLE001 - 挂不上就是没挂上，运行照旧
+        log.warning("could not resolve a thread for %s", run_dir, exc_info=True)
+        return None
 
 
 def _judge_sources(hits: list[dict]) -> list[dict]:
@@ -742,6 +852,19 @@ async def review_gate(run_id: int, approve: bool) -> dict:
         await db.commit()
 
     nxt = None
+    # Z2（PLAN4）：**等你有声，抵达无声**——停着等你点头的那一步有人点了头 / 驳回之后，
+    # 之前一个字都没有（`KINDS` 里连一个 gate kind 都没有）。两句都在这里说，就在状态
+    # 写下去的那一刻：驳回没有下游；通过的下游 `_fire_chain` 可能要跑几分钟，等它回来
+    # 再开口就不是「那一刻」了。
+    # **不弹桌面通知**：它不在 `emit` 的 toast 名单里——这是**事件**（你刚亲手点的），
+    # 不是提醒；你人就在那个页面上，不该再被系统吼一声。
+    try:
+        from app.core import pet
+
+        pet.emit("gate_ok" if approve else "gate_rejected", name=snapshot["name"])
+    except Exception:  # noqa: BLE001 - 台词永远不该挡住流程（emit 自己也不抛，这层防导入）
+        log.debug("pet gate emit failed", exc_info=True)
+
     if approve:
         # 后台续跑：一个完整的下游流水线可能跑几分钟，HTTP 响应不该等它
         nxt = await _fire_chain(
@@ -752,6 +875,9 @@ async def review_gate(run_id: int, approve: bool) -> dict:
             manual=True,
             chain_path=frozenset({snapshot["task_id"]}),
             run_dir=run_dir,  # 停在卡点上的一轮不能把落点目录弄丢
+            # 「这件事」以**这一轮运行**记的为准（M2）：任务行那个是「最近一次在忙哪件」，
+            # 而续跑要接的是**当初那一轮**在处理的那件。老行没有值时退回任务行。
+            thread_id=(run.thread_id if run.thread_id is not None else (task.thread_id if task else None)),
         )
     return {"ok": True, "approved": approve, "run_id": run_id, "next_task_id": nxt}
 
@@ -803,7 +929,61 @@ async def _transcribe(t: dict) -> dict:
     }
 
 
-async def _run_engine(t: dict, engine: str) -> dict:
+async def _transcribe_note(t: dict) -> dict:
+    """语音进料（R2 · PLAN5 §3）：一段录音 → `vault/voice/` 里一份 md，**然后删掉录音**。
+
+    **与 `_transcribe` 是两条路，故意不合并**：那一条是会议闭环的第一步，它把录音
+    `_land_audio` 进这次运行的落点目录、留着给后面几步当原料（`test_agent_orchestration`
+    钉着这个行为：录音被搬进 `meetings/*-周会/`）。这一条只留文本、删掉音频，
+    是「随手一段录音」的处置方式。**共用一个 action 会让两种语义互相污染**，
+    所以宁可多一个名字，也不在 `_transcribe` 里加开关。
+
+    **删录音只在转写成功之后**：失败照旧把文件留在原地（`RuntimeError` 抛出去，
+    watcher 那侧记一次失败），人还能再试一次——**先删后转就等于把原料烧了**。
+    """
+    from app.core import asr, ingest, voice_note
+
+    files = [
+        p for p in (t.get("watch_files") or []) if Path(p).suffix.lower() in ingest.AUDIO_EXT
+    ]
+    if not files:
+        raise RuntimeError("没有可转写的音频——这一步要靠「录音落目录」触发")
+    rel = files[0]
+    src = VAULT_DIR / rel
+    if not src.is_file():
+        raise RuntimeError(f"音频不在了：{rel}")
+
+    model_size, language = asr.prefs()
+    result = await asyncio.to_thread(asr.transcribe, str(src), model_size, language)
+    text = str((result or {}).get("text") or "").strip()
+    if not text:
+        # 空转写不算成功：不写空文件（那会变成一份搜得到、点开什么都没有的产出），
+        # 也不删录音
+        raise RuntimeError("转写结果是空的")
+
+    note = voice_note.write_note(text, source=rel)
+
+    # 到这一步转写已经落盘了，删除失败**不能**让这一步报失败——否则人会以为没转成功
+    # 而去重试，结果是把同一段录音转第二遍、留下第二份一模一样的 md。
+    gone = True
+    try:
+        src.unlink()
+    except OSError:
+        gone = False
+        log.warning("transcribed note but could not delete the recording: %s", rel, exc_info=True)
+
+    tail = "原录音已删除" if gone else "（原录音还在，没能删掉）"
+    return {
+        "answer": f"# {note['title']}\n\n{text}\n\n---\n\n已落到 vault/{note['path']}（{tail}）",
+        "sources": [],
+        "model_id": "asr",
+        "rounds": 0,
+        "tool_calls": 0,
+        "saved": {"filename": note["path"], "title": note["title"]},
+    }
+
+
+async def _run_engine(t: dict, engine: str, log_entries: list[dict] | None = None) -> dict:
     """把一个成文引擎无人值守地跑一遍（§15）。
 
     引擎本来就是 async 生成器（`compose.run` 等），路由只是 SSE 包装 + 让人先看再存。
@@ -812,11 +992,15 @@ async def _run_engine(t: dict, engine: str) -> dict:
 
     话题取自任务指令（`prompt`）——引擎要的是一个话题，不是一段给模型的指令；
     recap 例外，它不看话题，把「最近几天」合成一份。
+
+    `log_entries`（S1）：引擎那条 `skills` 事件（本次注入了哪份工序）记进运行日志——
+    S3 的试用期靠聚合它，而且它是**现有日志结构里的一项，不是新列**。
     """
     import importlib
 
     from app.core import providers
     from app.core import report as _report
+    from app.core import skill_match
 
     mod = importlib.import_module(f"app.core.{engine}")
     topic = (t.get("prompt") or "").strip()
@@ -831,6 +1015,10 @@ async def _run_engine(t: dict, engine: str) -> dict:
         if ev == "error":
             error = (data or {}).get("message") or "引擎没跑成"
             break
+        if ev == "skills":
+            # 本次运行吃了哪份工序。注入了就算数——哪怕这一步随后失败（它确实被用过了）。
+            if log_entries is not None and (data or {}).get("skills"):
+                log_entries.append(skill_match.log_entry(data))
         if ev == "report":
             sources = data.get("sources") or []
             rep = _report.Report(
@@ -870,8 +1058,10 @@ async def _execute(t: dict, log_entries: list[dict]) -> dict:
     action = t.get("action") or "prompt"
     if action == "transcribe":
         return await _transcribe(t)
+    if action == "transcribe_note":
+        return await _transcribe_note(t)
     if action in ENGINE_ACTIONS:
-        return await _run_engine(t, action)
+        return await _run_engine(t, action, log_entries)
     candidates = await _candidates(t["model_id"])
     model_id = candidates[0][2]
     served: dict = {}  # 实际产出内容的 provider——降级发生时它可能不是第一家
@@ -1079,7 +1269,13 @@ def _write_vault(name: str, answer: str, when: datetime, subdir: str = "") -> st
             f"# {name}\n\n> 定时任务自动生成 · {when:%Y-%m-%d %H:%M}\n\n{answer}\n",
             encoding="utf-8",
         )
-        return p.relative_to(VAULT_DIR).as_posix()
+        rel = p.relative_to(VAULT_DIR).as_posix()
+        # 环二表达层：落点是成品目录（`deliver/` 之类）时零柒在这里说一句；`tasks/` 的
+        # 运行留痕不是成品，它一个字都不说，下面那句「跑完了」照旧（见 `pet.note_output`）。
+        from app.core import pet
+
+        pet.note_output(name, rel)
+        return rel
     except OSError:
         log.warning("could not write task result to vault", exc_info=True)
         return None

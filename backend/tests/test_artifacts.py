@@ -91,6 +91,73 @@ def test_every_kind_lands_somewhere_pet_counts_as_output():
             assert dir_name in pet._OUTPUT_DIRS, f"{kind} → {dir_name} 不在产出目录里"
 
 
+# --- 环二表达层：存下一份成品 → 零柒说一句 ---------------------------------------
+
+
+def _new_lines(before: set[int], kind: str = "output") -> list[dict]:
+    """这次落盘之后零柒新说的话（按 kind 筛）。"""
+    from app.core import pet
+
+    try:
+        rows = pet.feed(limit=100)
+    except Exception:  # noqa: BLE001 - 表还没建过 = 它一句话都没说过
+        return []
+    return [e for e in rows if e["id"] not in before and e["kind"] == kind]
+
+
+def _pet_ids() -> set[int]:
+    from app.core import pet
+
+    try:
+        return {e["id"] for e in pet.feed(limit=100)}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def test_saving_a_new_product_speaks_once():
+    """会话里存下一份成品 → 零柒说一句（`output` 那一类）。
+
+    与定时任务那条路（`tasks._write_vault` / 引擎的 `report.save`）共用
+    `pet.note_output`：判据是同一个 `is_output_path`。
+
+    **断的是事实不是措辞**：`output` 那几句轮着说（Z3 的台词池），钉死某一句
+    等于把「换个说法」判成回归。这里钉的是 kind、几件、以及那句话里有它。
+    """
+    before = _pet_ids()
+    out = asyncio.run(
+        mcp._save_artifact({"kind": "deliver", "title": "本周周报", "content": "做完了 A。"})
+    )
+    assert "本周周报" in out
+    lines = _new_lines(before)
+    assert len(lines) == 1
+    assert lines[0]["kind"] == "output" and "本周周报" in lines[0]["text"]
+
+
+def test_compose_kind_is_not_a_delivery_and_stays_silent():
+    """`compose` 落 `notes/`——成文是笔记，不是交出去的成品（与成长值同一口径）。
+
+    零柒对它对一个字都不说：说了，「交出 N 份」的数就与它嘴里的话对不上了。
+    """
+    before = _pet_ids()
+    asyncio.run(mcp._save_artifact({"kind": "compose", "title": "随手记", "content": "几个字。"}))
+    assert _new_lines(before) == []
+
+
+def test_revising_the_same_artifact_does_not_repeat_the_line():
+    """同一轮里改存一次（`更新`）不是新的一份——复读一句就是假消息（架子上并没有多）。"""
+
+    async def _twice() -> None:
+        mcp.begin_turn()  # 同一个回合：第二次存同体裁 = 在改刚存的那份
+        await mcp._save_artifact({"kind": "decide", "title": "上不上", "content": "结论：上。"})
+        await mcp._save_artifact(
+            {"kind": "decide", "title": "上不上", "content": "结论：上，但分两期。"}
+        )
+
+    before = _pet_ids()
+    asyncio.run(_twice())
+    assert len(_new_lines(before)) == 1
+
+
 # --- meta 旁路 --------------------------------------------------------------
 
 

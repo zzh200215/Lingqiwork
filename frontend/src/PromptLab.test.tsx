@@ -59,6 +59,7 @@ const DETAIL: PromptRegistryEntryDetail = {
   fixture: 'feynman.json',
   note: '第一条对照',
   domain: '教学',
+  case_kind: 'chat',
   cases: [
     {
       id: 'term-dropping',
@@ -431,5 +432,144 @@ describe('PromptLab · 领域', () => {
     fireEvent.blur(input)
     await Promise.resolve()
     expect(vi.mocked(api.setPromptDomain).mock.calls.length).toBe(before)
+  })
+})
+
+// 判分型金标集（PLAN2 P2-1 · `JUDGE_SYSTEM`）：用例是「卡三样 + 重讲原文 + 人工档位」，
+// 判据是人工档位而不是断言。界面上要说清两件事：**每个数是什么意思**（一致 / 差一档 /
+// 高判低判），以及**有争议的那条不计分**。喂食表单在这套里不出现——它的用例没有断言可勾。
+describe('PromptLab · 判分金标集（P2-1）', () => {
+  const GRADE_DETAIL: PromptRegistryEntryDetail = {
+    ...DETAIL,
+    name: 'JUDGE_SYSTEM',
+    module: 'app.core.retell',
+    purpose: '重讲判分：把主人的重讲判成 1–4 档',
+    kind: 'system',
+    sha: 'a1b2c3d4e5f6',
+    fixture: 'JUDGE_SYSTEM.json',
+    note: '卡三样 + 重讲原文 + 人工档位',
+    domain: '判分',
+    case_kind: 'grade',
+    checks: [],
+    cases: [
+      {
+        id: 'await-归属说反了',
+        intent: '流利但核心错——别被文风骗了',
+        user: '',
+        checks: [],
+        front: 'await 到底把控制权交给了谁？',
+        back: '交给事件循环。',
+        excerpt: 'asyncio 是单线程事件循环……',
+        retell: '交给操作系统，让操作系统调度一个空闲线程。',
+        grade: 1,
+      },
+      {
+        id: '重讲与题无关',
+        intent: '两处口径撞车',
+        user: '',
+        checks: [],
+        front: '为什么 SQLite 写入要加锁？',
+        back: '因为单文件。',
+        excerpt: '',
+        retell: '我今天想说的是，学英语最好从听力开始。',
+        grade: 0,
+        contested: true,
+        why: '标准那行说跑题→重来，判不了那行说与题无关→fallback',
+      },
+    ],
+  }
+  const GRADE_REPORT: PromptCheckReport = {
+    ...REPORT,
+    key: 'JUDGE_SYSTEM',
+    kind: 'system',
+    report_kind: 'grade',
+    total: 35,
+    passed: 21,
+    rate: 0.6,
+    ci: [0.44, 0.74],
+    tell: true,
+    near: 33,
+    near_rate: 0.943,
+    near_ci: [0.81, 0.99],
+    over: 5,
+    under: 9,
+    fallback: 2,
+    matrix: { '1': { '0': 1, '1': 4, '2': 1, '3': 0, '4': 0 }, '3': { '0': 0, '1': 0, '2': 4, '3': 8, '4': 0 } },
+    contested: [{ id: '重讲与题无关', expect: 0, got: 1, why: '两处口径撞车' }],
+    expect_source: '人工档位',
+    cases: [
+      {
+        id: 'await-归属说反了',
+        intent: '',
+        user: '',
+        checks: ['grade_matches'],
+        passed: false,
+        near: false,
+        fallback: false,
+        over: true,
+        under: false,
+        expect: 1,
+        got: 3,
+        label: '良好',
+        failed: [{ name: 'grade_matches', why: '人工定「重来」，它判「良好」——**高判**' }],
+        reply: '{"grade": "良好"}',
+        chars: 0,
+        seconds: 2,
+        error: '',
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.promptRegistry).mockResolvedValue({
+      prompts: [{ ...entry(), name: 'JUDGE_SYSTEM', cases: 36, fixture: 'JUDGE_SYSTEM.json' }],
+      inline: [],
+    })
+    vi.mocked(api.promptEntry).mockResolvedValue(GRADE_DETAIL)
+    vi.mocked(api.checkPrompt).mockResolvedValue(GRADE_REPORT)
+  })
+
+  it('用例摊的是题面/答案/重讲与人工档位，且**没有喂食入口**', async () => {
+    const { container } = renderLab()
+    fireEvent.click(await screen.findByText('JUDGE_SYSTEM'))
+    await screen.findByText('golden set 2 条')
+
+    expect(screen.getByText(/await 到底把控制权交给了谁/)).toBeTruthy()
+    expect(screen.getByText(/交给操作系统，让操作系统调度一个空闲线程/)).toBeTruthy()
+    expect(container.querySelector('[data-lab-case-grade="await-归属说反了"]')?.textContent).toBe(
+      '人工 重来'
+    )
+    // 有争议的那条：摆出来、标明为什么
+    const contested = container.querySelector('[data-lab-case-grade="重讲与题无关"]')
+    expect(contested?.textContent).toContain('人工 不判')
+    expect(contested?.textContent).toContain('有争议')
+    // 判分型没有断言可勾 → 界面上不给「喂一条进来」（后端也会拒）
+    expect(container.querySelector('[data-lab-feed-open]')).toBeNull()
+    // 入口和出口都不在界面上：条数有下限，一条条删会把整套跑到跑不动
+    expect(container.querySelector('[data-lab-case-drop]')).toBeNull()
+  })
+
+  it('报告说的是档位的事：一致 / 差一档 / 高判低判 / 矩阵 / 有争议不计分', async () => {
+    const { container } = renderLab()
+    fireEvent.click(await screen.findByText('JUDGE_SYSTEM'))
+    fireEvent.click(await screen.findByText('跑一次对照（已登记内容）'))
+    await waitFor(() => expect(api.checkPrompt).toHaveBeenCalledWith('JUDGE_SYSTEM', {}))
+
+    const report = await waitFor(() => {
+      const el = container.querySelector('[data-lab-report]')
+      if (!el) throw new Error('还没有报告')
+      return el
+    })
+    expect(report.textContent).toContain('档位一致 21/35')
+    expect(report.textContent).toContain('差一档内')
+    expect(report.textContent).toContain('94%')
+    expect(report.textContent).toContain('高判 5 / 低判 9')
+    expect(report.textContent).toContain('说判不了 2')
+    expect(report.textContent).toContain('矩阵')
+    // 有争议那条：**不计分**这件事必须写在脸上
+    expect(report.textContent).toContain('有争议、不计分')
+    expect(report.textContent).toContain('不进 k/n')
+    // 断言那套说法不该出现在判分报告里
+    expect(report.textContent).not.toContain('断言 ')
   })
 })

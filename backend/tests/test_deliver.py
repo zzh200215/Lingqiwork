@@ -143,6 +143,46 @@ def test_save_writes_vault_deliver_and_indexes(monkeypatch):
     assert seen == [dest]  # 落盘之后确实进了索引——「下次先捞你自己的」靠这一步
 
 
+def test_save_keeps_genre_and_audience_on_the_file(monkeypatch):
+    """M5：体裁与读者**存进文件头**——「这份是给谁写的」不能存完就丢。
+
+    交付的事后见证（`core/delivery.py`）读的就是它：mtime 是交出去的时刻，frontmatter 是
+    给谁写的。写的是**界面名**（周报 / 领导），id 那边早钉在 `prompt_sha` 上了。
+    """
+    monkeypatch.setattr("app.core.indexer.index_file", lambda path, **kw: 1)
+    rep = deliver.Report(title="第 37 周周报", sections=[], used=[])
+
+    out = asyncio.run(deliver.save(rep, [], genre="weekly", audience="leader"))
+
+    text = (deliver.DELIVER_DIR / Path(out["filename"]).name).read_text(encoding="utf-8")
+    assert text.startswith("---\ngenre: 周报\naudience: 领导\n---\n\n# 第 37 周周报")
+
+
+def test_the_save_endpoint_carries_them_through(monkeypatch):
+    """端点是三行委派，但它得真的把这两个字段接过去（前端按这两个名字传）。
+
+    **不传**时一个字节都不写（别的引擎与没给体裁的调用照旧）——空字段写进文件等于
+    「问过了但没答案」，那比不写坏。
+    """
+    monkeypatch.setattr("app.core.indexer.index_file", lambda path, **kw: 1)
+    from app.routers import deliver as api
+
+    body = api.SaveIn(
+        title="第 37 周周报",
+        sections=[api.Section(heading="结论", body="先说结论")],
+        genre="weekly",
+        audience="leader",
+    )
+    out = asyncio.run(api.save(body))
+    text = (deliver.DELIVER_DIR / Path(out["filename"]).name).read_text(encoding="utf-8")
+    assert "genre: 周报" in text and "audience: 领导" in text
+
+    bare = api.SaveIn(title="随手一篇", sections=[api.Section(heading="H", body="B")])
+    out2 = asyncio.run(api.save(bare))
+    text2 = (deliver.DELIVER_DIR / Path(out2["filename"]).name).read_text(encoding="utf-8")
+    assert text2.startswith("# 随手一篇")
+
+
 # ---------- run（完整生成器） ----------
 
 

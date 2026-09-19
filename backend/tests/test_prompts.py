@@ -40,12 +40,26 @@ _FINGERPRINTS = [
     ("app.routers.notes", "_BRIEFING_SYSTEM", "d310e05b8727"),
     ("app.core.llm", "_JSON_HINT", "18f4e689b461"),
     ("app.routers.chat", "_OUTPUT_RULE", "d583da7e7f2f"),
+    # M1（PLAN §3 G1）：重讲判分的两条。判分器也是提示词——**登记**在这里，
+    # 而不是塞进 data/config.json（那会绕过登记中心，`routers/pet.py` 那条注释写着理由）。
+    ("app.core.retell", "JUDGE_SYSTEM", "1029fe30e901"),
+    ("app.core.retell", "SESSION_JUDGE_SYSTEM", "6c6b1852e876"),
+    # M3（PLAN §3 G3）：面试陪练的声部与复盘报告
+    ("app.core.interview", "INTERVIEW_PROMPT", "4b6b14e4a84b"),
+    ("app.core.interview", "_REPORT_PROMPT", "a3f174a4dfd9"),
+    # P2：零柒的语气微调。运行时注入的规矩也要是一等公民（同 `_PET_TOOL_RULE`）——
+    # 它是**追加**到人设后面的一句，不是改人设（`app.core.pet_tone` 开篇写着理由）。
+    ("app.core.pet_tone", "TONE_RULE", "a201b29c47e8"),
+    # Z1（PLAN4）：陪伴页注入的「今天」那几段的抬头。同上——运行时追加的也是登记项。
+    ("app.core.pet_context", "FACTS_HEAD", "a985a67f61ca"),
+    ("app.core.pet_context", "LINES_HEAD", "b2135e9bf9eb"),
+    ("app.core.pet_context", "HISTORY_NOTE", "f7b8669d3f05"),
 ]
 
 
 def test_inventory_count():
     items = inventory()
-    assert len(items) == 32
+    assert len(items) == 40
     assert len(items) == len(_FINGERPRINTS)
 
 
@@ -97,9 +111,13 @@ def test_inline_notes_registered():
 
 def test_summary_shape():
     s = summary()
-    assert s["count"] == 32
+    assert s["count"] == 40
     assert s["inline"] == 8
     assert s["missing"] == []
+    assert s["by_module"]["app.core.retell"] == 2  # M1：卡片判分 + 会话判分
+    assert s["by_module"]["app.core.interview"] == 2  # M3：声部 + 报告
+    assert s["by_module"]["app.core.pet_tone"] == 1  # P2：语气微调那条规矩
+    assert s["by_module"]["app.core.pet_context"] == 3  # Z1：今天的事实 + 它说过的话 + 连着聊那句
     assert s["by_module"]["app.routers.chat"] == 1
     assert s["by_module"]["app.routers.pet"] == 1
     assert s["by_module"]["app.core.tutor"] == 5

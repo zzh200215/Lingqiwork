@@ -195,6 +195,11 @@ class ScheduledTask(Base):
     # 写进同一个文件夹——「同一个会议」就是这么来的；录音触发时还会再套一层
     # `<日期>-<录音名>/`。
     landing_dir: Mapped[str] = mapped_column(String(300), default="")
+    # 这条流程处理的是哪件「事」（M2）。**运行期列**，与 `conversation_id` 同类：起链时按
+    # 你输入的题目写进来（同名复用、没有就建一条），下游每一步跟着它把成品挂到同一件事上。
+    # 「这条流程在忙哪件事」是它的全部含义 —— 具体**哪一趟**处理的是哪件记在
+    # `TaskRun.thread_id` 上（卡点续跑、手动重跑都读那一份）。
+    thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class TaskRun(Base):
@@ -226,6 +231,10 @@ class TaskRun(Base):
     # 这次运行落进的目录（vault 相对，空 = vault/tasks/）。记在 run 上是因为链条
     # 可能在人工卡点上停一轮再续跑——那时得知道当初落的是哪个文件夹（§4-13）。
     run_dir: Mapped[str] = mapped_column(String(300), default="")
+    # 这次运行在处理哪件「事」（M2）。与 `run_dir` 同一个理由：**停一轮再续跑也得知道**，
+    # 而且链条上「是哪件」由上游定（`_fire_chain` 传下来）——所以真值在 run 上，不在任务行上
+    # （任务行那个只是「这条流程最近一次在忙哪件事」的界面提示）。
+    thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class EvalItem(Base):
@@ -278,7 +287,14 @@ class PetEvent(Base):
     """One spoken line from 零柒, the resident companion (ROADMAP V14).
 
     Emitted best-effort by task/digest/backup/feeds completion hooks; the pet
-    window polls these and speaks them. Not a chat log — pet chat is ephemeral.
+    window polls these and speaks them. Not a chat log — the conversation log
+    lives in `PetChat` (P5 之后它落库了，见那张表的说明).
+
+    **`name` 与 `detail` 的分工**（M2 补记）：`name` 是**这件事叫什么**（概念 / 任务名 /
+    文件名——过 `pet.compose` 拼句子用的那个），`detail` 是**这一句的补充**（卡在哪、
+    连着几天、哪个插件）。历史行只有 `detail`（它当初兼着两个角色，于是「同一个概念
+    说过没有」没法查——`repeated` 的冷却撞上过这个坑）。新写的都带上 `name`；
+    `pet.emit()` 里与建表语句同一处补列，`create_all` 建新库、老库由它自己 ALTER。
     """
 
     __tablename__ = "pet_events"
@@ -287,6 +303,7 @@ class PetEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     kind: Mapped[str] = mapped_column(String(20), default="say")
     text: Mapped[str] = mapped_column(Text)  # what 零柒 says
+    name: Mapped[str] = mapped_column(Text, default="")  # 这件事叫什么（概念 / 任务 / 文件）
     detail: Mapped[str] = mapped_column(Text, default="")  # optional longer context
 
 
@@ -313,6 +330,31 @@ class PetPlugin(Base):
     storage_json: Mapped[str] = mapped_column(Text, default="{}")
     quota_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PetChat(Base):
+    """跟零柒说过的一轮问答（P5 · 加深脑子：聊天从「随请求走」到「记得住」）。
+
+    设计上曾是 ephemeral（与选择助手同一立场：这是跟陪伴者的对话，不是又一个
+    会话列表）。代价用了几天就露出来：刷新页面它就「忘了上一句」，隔天回来
+    更是从头开始——「它记得你」这件事，靠前端内存里那 6 轮兜不住。落到本地库，
+    跨会话的连续性才有真值可读（后端补历史、前端回放都读它）。
+
+    **与 `PetEvent` 的分工**：那边是**它主动说的**（事件台词，一行一件事），
+    这边是**你们一问一答的对话**。`tools` 存那一轮它真的做了什么（P3 的回执，
+    JSON 数组）——回放时面板还能摆出那排小 chip，只存事实，不存解释。
+
+    报错/中断的那一轮**不落**（`pet.save_chat_turn` 的规矩）：真的回了话才算
+    一轮，残句不该进记忆。
+    """
+
+    __tablename__ = "pet_chats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    role: Mapped[str] = mapped_column(String(10))  # 'user' | 'pet'
+    text: Mapped[str] = mapped_column(Text)
+    tools: Mapped[str] = mapped_column(Text, default="[]")  # JSON：那一轮的工具回执
 
 
 class Card(Base):
@@ -346,6 +388,16 @@ class Card(Base):
     model_id: Mapped[str] = mapped_column(String(100), default="")  # which model wrote it
     suspended: Mapped[bool] = mapped_column(Boolean, default=False)  # leech or shelved by hand
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # PLAN2 §6「回指采纳」（v12）：**最后一次翻这张卡的「可能缺前置」候选**的时刻。
+    # 它只服务那一件度量：拉取式功能「有没有人看」是它唯一的生死指标，而「看过」这件事
+    # 在别的表里没有任何痕迹（候选是当场算的、不落库）。NULL = 从没翻过。
+    #
+    # 写入口只有一个：`POST /api/cards/{id}/prereq/seen`（界面在真去取候选那一下调它）。
+    # **不在 GET 里顺手写**：读路径带副作用，翻页/重试/预取都会把它记账，而「看过」是
+    # 一个必须说得准的数（说不准就会把一个没人用的功能判成有人用）。
+    prereq_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # --- SM-2 state (updated in place) ---
     due: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     interval_days: Mapped[float] = mapped_column(Float, default=0.0)
@@ -377,6 +429,32 @@ class CardReview(Base):
     ease_after: Mapped[float] = mapped_column(Float, default=2.5)
     reps_before: Mapped[int] = mapped_column(Integer, default=0)
     due_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # M1（PLAN §3 G1）：这一答是**讲出来**的，这里是那次重讲的原文。
+    # 它是判分的输入，也是「这一天你真的重讲了」的唯一凭据（北星指标读的就是这一列）。
+    # 自评那一路照旧留空——两条路写的是同一张表、同一组间隔字段（双入口单账本）。
+    retell: Mapped[str] = mapped_column(Text, default="")
+    # PLAN2 T2：这一档**是谁打的**。`True` = 判分器判的（`retell.adjudicate` 那条路，
+    # **唯一**的写入方）；`False` = 你自己定的档，包括「判分挂了、退回自评」的那种
+    # ——判分没跑成 ≠ 差评，更 ≠ 判过分（`retell` 那一列照旧带原文，所以
+    # 「这一天你真的重讲了」不受影响）。
+    #
+    # 它存在的唯一理由是校准曲线：`grade` 两边都写，不分成两列就问不出「我觉得我懂」
+    # 与「实际讲得出来」差多少。**`False` 在 v9 之前的历史行上含义是「未知」**，
+    # 不是「自评」——所以曲线只统计 v9 之后的行（见 `cards.calibration` 的 docstring）。
+    judged: Mapped[bool] = mapped_column(Boolean, default=False)
+    # PLAN2 §9.4（v10，2026-09-16 定夺）：**判它的那一版提示词的指纹**（`JUDGE_SYSTEM` 的
+    # sha12）。判分器换版时，曲线必须知道每一行是哪把尺子量的——否则两版的行会混在一起
+    # 被当成一把量（第一版就是这个毛病，页脚只能写「账本没存版本」）。
+    #
+    # 三种状态，`judged` 与它一起读：
+    #   `judged=1, sha='a1b2c3d4e5f6'` → 判过，就是这一版；
+    #   `judged=1, sha=''`             → 判过，但**不知道哪一版**（v9–v10 之间的行，
+    #                                    那时候没有这一列；不可伪造，新行写不出这个状态）；
+    #   `judged=0`                     → 自评（`sha` 恒空）。
+    #
+    # 为什么不是「一列搞定」：把布尔换成指纹（`judged = bool(sha)`）会让上面第二种状态
+    # **不可表示**，而它真实存在——那批行的唯一诚实说法就是「不知道」。
+    judged_sha: Mapped[str] = mapped_column(String(12), default="")
 
 
 # the hot query is "not suspended and due <= now", ordered by due
@@ -519,6 +597,12 @@ class TutorSession(Base):
     summary_upto: Mapped[int] = mapped_column(Integer, default=0)
     # 代码库陪读（全局唤起脑暴清单）：非空 = 这场会话的取材只在 repos/<repo>/ 里找
     repo: Mapped[str] = mapped_column(String(100), default="")
+    # PLAN2 §6「回指采纳」（v12）：**这一场是从哪张搁置卡的前置候选开出来的**。
+    # NULL = 不是（自己开的、从点/深链开的、陪读开的……绝大多数都是 NULL）。
+    # 与 `origin_point_id`（`tutor.start` 那个「从材料拆出的点开场」）同一种做法，
+    # 但那个字段还兼着「标记已教」的活，所以没有合并成一个 origin 字符串——
+    # 一个字段一个用途，读的人才不用去解析格式。
+    prereq_card_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # socratic（默认：老师问你答）| feynman（反转：你讲它追问，检验你是不是真懂）
     mode: Mapped[str] = mapped_column(String(10), default="socratic")
     model_id: Mapped[str] = mapped_column(String(100), default="")
@@ -532,6 +616,18 @@ class TutorSession(Base):
     stuck_resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # PLAN2 P2-3（v11，2026-09-16）：**这个 verdict 是谁定的**——判分器判的（这里存
+    # 判它的那一版 `SESSION_JUDGE_SYSTEM` 的指纹），还是你自己标的（空串）。
+    #
+    # 与卡片侧的 `judged`/`judged_sha`（v9/v10）同一个形状，但只占**一列**：那里的两列
+    # 是因为「判过但不知道哪一版」那批历史行必须能被表示出来；会话侧没有那批行
+    # （真库 `tutor_sessions` 当时 **0 场**），所以「非空 = 判的、空 = 你标的」既不撒谎
+    # 也不缺信息。指纹也**不另算一份**：`retell.session_judge_sha()` 从登记表取。
+    #
+    # 覆盖规则：`end()` 每次都按传进来的值**无条件重写**这一列——你先自己标了「懂了」，
+    # 后来点了「让它判」判成「半懂」，那它就从自评变成判分；反过来手动改回去也一样。
+    # 「谁定的」跟着最后一次落定走，不然这一列会在原地留着一个不再成立的说法。
+    judged_sha: Mapped[str] = mapped_column(String(12), default="")
 
 
 class TutorTurn(Base):
@@ -597,6 +693,14 @@ class ArtifactFeedback(Base):
     verdict: Mapped[str] = mapped_column(String(8))  # good | bad
     reason: Mapped[str] = mapped_column(Text, default="")
     ref: Mapped[str] = mapped_column(String(200), default="")  # vault 相对路径（若已落盘）
+    # S1 的注入痕迹（PLAN3 §9.2 决策4）：这份产出是**吃着某份工序**生成的、还是没吃？
+    # **三态文本，不是 bool**——「不知道」必须与「没注入」分开：从产出清单**事后**点的
+    # 👍/👎，那时前端手里没有注入信息，记成「没注入」就是在编（读不到就说读不到）。
+    #   "" = 不知道 ｜ "[]" = 没有注入 ｜ "[技能名…]" = 有注入
+    # 它**不改**聚合的 join key `(kind, prompt_sha, model_id)`：注入并不改变 `prompt_sha`
+    # （那是模块级常量的指纹），所以不加这一列，两种工序的 👍/👎 会混进同一份成绩里，
+    # 「哪版提示词更好」就被悄悄掺了别的东西。
+    injected: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -687,6 +791,41 @@ class PromptEvalRun(Base):
     ci_high: Mapped[float] = mapped_column(Float, default=1.0)
     seconds: Mapped[float] = mapped_column(Float, default=0.0)
     detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐用例：断言、回复、耗时
+
+
+class SkillEvalRun(Base):
+    """一份**技能包**跑一遍用例的成绩（环一的收口）。
+
+    `core/skill_eval.py` 的落库形态：每条用例问两次（没它 / 有它），比对逐条过没过，
+    再给 `k/n` + Wilson 区间。与 `PromptEvalRun` 的分工：那张表量**登记过的提示词**、
+    比的是「改前 vs 改后」；这张表量**技能包**、比的是「没它 vs 有它」。
+
+    `skill_sha` = sha256(技能名 + SKILL.md 正文) 前 12 位：内容改过之后旧成绩不作数
+    （`stale`），**与 Q1 技能卡的 `stale` 同一个意思**。`skill` 是技能名，不是外键 ——
+    技能活在 `skills/` 的目录里，删掉技能不该让历史成绩消失（记录本来就是"当时跑过"）。
+    """
+
+    __tablename__ = "skill_eval_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    skill: Mapped[str] = mapped_column(String(80), index=True)
+    skill_sha: Mapped[str] = mapped_column(String(12), index=True)
+    model_id: Mapped[str] = mapped_column(String(120), default="")
+    cases: Mapped[int] = mapped_column(Integer, default=0)
+    with_passed: Mapped[int] = mapped_column(Integer, default=0)  # 有它那一侧过了几条
+    rate: Mapped[float] = mapped_column(Float, default=0.0)
+    ci_low: Mapped[float] = mapped_column(Float, default=0.0)
+    ci_high: Mapped[float] = mapped_column(Float, default=1.0)
+    # 逐条差：有它比没它多过了几条 / 少过了几条。**这才是"有没有用"的直接答案**，
+    # 单看 in 侧通过率会把"这条用例本来就简单"读成"技能有用"。
+    helped: Mapped[int] = mapped_column(Integer, default=0)
+    hurt: Mapped[int] = mapped_column(Integer, default=0)
+    # 「跟着工序做」的 LLM 判分均值（0-5）。**-1 = 没判**（没有可判的产出 / 判分没跑成）——
+    # NULL 与 0 分的区别必须留着，否则「没量」会被读成「量了，0 分」。
+    follows_method: Mapped[float] = mapped_column(Float, default=-1.0)
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    detail_json: Mapped[str] = mapped_column(Text, default="[]")  # 逐用例：两次回复、断言、判分
 
 
 class TurnTrace(Base):
@@ -819,8 +958,17 @@ class DecisionLog(Base):
     记得蒙对的那几次。把信心在**当时**钉下来，才谈得上校准——「你当时说七成把握的那类事，
     实际应验了几成」。这是这张表存在的唯一理由。
 
-    **回看是拉取式**：没有到期时间、没有队列、没有提醒。`outcome` 空着就是
-    还没回看；没有任何东西会催它。`outcome` ∈ "" | hit | miss | unclear。
+    **回看是拉取式**：没有队列、没有任何东西会催你——`outcome` 空着就是还没回看，
+    你什么时候想翻就什么时候翻。
+
+    ⚠️ **M4（2026-09-16）在这里让开了一步，理由写在原地**：`witness_days` 是这条规矩
+    唯一的例外。「纯拉取式」的下场在三个月这个尺度上是可预见的——**那条日志会变成死数据**
+    （`outcome` 永远空着，校准分永远算不出来，整张表只剩自我表扬）。所以到点之后由
+    **现有 nudge 管线**念一句：一天一条、只陈述当时的事实、可关（`pet_enabled`），
+    台词里没有「你该回看了」。这不是把旧规矩删掉，是写明它在什么条件下被让开——
+    与 `cards.reschedule` 给复习留死线同一个做法。要退回真·拉取式：
+    删掉这一列 + `decision_log.witness()` + 前端那一支，成本很小（那正是它被设计成
+    一列而不是一张表的原因）。
     """
 
     __tablename__ = "decision_log"
@@ -834,6 +982,9 @@ class DecisionLog(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     outcome: Mapped[str] = mapped_column(String(10), default="")  # "" | hit | miss | unclear
     note: Mapped[str] = mapped_column(Text, default="")  # 回看时记一句为什么算应验
+    # 多久之后值得回头看一眼（天）。90 天：短于这个数，多半还看不出应验与否；
+    # 长于它，人会先把当时为什么那么想忘掉。见上面那段「让开一步」的说明。
+    witness_days: Mapped[int] = mapped_column(Integer, default=90)
 
 
 class ModelUsage(Base):
@@ -885,7 +1036,8 @@ class Thread(Base):
 class ThreadItem(Base):
     """挂在一件事上的一条东西。**只存引用**，不复制内容。
 
-    `kind` ∈ material | note | card | tutor | output | task | decision；`ref` 是卡片/会话/
+    `kind` ∈ material | note | card | session | output | task | decision（R3 起：`tutor`
+    改叫 `session`——这一列说的是「挂的是什么东西」，不是「哪个功能」）；`ref` 是卡片/会话/
     决策/任务的 id（字符串），或 vault 相对路径。同一条挂两次是幂等的——由唯一索引兜底，
     不是靠调用方自觉。
     """

@@ -541,13 +541,20 @@ async def run(
         }
         return
 
+    # S1 引擎吃 skill：匹配键是这次对质的**题目**（`frame.subject`）。
+    from app.core import skill_match
+
+    inj = skill_match.injection(frame.subject)
+    if inj["names"]:
+        yield "skills", skill_match.event_data(inj)
+
     # pairs 非空 = 有几处要对质；pairs 是 None = 扫描没跑成，照旧成文（写手自己找）
     yield "writing", {}
     rep = None
     async for _ev, _payload in _report.synthesize_streaming(
         frame.subject,
         sources,
-        _SYNTH_PROMPT,
+        skill_match.with_skills(_SYNTH_PROMPT, inj),
         model_id,
         stream_fn=stream_fn,
         native_fn=native_fn,

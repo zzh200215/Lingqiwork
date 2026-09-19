@@ -57,6 +57,18 @@ async def list_notes():
     return {"dir": _NOTES_ROOT.name, "files": files}
 
 
+@router.get("/voice")
+async def voice_notes():
+    """语音备忘的「那一问」（R2 · PLAN5 §3）：哪几份还没回答「这是材料还是工作留痕」。
+
+    **拉取式**：不催、不计数、不进零柒的提醒来源。判据与口径原文都在
+    `core/voice_note.py`（两条既有路上的痕），这里只把它端出来。
+    """
+    from app.core import voice_note
+
+    return await voice_note.pending()
+
+
 @router.get("/content")
 async def read_note(path: str):
     p = _safe_path(path)

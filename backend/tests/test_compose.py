@@ -5,6 +5,9 @@
 `smoke_compose.py` 验（真模型 + 真索引）。
 """
 import asyncio
+import atexit
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -214,3 +217,95 @@ def test_run_happy_path(wired, monkeypatch):
     from app.core import report as report_mod
 
     assert report["prompt_sha"] == report_mod.prompt_sha(compose._SYNTH_PROMPT)
+
+
+# ---------- S1：引擎吃 skill（PLAN3 S1） ----------
+
+_TMP_SKILLS = Path(tempfile.mkdtemp(prefix="wb-compose-skills-", dir=Path(".").resolve()))
+atexit.register(lambda: shutil.rmtree(_TMP_SKILLS, ignore_errors=True))
+
+_SKILL_NAME = "给领导写汇报要结论先行"
+_REPORT_JSON = '{"title":"R","sections":[{"heading":"H","body":"B [1]"}],"used":[1]}'
+
+
+@pytest.fixture
+def engine_skills(monkeypatch):
+    """技能目录指到一个临时目录（每个用例都是空的）——真 `skills/` 一个字节都不动。"""
+    from app.core import skills as skills_core
+
+    d = _TMP_SKILLS / "skills"
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(skills_core, "SKILLS_DIR", d)
+    return d
+
+
+def _put_skill(root: Path) -> None:
+    d = root / _SKILL_NAME
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\n"
+        f"name: {_SKILL_NAME}\n"
+        "description: 要把工作结果汇报给领导、需要一页纸讲清结论时用\n"
+        "---\n\n"
+        "第一步：第一个小节就叫「结论」，一句话说清判断。\n",
+        encoding="utf-8",
+    )
+
+
+def _capture(payload: str):
+    """假 stream_fn + 把 messages 记下来——「system 里到底有什么」是这一节的验收。"""
+    seen: list[list[dict]] = []
+
+    async def _stream(info, model, messages):
+        seen.append(messages)
+        yield payload
+
+    return _stream, seen
+
+
+async def _kb_one(query, top_k):
+    return [{"source": "notes/a.md", "title": "A", "text": "内容A"}]
+
+
+def test_run_injects_the_matched_skill_into_the_system(engine_skills, wired, monkeypatch):
+    """S1 验收第 2 条：命中 → 工序进 system，且与 `skill_eval` 的「有它」侧**逐字一致**。"""
+    from app.core import skills as skills_core
+
+    monkeypatch.setattr("app.core.providers.default_model_id", lambda: "test-model")
+    _put_skill(engine_skills)
+
+    stream, seen = _capture(_REPORT_JSON)
+    events = _run(
+        "给领导汇报这次项目的结论",
+        kb_fn=_kb_one,
+        memory_fn=_no_memory,
+        journal_fn=_no_journal,
+        stream_fn=stream,
+    )
+
+    kinds = [e for e, _ in events]
+    # 手动那条路没有运行记录，所以「看得见」全靠这条事件——而且它在写之前
+    assert dict(events)["skills"]["skills"] == [_SKILL_NAME]
+    assert kinds.index("skills") < kinds.index("writing")
+
+    system = seen[0][0]
+    assert system["role"] == "system"
+    body = skills_core.load_skill(_SKILL_NAME)
+    assert system["content"].startswith(compose._SYNTH_PROMPT)
+    assert system["content"].endswith(f"按这套工序做：\n\n{body}")
+
+
+def test_run_without_a_match_leaves_the_prompt_alone(engine_skills, wired, monkeypatch):
+    """S1 验收第 2 条的反面：不命中 → **一个字都不多**（system 逐字节 = 引擎自己那份）。"""
+    monkeypatch.setattr("app.core.providers.default_model_id", lambda: "test-model")
+    stream, seen = _capture(_REPORT_JSON)
+    events = _run(
+        "给领导汇报这次项目的结论",
+        kb_fn=_kb_one,
+        memory_fn=_no_memory,
+        journal_fn=_no_journal,
+        stream_fn=stream,
+    )
+    assert "skills" not in [e for e, _ in events]
+    assert seen[0][0] == {"role": "system", "content": compose._SYNTH_PROMPT}

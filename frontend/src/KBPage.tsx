@@ -1,8 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import {
+  ClipboardCheck,
+  type LucideIcon,
+  FolderOpen,
+  GitBranch,
+  GraduationCap,
+  Library,
+  Play,
+  Plus,
+  Search,
+  TrendingUp,
+  Upload,
+  Waypoints,
+  Wrench,
+} from 'lucide-react'
 import { api, type DirItem, type EvalItem, type EvalRun, type KgRetrieval, type KgStatus, type RepoItem } from './api'
 import BookmarkletLink from './BookmarkletLink'
 import { buildBookmarklet, parseClipParams, shouldAutoClose } from './capture'
+
+/** 五个页签各自的线性图标（emoji 从 chrome 退役） */
+const KB_TAB_ICON: Record<'index' | 'repos' | 'dirs' | 'eval' | 'kg', LucideIcon> = {
+  index: Search,
+  repos: GitBranch,
+  dirs: FolderOpen,
+  eval: ClipboardCheck,
+  kg: Waypoints,
+}
 
 interface KbStats {
   chunks: number
@@ -496,7 +520,7 @@ export default function KbPage() {
   useEffect(() => {
     const req = parseClipParams(searchParams.toString())
     if (!req) return
-    const key = `${req.url} ${req.title}`
+    const key = `${req.url}\u0000${req.title}`
     if (deeplinkDone.current === key) return
     deeplinkDone.current = key
     setSearchParams({}, { replace: true })
@@ -538,7 +562,7 @@ export default function KbPage() {
 
   return (
     <>
-      <div className="mx-auto max-w-7xl px-6 py-8">
+      <div className="mx-auto max-w-[1600px] px-6 py-6">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">知识库</h1>
@@ -548,35 +572,39 @@ export default function KbPage() {
             不然窄的那几页签直接被裁掉、点都点不到。 */}
         <div className="flex gap-1 overflow-x-auto rounded-md bg-neutral-100 p-1 text-sm dark:bg-neutral-900">
           {([
-            ['index', '📚 索引与检索', undefined as number | undefined],
-            ['repos', '📦 代码仓库', repos.length],
-            ['dirs', '📁 本地目录', dirs.length],
-            ['eval', '📊 评估', evalItems.length],
-            ['kg', '🕸️ 图谱', undefined as number | undefined],
-          ] as const).map(([key, label, count]) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={`flex items-center gap-1.5 rounded px-3 py-1 transition-colors ${
-                tab === key
-                  ? 'bg-white font-medium shadow-sm dark:bg-neutral-800'
-                  : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
-              }`}
-            >
-              {label}
-              {count != null && count > 0 && (
-                <span
-                  className={`rounded-full px-1.5 text-[10px] leading-4 ${
-                    tab === key
-                      ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300'
-                      : 'bg-neutral-200 text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300'
-                  }`}
-                >
-                  {count}
-                </span>
-              )}
-            </button>
-          ))}
+            ['index', '索引与检索', undefined as number | undefined],
+            ['repos', '代码仓库', repos.length],
+            ['dirs', '本地目录', dirs.length],
+            ['eval', '评估', evalItems.length],
+            ['kg', '图谱', undefined as number | undefined],
+          ] as const).map(([key, label, count]) => {
+            const Icon = KB_TAB_ICON[key]
+            return (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={`flex items-center gap-1.5 rounded px-3 py-1 transition-colors ${
+                  tab === key
+                    ? 'bg-white font-medium shadow-sm dark:bg-neutral-800'
+                    : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+                {count != null && count > 0 && (
+                  <span
+                    className={`rounded-full px-1.5 text-[10px] leading-4 ${
+                      tab === key
+                        ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300'
+                        : 'bg-neutral-200 text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -669,7 +697,7 @@ export default function KbPage() {
       {/* 添加知识 */}
       <section className="mb-6">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-          <span>➕</span> 添加知识
+          <span><Plus className="h-3.5 w-3.5" /></span> 添加知识
         </h2>
         <div className="grid gap-3 md:grid-cols-2">
           <div
@@ -690,7 +718,7 @@ export default function KbPage() {
                 : 'border-neutral-300 hover:border-violet-300 dark:border-neutral-700'
             }`}
           >
-            <div className="mb-2 text-2xl">📤</div>
+            <div className="mb-2 flex justify-center"><Upload className="h-6 w-6" /></div>
             <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
               {uploading ? '上传中…' : '拖拽文件到这里，或点击选择'}
             </p>
@@ -717,7 +745,7 @@ export default function KbPage() {
             />
           </div>
 
-          <div className="flex flex-col rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <div className="flex flex-col wb-card p-5">
             <div className="mb-1 flex items-center gap-2">
               <span className="text-xl">🌐</span>
               <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-200">网页剪藏</h3>
@@ -793,10 +821,10 @@ export default function KbPage() {
       </section>
 
       {/* 文档库 */}
-      <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+      <section className="mb-6 wb-card p-5">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-            <span>📚</span> 文档库
+            <span><Library className="h-3.5 w-3.5" /></span> 文档库
             <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
               {files?.files.length ?? 0}
             </span>
@@ -837,9 +865,9 @@ export default function KbPage() {
       </section>
 
       {/* 检索测试 */}
-      <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+      <section className="mb-6 wb-card p-5">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-          <span>🔍</span> 检索测试
+          <span><Search className="h-3.5 w-3.5" /></span> 检索测试
         </h2>
         <div className="flex gap-2">
           <input
@@ -912,10 +940,10 @@ export default function KbPage() {
       </section>
 
       {/* 维护 */}
-      <section className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+      <section className="wb-card p-5">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-            <span>🛠️</span> 维护
+            <span><Wrench className="h-3.5 w-3.5" /></span> 维护
           </h2>
           <button
             onClick={reindex}
@@ -973,9 +1001,9 @@ export default function KbPage() {
             </div>
           </section>
 
-          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <section className="mb-6 wb-card p-5">
             <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-              <span>📦</span> 添加代码仓库
+              <span><GitBranch className="h-3.5 w-3.5" /></span> 添加代码仓库
             </h2>
             <div className="flex flex-wrap gap-2">
               <input
@@ -1008,7 +1036,7 @@ export default function KbPage() {
 
           <section className="mb-6">
             <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-              <span>📦</span> 已索引仓库
+              <span><GitBranch className="h-3.5 w-3.5" /></span> 已索引仓库
               <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
                 {repos.length}
               </span>
@@ -1020,10 +1048,10 @@ export default function KbPage() {
                 {repos.map((r) => (
                   <li
                     key={r.name}
-                    className="flex items-center gap-4 rounded-xl border border-neutral-200 p-4 text-sm transition-colors hover:border-violet-300 dark:border-neutral-800 dark:hover:border-violet-500/40"
+                    className="wb-card wb-card-hover flex items-center gap-4 p-4 text-sm"
                   >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-lg dark:bg-violet-900/40">
-                      📦
+                    <div className="wb-chip h-10 w-10 bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-300">
+                      <GitBranch className="h-[18px] w-[18px]" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -1068,7 +1096,8 @@ export default function KbPage() {
                           }}
                           className="rounded-md border border-violet-400 px-2.5 py-1 text-xs text-violet-600 dark:border-violet-500 dark:text-violet-300"
                         >
-                          🎓 陪读
+                          <GraduationCap className="mr-1 inline h-3 w-3" />
+                          陪读
                         </button>
                         <button
                           onClick={() => syncRepo(r.name)}
@@ -1125,9 +1154,9 @@ export default function KbPage() {
             </div>
           </section>
 
-          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <section className="mb-6 wb-card p-5">
             <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-              <span>📁</span> 添加本地目录
+              <span><FolderOpen className="h-3.5 w-3.5" /></span> 添加本地目录
             </h2>
             <div className="flex flex-wrap gap-2">
               <input
@@ -1161,7 +1190,7 @@ export default function KbPage() {
           <section className="mb-6">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-                <span>📁</span> 已索引目录
+                <span><FolderOpen className="h-3.5 w-3.5" /></span> 已索引目录
                 <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
                   {dirs.length}
                 </span>
@@ -1176,10 +1205,10 @@ export default function KbPage() {
                 {dirs.map((d) => (
                   <li
                     key={d.name}
-                    className="flex items-center gap-4 rounded-xl border border-neutral-200 p-4 text-sm transition-colors hover:border-violet-300 dark:border-neutral-800 dark:hover:border-violet-500/40"
+                    className="wb-card wb-card-hover flex items-center gap-4 p-4 text-sm"
                   >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-lg dark:bg-emerald-900/40">
-                      📁
+                    <div className="wb-chip h-10 w-10 bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-300">
+                      <FolderOpen className="h-[18px] w-[18px]" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1282,9 +1311,9 @@ export default function KbPage() {
           </section>
 
           {/* Eval set */}
-          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <section className="mb-6 wb-card p-5">
             <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-              <span>📊</span> 评估集
+              <span><ClipboardCheck className="h-3.5 w-3.5" /></span> 评估集
               <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
                 {evalItems.length} 题
               </span>
@@ -1375,9 +1404,9 @@ export default function KbPage() {
           </section>
 
           {/* Run */}
-          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <section className="mb-6 wb-card p-5">
             <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-              <span>▶️</span> 运行评估
+              <span><Play className="h-3.5 w-3.5" /></span> 运行评估
             </h2>
             <div className="flex flex-wrap items-center gap-3">
               <button
@@ -1405,9 +1434,9 @@ export default function KbPage() {
           </section>
 
           {/* History */}
-          <section className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <section className="wb-card p-5">
             <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-              <span>📈</span> 分数趋势
+              <span><TrendingUp className="h-3.5 w-3.5" /></span> 分数趋势
               <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-normal text-neutral-500 dark:bg-neutral-800">
                 最近 {runs.length} 次
               </span>
@@ -1541,9 +1570,9 @@ export default function KbPage() {
             </div>
           </section>
 
-          <section className="mb-6 rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <section className="mb-6 wb-card p-5">
             <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-              <span>🕸️</span> 知识图谱配置
+              <span><Waypoints className="h-3.5 w-3.5" /></span> 知识图谱配置
               <span className="text-xs font-normal text-neutral-400">本地 Neo4j</span>
             </h2>
             <p className="-mt-1 mb-3 text-xs leading-relaxed text-neutral-400">
@@ -1610,9 +1639,9 @@ export default function KbPage() {
               {kgMsg && <span className="text-xs text-neutral-400">{kgMsg}</span>}
             </div>
           </section>
-          <section className="rounded-2xl border border-neutral-200 p-5 dark:border-neutral-800">
+          <section className="wb-card p-5">
             <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-              <span>🔍</span> 图谱检索测试
+              <span><Search className="h-3.5 w-3.5" /></span> 图谱检索测试
             </h2>
             <div className="flex gap-2">
               <input

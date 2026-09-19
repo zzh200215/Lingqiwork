@@ -38,6 +38,9 @@ FUZZ_MIN_DAYS = 3.0  # 低于此不加抖动
 FUZZ_RATIO = 0.05
 LEECH_LAPSES = 8  # 到此自动搁置
 SESSION_REQUEUE_SEC = 1200  # due_seconds 小于此 → 前端本节内重排
+# 「成熟」= 间隔已经拉到三周以上（`stats()` 与 PLAN2 的地图卡片摘要共用这一条）。
+# 抽成常量是因为它此前是散在两处的一个字面量 21 —— 同一个词在两处必须是一个意思。
+MATURE_DAYS = 21.0
 
 KINDS = ("concept", "cloze", "scenario", "debug")
 
@@ -725,7 +728,24 @@ async def save_cards(
                     )
                 ).scalars().all()
             ]
+    await _announce_cards_made(added, source, source_label)
     return {"added": added, "skipped": skipped, "ids": list(reversed(ids))}
+
+
+async def _announce_cards_made(added: int, source: str, source_label: str) -> None:
+    """出卡完成 → 零柒说一句（M2 · PLAN §3 G2）。
+
+    **写盘的人说话**（与 `pet.note_output` 同一个 pattern），数是 `added`（去重之后
+    真加进去的张数）。best-effort：一句台词绝不拖累落库。
+    """
+    if added <= 0:
+        return
+    try:
+        from app.core import pet
+
+        pet.emit("cards_made", name=(source_label or source or "材料")[:60], count=added)
+    except Exception:  # noqa: BLE001
+        log.debug("pet cards_made line failed", exc_info=True)
 
 
 def _caps() -> tuple[int, int]:
@@ -837,11 +857,27 @@ def as_dict(c) -> dict:
     }
 
 
-async def submit_review(card_id: int, grade: int, seconds: float = 0.0) -> dict:
+async def submit_review(
+    card_id: int, grade: int, seconds: float = 0.0, retell: str = "", judged_sha: str = ""
+) -> dict:
     """Grade one card: run SM-2, update the card in place, append to the revlog.
 
     Raises ValueError (bad grade / suspended) or LookupError (no such card) so the
     router can map them to 422 / 400 / 404.
+
+    `retell`（M1）：这一答是**讲出来**的，这里是那次重讲的原文——**与自评落在同一条行上**
+    （双入口单账本）。判分挂了但你自己定了档时也会带上它：那一天你确实重讲了，
+    这件事不该因为模型没跑成而丢掉。
+
+    `judged_sha`（PLAN2 T2 + §9.4）：**判它的那一版提示词的指纹**。非空 = 这一档是判分器
+    判的、且记下了是哪一版；空 = 你自己定的档（包括「判分挂了、退回自评」那种）。
+
+    参数是**指纹而不是布尔**（v10 起）：这样「判过但不知道哪一版」这个状态在新行上
+    **写不出来**——v9–v10 之间那些行确实是不知道，但那是历史，不是可以再犯的东西。
+    `judged` 那一列由它推出来（`bool(judged_sha)`），两列一起写、永远一致。
+
+    它**只能由 `retell.adjudicate()` 传值**——不在任何 HTTP 入参里（`ReviewIn` 没有这个
+    字段）：客户端说自己「判过了」这件事没有任何一方能核实，那是把账本交给调用方写。
     """
     from sqlalchemy import select
 
@@ -861,6 +897,7 @@ async def submit_review(card_id: int, grade: int, seconds: float = 0.0) -> dict:
         interval = fuzz_interval(s.interval_days)
         due_seconds = s.due_seconds if s.interval_days <= 0 else int(round(interval * 86400))
         now = utcnow()
+        sha = str(judged_sha or "").strip()[:12]
 
         db.add(
             CardReview(
@@ -874,6 +911,9 @@ async def submit_review(card_id: int, grade: int, seconds: float = 0.0) -> dict:
                 ease_after=s.ease,
                 reps_before=card.reps,
                 due_before=card.due,
+                retell=str(retell or "").strip()[:4000],
+                judged=bool(sha),
+                judged_sha=sha,
             )
         )
         card.interval_days = interval
@@ -974,7 +1014,7 @@ async def stats() -> dict:
             out["mature"] = (
                 await db.execute(
                     select(func.count(Card.id)).where(
-                        Card.suspended.is_(False), Card.interval_days >= 21
+                        Card.suspended.is_(False), Card.interval_days >= MATURE_DAYS
                     )
                 )
             ).scalar() or 0
@@ -1109,6 +1149,205 @@ async def weak_sources(days: int = 30, limit: int = 10) -> list[dict]:
                 ),
             }
         )
+    return out
+
+
+# ---------- 校准曲线（PLAN2 T2 · 纯聚合，零新表） ----------
+
+CALIB_DAYS = 30
+CALIB_MAX_DAYS = 365
+_JUDGE_MODULE = "app.core.retell"
+_JUDGE_NAME = "JUDGE_SYSTEM"
+
+# 三条「读这条曲线之前必须知道的事」，和后端的口径一起发给界面（界面不自己编一份说法，
+# 与 `metrics.north_star` 的 `rules` 同一个做法）。
+#
+# 第一条（判分器有没有基线）**是动态的**：它随金标集跑没跑过、跑的是不是这一版判分器
+# 而变（PLAN2 P2-1）。这里给的是兜底那一句——读不到基线时照实说没跑过。
+CALIB_NO_BASELINE = "这一版判分器还没跑过金标集：读趋势不读绝对值。"
+CALIB_NOTES = (
+    # 历史行：v9 之前没有这一列，判过的行和自评的行长得一模一样 —— 那是「未知」，
+    # 不是「自评」。把未知当自评会让曲线开口就说一句假话，所以整段不进。
+    "v9（judged 列）之前的历史行是「未知」，不进这条曲线。",
+    # sha：账本里没有存提示词版本。这是 PLAN2 §3「全规划只有一列」的直接代价。
+    "账本里没存提示词版本，所以换版之后旧行会跟着新指纹一起算；要真按 sha 分段得再存一列。",
+)
+
+
+async def _baseline_note() -> str:
+    """页脚第一行：判分器的基线（PLAN2 P2-1）。
+
+    它必须**分三种情况**说话（跑过 / 跑过但是旧版 / 没跑过）：一条曲线的 y 轴到底是什么
+    意思，取决于那台判分器跟人对得上多少。读不到就退回兜底那句，绝不假装有基线。
+    """
+    try:
+        from app.core import judge_eval
+
+        return await judge_eval.baseline_note_for_curve()
+    except Exception:  # noqa: BLE001 - 基线读不到不该让整条曲线读不出来
+        log.debug("judge baseline note failed", exc_info=True)
+        return CALIB_NO_BASELINE
+
+
+def _grade_keys() -> tuple[int, ...]:
+    """四档的取值范围（1 重来 | 2 困难 | 3 良好 | 4 简单）。**从 `retell.GRADE_LABELS` 取**——
+    这个映射只许有一份（`models.CardReview.grade` 定的，`retell` 是它的登记处）。"""
+    from app.core import retell
+
+    return tuple(sorted(retell.GRADE_LABELS))
+
+
+def tally(rows) -> tuple[dict[int, int], dict[int, int]]:
+    """`(grade, judged)` 序列 →（自评分布, 判分分布），键恒为四档（没打过的档是 0）。Pure.
+
+    **分堆只按 `judged` 分**：`judged=False` 收「你自评的」和「判分挂了、退回自评的」
+    两种——判分没跑成 ≠ 差评，那一档仍然是你打的。
+    """
+    self_d = {g: 0 for g in _grade_keys()}
+    judged_d = dict(self_d)
+    for grade, judged in rows:
+        g = int(grade)
+        if g not in self_d:
+            continue  # 账面外的档位（不该有）不进任何一侧：宁可少算，不猜它属于哪边
+        (judged_d if judged else self_d)[g] += 1
+    return self_d, judged_d
+
+
+def mean_of(dist: dict[int, int]) -> float | None:
+    """分布均值。**一个样本都没有就是 None，不是 0**——0 是「均值 0 档」，两回事。Pure."""
+    n = sum(dist.values())
+    if n <= 0:
+        return None
+    return sum(g * c for g, c in dist.items()) / n
+
+
+def offset(self_d: dict[int, int], judged_d: dict[int, int]) -> float | None:
+    """校准偏移 = **自评均值 − 判分均值**（PLAN2 §6 的口径，正数 = 给自己打分更高）。
+
+    任一侧没有样本 → `None`。全自评时它必须是 `null` 而不是 `0`：界面据此说
+    「还没有对过账」，而不是画一条贴零的线说「你和它判得一样准」。
+    """
+    a, b = mean_of(self_d), mean_of(judged_d)
+    if a is None or b is None:
+        return None
+    return round(a - b, 3)
+
+
+def fold_segments(rows) -> list[dict]:
+    """`(grade, judged, judged_sha)` 序列 → **按判分器版本分段**的分布。Pure。
+
+    这是 §9.4 要的那条：判分器换过版之后，曲线上就不是一把尺子了。分段给的是「每一版
+    各判了什么」——`sha` 为空的那一格是 **v9–v10 之间的历史行**（判过，但不知道哪一版），
+    它必须单独一排，不能被并进当前这一版里假装知道。
+
+    排序：**版本未知的排最后**（它最不可比），其余按条数多的在前。
+    """
+    segs: dict[str, dict] = {}
+    for grade, judged, sha in rows:
+        if not judged:
+            continue
+        key = str(sha or "")
+        seg = segs.setdefault(key, {"sha": key, "dist": {g: 0 for g in _grade_keys()}})
+        g = int(grade)
+        if g in seg["dist"]:
+            seg["dist"][g] += 1
+    out: list[dict] = []
+    for seg in segs.values():
+        n = sum(seg["dist"].values())
+        out.append({**seg, "n": n, "mean": round(mean_of(seg["dist"]) or 0.0, 3) if n else None})
+    out.sort(key=lambda s: (s["sha"] == "", -s["n"]))
+    return out
+
+
+def judge_sha() -> str:
+    """当前判分提示词的指纹（12 位）。**从登记表取**（`prompts.fingerprint`），
+    不在这里重算一遍 sha——两份算法迟早会漂。"""
+    from app.core import prompts
+
+    return prompts.fingerprint(_JUDGE_MODULE, _JUDGE_NAME)
+
+
+async def calibration(days: int = CALIB_DAYS) -> dict:
+    """校准曲线：滚动 `days` 天里，自评的档位分布 vs 判分器判的档位分布。
+
+    **只进仪表盘**——不设目标、不排名、不变成零柒嘴里的任何一句话（红线与
+    `metrics.north_star` 同一条）。所以这个模块一行 `pet.*` 都不碰。
+
+    窗口是**滚动 N 天**（锚在「现在」，与 `stats()` / `weak_sources()` 同一个口径），
+    而不是北极星那种「本地日格子」：这里要的是一个分布，不是逐日的曲线。
+
+    读不出来时 `readable=false` 且两个分布都空——**不拿一堆零充数**（零是「一条都没有」）。
+    """
+    from sqlalchemy import text as sql
+
+    from app.db import SessionLocal
+
+    span = max(1, min(int(CALIB_DAYS if days is None else days), CALIB_MAX_DAYS))
+    out = {
+        "readable": False,
+        "error": "",
+        "days": span,
+        "self_dist": {},
+        "judged_dist": {},
+        "delta": None,
+        "n_self": 0,
+        "n_judged": 0,
+        "judge_sha": "",
+        "segments": [],  # 按判分器版本分段（§9.4）：换过版就不是一把尺子了
+        "mixed": False,  # 窗口里是不是混了不止一版
+        "notes": [CALIB_NO_BASELINE, *CALIB_NOTES],
+    }
+    try:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    sql(
+                        "SELECT grade, judged, COALESCE(judged_sha, ''), COUNT(*) FROM card_reviews "
+                        f"WHERE reviewed_at >= datetime('now', '-{span} days') "
+                        "GROUP BY grade, judged, COALESCE(judged_sha, '')"
+                    )
+                )
+            ).all()
+    except Exception as e:  # noqa: BLE001 - 派生视图，坏了就说读不到
+        log.debug("card calibration failed", exc_info=True)
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
+    pairs: list[tuple[int, bool]] = []
+    seg_rows: list[tuple[int, bool, str]] = []
+    for grade, judged, sha, n in rows:  # (档位, 是不是判的, 哪一版, 行数)
+        for _ in range(int(n or 0)):
+            pairs.append((int(grade), bool(judged)))
+            seg_rows.append((int(grade), bool(judged), str(sha or "")))
+    self_d, judged_d = tally(pairs)
+    segments = fold_segments(seg_rows)
+    current = judge_sha()
+    for s in segments:
+        s["current"] = bool(current) and s["sha"] == current
+    mixed = len(segments) > 1
+    notes = [await _baseline_note(), *CALIB_NOTES]
+    if mixed:
+        # **混版必须说出来**：这条曲线的 y 轴本来是「这台判分器判得比你严还是松」，
+        # 换过版之后窗口里就有两把尺子，pooled 的那个 delta 读之前得先知道这件事。
+        # 分段表在 `segments` 里，界面照它摆。
+        parts = "、".join(
+            f"{'本版' if s['current'] else ('版本未知' if not s['sha'] else s['sha'][:6])} {s['n']} 条"
+            for s in segments
+        )
+        notes.insert(0, f"这条曲线上的判分行来自不止一版判分器（{parts}）——别把两把尺子当成一把量。")
+    out.update(
+        readable=True,
+        error="",
+        self_dist=self_d,
+        judged_dist=judged_d,
+        delta=offset(self_d, judged_d),
+        n_self=sum(self_d.values()),
+        n_judged=sum(judged_d.values()),
+        judge_sha=current,
+        segments=segments,
+        mixed=mixed,
+        notes=notes,
+    )
     return out
 
 

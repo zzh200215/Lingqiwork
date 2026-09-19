@@ -52,6 +52,8 @@ const MILESTONE: PetRoom = {
   today: { meals: [], date: '2026-09-14' },
   skills: [],
   form: [],
+  concepts: { cards: [], total: 0 },
+  flavor: '',
   empty: false,
 }
 
@@ -62,6 +64,8 @@ const NO_ROOM: PetRoom = {
   today: { meals: [], date: '2026-09-14' },
   skills: [],
   form: [],
+  concepts: { cards: [], total: 0 },
+  flavor: '',
   empty: true,
 }
 
@@ -78,6 +82,8 @@ const GROWTH: PetGrowth = {
     { key: 'review', label: '复习', exp: 1 },
   ],
   counts: { mastered: 3, sessions: 6, runs_ok: 1, outputs: 0, habit_days: 1, reviews: 1 },
+  // Z4：称号旁那一行风味小注（空串 = 数不出来，那一行干脆不出现）
+  flavor: '这阵子喂它最多的是「检索」（3 个概念）。',
 }
 
 const MASTERY: TutorMastery = {
@@ -172,6 +178,20 @@ describe('GrowthPage', () => {
     expect(screen.getByText('跑成 1 次 · 交出 0 份')).toBeTruthy()
   })
 
+  it('Z4：称号旁那一行风味小注是喂养分布说的；空串时一个字都不摆', async () => {
+    const { container } = renderPage()
+    expect(await screen.findByText('同行')).toBeTruthy() // 称号本体照旧
+    expect(container.querySelector('[data-growth-flavor]')?.textContent).toBe(
+      '这阵子喂它最多的是「检索」（3 个概念）。'
+    )
+
+    cleanup()
+    vi.mocked(api.petGrowth).mockResolvedValue({ ...GROWTH, flavor: '' })
+    const second = renderPage()
+    await screen.findByText('同行')
+    expect(second.container.querySelector('[data-growth-flavor]')).toBeNull()
+  })
+
   it('最近搞懂：列出概念，半懂过来的带标记', async () => {
     renderPage()
     expect(await screen.findByText('asyncio 事件循环')).toBeTruthy()
@@ -233,7 +253,7 @@ describe('GrowthPage', () => {
   it('什么都没有时给一句实话，不摆空档', async () => {
     vi.mocked(api.petGrowth).mockResolvedValue({
       level: 1, title: '初识', exp: 0, next_title: '同行', progress: 0,
-      parts: [], counts: {},
+      parts: [], counts: {}, flavor: '',
     })
     vi.mocked(api.tutorMastery).mockResolvedValue({ events: [], mastered: 0, learning: 0, sessions: 0 })
     vi.mocked(api.habitsToday).mockResolvedValue({ ...HABITS, habits: [], pending: [] })

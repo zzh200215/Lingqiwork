@@ -230,7 +230,7 @@ async def _reset() -> None:
     from sqlalchemy import delete
 
     from app.db import SessionLocal
-    from app.models import DigestPoint, TutorSession, TutorTurn
+    from app.models import DigestPoint, PetEvent, TutorSession, TutorTurn
 
     core._SESSION_SOURCES.clear()  # 进程内的已引用来源是测试间的隐藏状态
     await _init_db()
@@ -238,6 +238,9 @@ async def _reset() -> None:
         await db.execute(delete(TutorTurn))
         await db.execute(delete(TutorSession))
         await db.execute(delete(DigestPoint))
+        # 零柒说过的话也要清：`end()` 现在会开口（「又卡住了」），
+        # 漏了它，下一条用例会捡到上一条留下的那句 —— 与 M2 那次同一类串味。
+        await db.execute(delete(PetEvent))
         await db.commit()
 
 
@@ -1075,6 +1078,50 @@ async def test_ending_half_does_not_write_back(monkeypatch):
 
     resolved = {r["id"]: r["resolved_at"] for r in await core.stuck_points()}
     assert resolved[same] == "" and resolved[sid] == ""
+
+
+async def test_ending_half_on_a_concept_the_system_flagged_makes_the_pet_speak(monkeypatch):
+    """收尾这一跳：判据说「又卡住」，零柒就说一句（学习 → 宠物那条环的接线）。
+
+    这一条钉的是**接线**而不是判据（判据在 `test_repeated_mistakes.py`）：
+    `end()` 里那个 else 分支如果被删掉，判据再准也不会有人开口。
+    """
+    from app.core import pet as pet_core
+
+    await _reset()
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    # 旧那场：自评半懂**且召回命中过**（系统接住过他卡在哪儿）——判据要的正是这一条
+    await _seed("旧一场", "asyncio 事件循环", "half", stuck="卡在 await", recalled=True)
+    sid = await _live(monkeypatch, "asyncio 再讲一遍")
+
+    async def fake_extract(session_id, topic, model_id):
+        return "asyncio 事件循环", "", "还是卡在 await", "", "asyncio"
+
+    monkeypatch.setattr(core, "_extract", fake_extract)
+    await core.end(sid, "half")
+
+    lines = [e for e in pet_core.feed(limit=20) if e["kind"] == "repeated"]
+    assert len(lines) == 1
+    assert lines[0]["name"] == "asyncio 事件循环"
+    assert "await" in lines[0]["detail"]
+
+
+async def test_ending_got_says_nothing_about_repeating(monkeypatch):
+    """说通了就是新起点：那条环只在「没走通」的时候开口。"""
+    from app.core import pet as pet_core
+
+    await _reset()
+    monkeypatch.setattr(core, "_embed", _fake_embed)
+    await _seed("旧一场", "asyncio 事件循环", "half", stuck="卡在 await", recalled=True)
+    sid = await _live(monkeypatch, "asyncio 讲明白了")
+
+    async def fake_extract(session_id, topic, model_id):
+        return "asyncio 事件循环", "", "", "", "asyncio"
+
+    monkeypatch.setattr(core, "_extract", fake_extract)
+    await core.end(sid, "got")
+
+    assert [e for e in pet_core.feed(limit=20) if e["kind"] == "repeated"] == []
 
 
 async def test_end_skips_nearby_for_useless_and_survives_a_dead_index(monkeypatch):
@@ -1932,7 +1979,8 @@ async def test_first_mastery_lets_zero_seven_say_it_once():
     await _seed("第一次", "React useEffect 依赖数组", "got")
     await core._note_first_mastery("React useEffect 依赖数组")
     lines = [e for e in pet.feed(limit=20) if e["kind"] == "mastered"]
-    assert len(lines) == 1 and "搞懂了" in lines[0]["text"]
+    # 断 kind 与「有它」不断措辞：`mastered` 平铺那一支有几句轮着说（Z3 的台词池）
+    assert len(lines) == 1 and "React useEffect 依赖数组" in lines[0]["text"]
 
     await _seed("第二次", "React useEffect 依赖数组", "got")
     await core._note_first_mastery("React useEffect 依赖数组")
@@ -1997,8 +2045,8 @@ async def test_neighbors_from_the_same_thread(monkeypatch):
         await db.flush()
         db.add_all(
             [
-                ThreadItem(thread_id=t.id, kind="tutor", ref=str(a)),
-                ThreadItem(thread_id=t.id, kind="tutor", ref=str(b)),
+                ThreadItem(thread_id=t.id, kind="session", ref=str(a)),
+                ThreadItem(thread_id=t.id, kind="session", ref=str(b)),
             ]
         )
         await db.commit()

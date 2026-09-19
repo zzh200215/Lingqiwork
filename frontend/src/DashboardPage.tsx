@@ -4,15 +4,28 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import AttachToThread from './AttachToThread'
+import EChart from './EChart'
 import FeedbackButtons from './FeedbackButtons'
+import MetricCard from './MetricCard'
 import { useDeepLink } from './deeplink'
 import {
   api,
   type BeliefThread,
+  type CalibrationBucket,
+  type CardCalibration,
+  type CardGapRate,
   type DashboardStats,
   type DecisionLogView,
   type DecisionOutcome,
+  type EngineEvalLatest,
   type JournalRecent,
+  type NorthStar,
+  type PrereqAdoption,
+  type ProcessMetrics,
+  type PromptEvalBoard,
+  type SkillLoop,
+  type SessionCalibration,
+  type TurnSummary,
   type TutorStats,
 } from './api'
 import { streamRecap, type RecapReport, type RecapSaved, type ReportDraft } from './stream'
@@ -66,9 +79,44 @@ export default function DashboardPage() {
   // 信念演化时间线（记忆时间轴主题）：纯拉取式的自我观察，没有就整块不渲染
   const [beliefs, setBeliefs] = useState<BeliefThread[] | null>(null)
 
+  // 北极星（PLAN §7）：周内「重讲作答 ≥1 且 消化材料 ≥1」的天数 / 7。
+  // **只画曲线**——不设目标、不排名、不进零柒嘴里（红线在 `core/metrics.py` 开篇）；
+  // 读不到就照实说读不到，不给一条全零的曲线充数。
+  const [north, setNorth] = useState<NorthStar | null>(null)
+
+  // 过程指标（PLAN §7.2）：半懂率按周。与北极星同一张红线的另一条曲线——
+  // 那条说「这周动没动」，这条说「动的那部分有没有落下」。
+  const [process, setProcess] = useState<ProcessMetrics | null>(null)
+
+  // 校准曲线（PLAN2 T2）：自评的档位分布 vs 判分器判的档位分布。与北极星同一条红线——
+  // **只进仪表盘**，不设目标、不排名、不进零柒嘴里（口径与三条须知在后端 `cards.calibration`，
+  // 界面照抄）。它量的是「你 vs 这台判分器」的相对差：判分器本身还没有基线。
+  const [calib, setCalib] = useState<CardCalibration | null>(null)
+
+  // 双轨矛盾率（PLAN2 §6）：已掌握的概念里，名下的卡这些天还在重来的占多少。
+  // 同一张红线的第三条：**只进仪表盘**。它降说明桥通了——所以它尤其不能变成目标。
+  const [gap, setGap] = useState<CardGapRate | null>(null)
+  // 回指采纳（PLAN2 §6 第三条）：搁置卡的候选有没有人看。挂在「双轨」那张卡的下半部分。
+  const [adoption, setAdoption] = useState<PrereqAdoption | null>(null)
+  // PLAN3 §6：技能闭环那两条（试用期漏斗 + 注入命中率）——与别的曲线同一条红线，只画不动嘴
+  const [skillLoop, setSkillLoop] = useState<SkillLoop | null>(null)
+
+  // R1（PLAN5 §3）：九条尺子补齐到这一页。接地分是**唯一一条分数**（不是曲线），
+  // 回合读数是 W5 那个诊断账本的聚合——两者与别的曲线同一条红线：只进仪表盘，不进零柒嘴里。
+  const [grounded, setGrounded] = useState<EngineEvalLatest | null>(null)
+  const [turnSummary, setTurnSummary] = useState<TurnSummary | null>(null)
+  // R1 补齐（PLAN5 §2-2 点名的九条之一）：提示词评测——登记的那些提示词里量过几条。
+  // 它是**资产指标**（尺子自己准不准），所以与接地分摆在一起。
+  const [promptBoard, setPromptBoard] = useState<PromptEvalBoard | null>(null)
+
+  // 会话侧校准（PLAN2 P2-3）：自己标的 vs 让它判的。挂在同一张「校准」卡的下半部分。
+  const [sessionCalib, setSessionCalib] = useState<SessionCalibration | null>(null)
+
   // 决策日志 + 校准分：把「判断 + 依据 + 当时的把握」在**当时**钉下来，
-  // 几个月后回看才谈得上校准。拉取式——没有到期、没有队列、没有提醒；
-  // `outcome` 空着就是还没回看，没有任何东西会催它。
+  // 几个月后回看才谈得上校准。这一页仍然是**拉取式**的：没有到期列表、没有队列、
+  // 页面上不摆「你还欠几条」。M4 唯一的例外在别处——到点之后由零柒的气泡提**一句**
+  // （`/api/decisions/witness`，一天一条、只念当时的事实），理由写在
+  // `app/core/decision_log.py` 开篇：纯拉取式在 90 天这个尺度上会让这张表变成死数据。
   const [decisions, setDecisions] = useState<DecisionLogView | null>(null)
   const [dText, setDText] = useState('')
   const [dBasis, setDBasis] = useState('')
@@ -202,6 +250,18 @@ export default function DashboardPage() {
     // swallowed on purpose: the dashboard must never blank out over one endpoint
     api.tutorStats().then(setTutor).catch(() => {})
     api.beliefThreads().then((r) => setBeliefs(r.threads)).catch(() => {})
+    api.northStar().then(setNorth).catch(() => setNorth(null))
+    api.process().then(setProcess).catch(() => setProcess(null))
+    api.cardCalibration().then(setCalib).catch(() => setCalib(null))
+    api.cardGapRate().then(setGap).catch(() => setGap(null))
+    api.prereqAdoption().then(setAdoption).catch(() => setAdoption(null))
+    api.skillLoop().then(setSkillLoop).catch(() => setSkillLoop(null))
+    // R1 补的两条：与其他读数一样，**一条挂掉不许拖垮整页**（增强不挡路，§4-9）
+    api.engineEvalLatest().then(setGrounded).catch(() => setGrounded(null))
+    api.turnSummary().then(setTurnSummary).catch(() => setTurnSummary(null))
+    // R1 补齐的第三条（PLAN5 §2-2 点名的九条里最后补上的一格）：同一个规矩
+    api.promptEvalBoard().then(setPromptBoard).catch(() => setPromptBoard(null))
+    api.tutorCalibration().then(setSessionCalib).catch(() => setSessionCalib(null))
     reloadDecisions()
     refreshJournal()
     void refreshBriefing()
@@ -256,6 +316,19 @@ export default function DashboardPage() {
   }
   const maxCount = Math.max(1, ...days.map((d) => d.count))
 
+  // 近 7 天的 token 消耗：`/api/dashboard` 一直在返回 `daily_tokens`，此前从来没有
+  // 一处把它画出来（页面上只有一个累计总数）——补上这条曲线，花钱的节奏才看得见。
+  const tokenDays: { label: string; tokens: number }[] = []
+  if (stats?.daily_tokens?.length) {
+    const byDate = new Map(stats.daily_tokens.map((d) => [d.date, d.tokens]))
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date()
+      d.setDate(d.getDate() - i)
+      const utc = d.toISOString().slice(0, 10)
+      tokenDays.push({ label: `${d.getMonth() + 1}/${d.getDate()}`, tokens: byDate.get(utc) ?? 0 })
+    }
+  }
+
   const totalModel = stats?.top_models.reduce((s, x) => s + x.count, 0) || 1
 
   const tokTotal = stats?.tokens_total ?? 0
@@ -267,7 +340,7 @@ export default function DashboardPage() {
 
   return (
     <>
-      <div className="mx-auto max-w-6xl px-6 py-8">
+      <div className="mx-auto max-w-[1600px] px-6 py-6">
         <section className="relative overflow-hidden rounded-3xl border border-neutral-200 bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 p-6 shadow-sm dark:border-neutral-800 dark:from-violet-950/40 dark:via-neutral-900 dark:to-fuchsia-950/30">
           <div className="flex items-start gap-5">
             <div className="shrink-0">
@@ -417,8 +490,35 @@ export default function DashboardPage() {
           />
         </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-3">
-          <section className="rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+        {/* 读数那九条：**宽屏两列**（2026-09-18 版面改版）。
+            以前是一条条竖着堆，1600px 的宽度里每张卡都只用到一半——留白不该用来撑版面。
+            `items-start` 是必要的：不写的话同一行两张卡会被拉到一样高，内容少的那张
+            底下就空一块（正是这次要治的毛病）。 */}
+        <div className="grid items-start gap-5 xl:grid-cols-2">
+          <NorthStarCard n={north} />
+
+          <ProcessCard p={process} />
+
+          <CalibrationCard c={calib} s={sessionCalib} />
+
+          <GapRateCard g={gap} a={adoption} />
+
+          <SkillLoopCard s={skillLoop} />
+
+          {/* R1（PLAN5 §3）：九条尺子的最后两条落在「资产指标」这一段——它们量的是
+              「这台机器的零件还准不准」（引擎接地分、聊天回合的毛病），
+              上面那几条量的是「你这周走得怎么样」。顺序照 R1 的布局：北极星在顶，
+              过程指标在中，资产指标在底。 */}
+          <GroundedCard e={grounded} />
+
+          {/* 提示词评测：与接地分同一族（尺子自己准不准），所以并排摆在这一段 */}
+          <PromptEvalCard p={promptBoard} />
+
+          <TurnSummaryCard t={turnSummary} />
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <section className="wb-card p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">最近 7 天</h2>
               <span className="text-xs text-neutral-400">消息数</span>
@@ -451,7 +551,46 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+          {tokenDays.length > 0 ? (
+            <section className="wb-card p-5">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">Token 近 7 天</h2>
+                <span className="text-xs text-neutral-400">每天消耗</span>
+              </div>
+              <EChart
+                height={128}
+                className="mt-4"
+                ariaLabel="近 7 天 Token 消耗"
+                option={{
+                  tooltip: { trigger: 'axis' },
+                  grid: { left: 44, right: 8, top: 8, bottom: 22 },
+                  xAxis: {
+                    type: 'category',
+                    data: tokenDays.map((d) => d.label),
+                    axisTick: { show: false },
+                  },
+                  yAxis: {
+                    type: 'value',
+                    axisLabel: {
+                      formatter: (v: number) => (v >= 1000 ? `${Math.round(v / 100) / 10}k` : `${v}`),
+                    },
+                  },
+                  series: [
+                    {
+                      type: 'line',
+                      data: tokenDays.map((d) => d.tokens),
+                      smooth: true,
+                      symbolSize: 6,
+                      lineStyle: { width: 2.5 },
+                      areaStyle: { opacity: 0.12 },
+                    },
+                  ],
+                }}
+              />
+            </section>
+          ) : null}
+
+          <section className="wb-card p-5">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">常用模型</h2>
             {stats && stats.top_models.length > 0 ? (
               <ul className="mt-4 space-y-2.5">
@@ -475,7 +614,7 @@ export default function DashboardPage() {
             )}
           </section>
 
-          <section className="rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+          <section className="wb-card p-5">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">Token 总用量</h2>
             <p className="mt-3 bg-gradient-to-r from-sky-600 to-cyan-500 bg-clip-text text-3xl font-bold text-transparent dark:from-sky-400 dark:to-cyan-300">
               {tokTotalText}
@@ -485,7 +624,7 @@ export default function DashboardPage() {
         </div>
 
         {beliefs && beliefs.length > 0 && (
-          <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+          <section className="wb-card p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">信念时间线</h2>
               <span className="text-xs text-neutral-400">零柒记下的事，聚出来的「你怎么变」</span>
@@ -516,7 +655,7 @@ export default function DashboardPage() {
         {/* 决策日志 + 校准分：判断要**在做出的时候**连把握一起钉下来，否则回头只会记得
             蒙对的那几次。拉取式、无提醒——回看是你自己决定何时。 */}
         {decisions && (
-          <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+          <section className="wb-card p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">决策日志 · 校准分</h2>
               <span className="text-xs text-neutral-400">记下判断和当时的把握，回看才算得出准不准</span>
@@ -687,6 +826,47 @@ export default function DashboardPage() {
                     ))}
                 </div>
               ) : null}
+              {/* 可靠性曲线（2026-09-19）：≥2 档给过分时才画——一条点构成不了「曲线」，
+                  也构成不了「你说的把握到底准不准」这个读法。y 轴是命中率本身，
+                  对角线不画（那是「完美校准」的参考线，一画就变成考核）。 */}
+              {(() => {
+                const rated = decisions.calibration.by_confidence.filter(
+                  (b): b is CalibrationBucket & { rate: number } => b.sample > 0 && b.rate != null
+                )
+                if (rated.length < 2) return null
+                return (
+                  <EChart
+                    height={140}
+                    ariaLabel="决策把握与命中率对照"
+                    option={{
+                      tooltip: {
+                        trigger: 'axis',
+                        formatter: (ps: unknown) => {
+                          const p = Array.isArray(ps) ? (ps[0] as { name: string; value: number; dataIndex: number }) : null
+                          if (!p) return ''
+                          const b = rated[p.dataIndex]
+                          return `${p.name} 把握 → ${b.hits}/${b.sample}（${pct(b.rate)}）`
+                        },
+                      },
+                      grid: { left: 36, right: 12, top: 12, bottom: 24 },
+                      xAxis: {
+                        type: 'category',
+                        data: rated.map((b) => b.bucket),
+                        axisTick: { show: false },
+                      },
+                      yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
+                      series: [
+                        {
+                          type: 'line',
+                          data: rated.map((b) => Math.round((b.rate as number) * 100)),
+                          symbolSize: 7,
+                          lineStyle: { width: 2.5 },
+                        },
+                      ],
+                    }}
+                  />
+                )
+              })()}
               {decisions.calibration.reviewed === 0 ? (
                 <p className="mt-1 text-[11px] text-neutral-400">
                   还没有回看过的判断。攒够几条再来算——一两条算不出命中率。
@@ -696,7 +876,7 @@ export default function DashboardPage() {
           </section>
         )}
 
-        <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+        <section className="wb-card p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">语音日记</h2>
             <span className="text-xs text-neutral-400">
@@ -749,7 +929,7 @@ export default function DashboardPage() {
           )}
         </section>
 
-        <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+        <section className="wb-card p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">最近对话</h2>
             <a href="/" className="text-xs text-violet-600 hover:underline dark:text-violet-400">
@@ -779,7 +959,7 @@ export default function DashboardPage() {
           )}
         </section>
 
-        <section className="mt-5 rounded-2xl border border-neutral-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900/60">
+        <section className="wb-card p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
               定时任务{stats && stats.tasks_total ? ` · ${stats.tasks_total} 个启用中` : ''}
@@ -880,5 +1060,905 @@ function NarrativeCard({
       <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{label}</p>
       <p className="mt-2 text-[11px] font-medium text-violet-600 dark:text-violet-400">{sub}</p>
     </Link>
+  )
+}
+
+/** 北极星（PLAN §7）：周内「重讲作答 ≥1 且 消化材料 ≥1」的天数 / 7。
+ *
+ *  三条刻意的选择，都写在这里免得下一个人"顺手优化"掉：
+ *  1. **只画曲线**：没有目标线、没有百分比、没有排名——口径原文从后端来（`rules`），
+ *     界面上照抄，同一个词在两处必须是一个意思；
+ *  2. **读不到就说读不到**：不给一条全零的曲线充数（零是"什么都没发生"）；
+ *  3. **一句话都不催**：0 天的时候也不写「还差 N 天」「加油」——那正是这个仓库封存过的机制。
+ *
+ *  （导出是给测试用的：这一格的规矩都在这张卡里，见 `DashboardPage.test.tsx`。）
+ */
+export function NorthStarCard({ n }: { n: NorthStar | null }) {
+  if (!n) return null
+  const today = n.days[n.days.length - 1]?.date
+  return (
+    <section
+      data-north-star
+      className="wb-card p-5"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">北极星</h2>
+        <span data-north-star-count className="text-2xl font-bold tabular-nums text-violet-600 dark:text-violet-300">
+          {/* 读不到时**不摆 0/0**：那个数会读成「七天里一天都没有」，与「没读到」是两回事 */}
+          {n.readable ? `${n.counted}/${n.denominator}` : '—'}
+        </span>
+        <span className="text-xs text-neutral-500 dark:text-neutral-400">
+          天：同一天里「讲了一遍」和「消化了一份」都发生过
+        </span>
+        <div className="flex-1" />
+        <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+          {n.window.start.slice(5)} – {n.window.end.slice(5)}
+        </span>
+      </div>
+
+      {!n.readable ? (
+        <p data-north-star-error className="mt-2 text-xs text-rose-500">
+          这条曲线现在读不出来（{n.error}）。零是「什么都没发生」，读不到是另一回事——不拿零充数。
+        </p>
+      ) : (
+        <>
+          <div className="mt-4 flex items-end gap-2">
+            {n.days.map((d) => (
+              <div
+                key={d.date}
+                data-north-star-day={d.date}
+                data-counted={d.counted ? '1' : '0'}
+                className="flex flex-1 flex-col items-center gap-1"
+              >
+                <div className="flex h-16 w-full flex-col justify-end gap-0.5">
+                  <div
+                    data-north-star-retell={d.retell}
+                    title={`重讲作答 ${d.retell} 次`}
+                    className={`w-full rounded-t ${
+                      d.retell ? 'bg-violet-500' : 'bg-neutral-200 dark:bg-neutral-800'
+                    }`}
+                    style={{ height: d.retell ? '50%' : '6px' }}
+                  />
+                  <div
+                    data-north-star-digested={d.digested}
+                    title={`拆出 ${d.digested} 个点`}
+                    className={`w-full rounded-b ${
+                      d.digested ? 'bg-fuchsia-400' : 'bg-neutral-200 dark:bg-neutral-800'
+                    }`}
+                    style={{ height: d.digested ? '50%' : '6px' }}
+                  />
+                </div>
+                <span
+                  className={`text-[10px] tabular-nums ${
+                    d.date === today
+                      ? 'font-semibold text-violet-600 dark:text-violet-300'
+                      : 'text-neutral-400 dark:text-neutral-500'
+                  }`}
+                >
+                  {d.date.slice(5)}
+                </span>
+                <span className="text-[10px] text-violet-500">{d.counted ? '✓' : ''}</span>
+              </div>
+            ))}
+          </div>
+          {n.counted === 0 ? (
+            <p data-north-star-empty className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+              这 7 天里还没有一天两件事都发生过。上面每一格的两条柱子，就是那天的两件事。
+            </p>
+          ) : null}
+        </>
+      )}
+
+      {/* 口径与已知偏差：直接来自后端（`rules`），界面不自己编一份说法 */}
+      <p data-north-star-rule className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        「重讲」= {n.rules.retell}；「消化」= {n.rules.digested}。{n.rules.bias}
+      </p>
+    </section>
+  )
+}
+
+const GRADE_ROWS: { g: number; label: string }[] = [
+  { g: 1, label: '重来' },
+  { g: 2, label: '困难' },
+  { g: 3, label: '良好' },
+  { g: 4, label: '简单' },
+]
+
+/** 校准曲线（PLAN2 T2 · N1）。三件事与北极星同一条纪律：
+ *
+ *  1. **只画分布**：不设目标线、不给百分比、不排名——差值那一格写的是「自评 − 判分 = x 档」，
+ *     一个事实，不是「你高估了自己」那句判决（PLAN2 §8.5：那句话永远不说出口）；
+ *  2. **读不到就说读不到**：不给两条全零的分布充数（零是「一条都没有」）；
+ *  3. **一处都不催**：`n_self`/`n_judged` 是事实，不是「快去重讲几张凑样本」。
+ *
+ *  页脚那几行**原文来自后端**（`notes`）：历史行是未知 / 账本没存提示词版本。
+ *  **第一条（判分器的基线）单独提成一行**——它说的是「这把尺子准不准」，
+ *  而不是「这条曲线怎么读」：没跑过金标集时，这条曲线的**绝对值根本不成立**。
+ *  最后一行把**当前判分器的指纹**摆出来——曲线是按那一版判分器算的，这一格必须看得见。
+ *
+ *  （导出是给测试用的，同 `NorthStarCard`：这一格的规矩都在这张卡里。）
+ */
+export function CalibrationCard({
+  c,
+  s,
+}: {
+  c: CardCalibration | null
+  /** 会话侧那半（P2-3）：**自己标的** vs **让它判的**。没有就不显示这一段。 */
+  s?: SessionCalibration | null
+}) {
+  if (!c) return null
+  const selfMax = Math.max(1, ...Object.values(c.self_dist || {}))
+  const judgedMax = Math.max(1, ...Object.values(c.judged_dist || {}))
+  const empty = c.n_self === 0 && c.n_judged === 0
+  // 后端把「基线」摆在 `notes[0]`（`cards.calibration` 的 `[_baseline_note(), *CALIB_NOTES]`），
+  // 另外两条是常年不变的口径。这里按位置拆开：**基线单独提一行**（它说的是「这把尺子准不准」），
+  // 剩下两条留在页脚。位置约定写在这里，是因为契约就在后端那一行的顺序上。
+  const baseline = c.notes?.[0] ?? ''
+  const notes = c.notes?.slice(1) ?? []
+  return (
+    <section
+      data-calibration
+      className="wb-card p-5"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">校准</h2>
+        <span
+          data-calibration-delta
+          className="text-2xl font-bold tabular-nums text-sky-600 dark:text-sky-300"
+        >
+          {/* 没有对过账时不摆 0：0 读作「你和它判得一样准」，那是另一件事 */}
+          {c.delta === null ? '—' : `${c.delta > 0 ? '+' : ''}${c.delta}`}
+        </span>
+        <span className="text-xs text-neutral-500 dark:text-neutral-400">
+          档：自评 − 判分（正数 = 给自己打的档更高）
+        </span>
+        <div className="flex-1" />
+        <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+          滚动 {c.days} 天 · 自评 {c.n_self} · 判分 {c.n_judged}
+        </span>
+      </div>
+
+      {/* **判分器的基线**（PLAN2 P2-1）单独摆一行，不混进页脚那三条须知里。
+          理由：这条曲线的 y 轴是「这台判分器判得比你严还是松」，而那句话成立与否，
+          取决于它跟人对得上多少——**没跑过金标集时，这条曲线的绝对值根本不成立**。
+          这是读这张卡之前必须先知道的一件事，埋在页脚第一条小字里等于没说。
+          三种状态（跑过 / 跑过但是旧版 / 没跑过）全部由后端决定，这里照抄。 */}
+      {baseline ? (
+        <p
+          data-calibration-baseline
+          className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-[11px] leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200"
+        >
+          <span className="font-medium">判分器基线</span>：{baseline}
+        </p>
+      ) : null}
+
+      {!c.readable ? (
+        <p data-calibration-error className="mt-2 text-xs text-rose-500">
+          这条曲线现在读不出来（{c.error}）。零是「一条都没有」，读不到是另一回事——不拿零充数。
+        </p>
+      ) : empty ? (
+        <p data-calibration-empty className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+          这 {c.days} 天里还没有可对账的行：复习一次（自评或重讲都算）就会落在这里。
+        </p>
+      ) : (
+        <div className="mt-4 space-y-2">
+          {GRADE_ROWS.map(({ g, label }) => (
+            <div key={g} className="flex items-center gap-2 text-[11px]">
+              <span className="w-8 shrink-0 text-neutral-500 dark:text-neutral-400">{label}</span>
+              <div className="h-3 flex-1 overflow-hidden rounded bg-neutral-100 dark:bg-neutral-800">
+                <div
+                  data-calibration-self={g}
+                  className="h-full rounded-r bg-violet-500"
+                  style={{
+                    width: `${(((c.self_dist?.[g] ?? 0) / selfMax) * 100).toFixed(1)}%`,
+                  }}
+                  title={`自评「${label}」${c.self_dist?.[g] ?? 0} 次`}
+                />
+              </div>
+              <span className="w-6 shrink-0 text-right tabular-nums text-neutral-400">
+                {c.self_dist?.[g] ?? 0}
+              </span>
+              <div className="h-3 flex-1 overflow-hidden rounded bg-neutral-100 dark:bg-neutral-800">
+                <div
+                  data-calibration-judged={g}
+                  className="h-full rounded-r bg-sky-500"
+                  style={{
+                    width: `${(((c.judged_dist?.[g] ?? 0) / judgedMax) * 100).toFixed(1)}%`,
+                  }}
+                  title={`判分器判「${label}」${c.judged_dist?.[g] ?? 0} 次`}
+                />
+              </div>
+              <span className="w-6 shrink-0 text-right tabular-nums text-neutral-400">
+                {c.judged_dist?.[g] ?? 0}
+              </span>
+            </div>
+          ))}
+          <p className="flex gap-3 pl-10 text-[10px] text-neutral-400 dark:text-neutral-500">
+            <span className="text-violet-500">■ 你自评</span>
+            <span className="text-sky-500">■ 判分器判</span>
+          </p>
+        </div>
+      )}
+
+      {/* 三条须知里剩下的两条 + 判分器指纹：原文来自后端，界面不自己编一份说法。
+          第一条（基线）已经单独提到上面那一行去了，所以这里从第二条开始摆。 */}
+      {notes.map((n) => (
+        <p
+          key={n}
+          data-calibration-note
+          className="mt-2 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+        >
+          {n}
+        </p>
+      ))}
+      {c.judge_sha ? (
+        <p className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">
+          判分器指纹 <span data-calibration-sha className="font-mono">{c.judge_sha}</span>
+          ——曲线是按这一版判分器算的。
+        </p>
+      ) : null}
+      {/* 按版本分段（PLAN2 §9.4）：换过版之后这条曲线上就不是一把尺子了。
+          混版那句警告由后端插在 `notes` 里（这里照抄），这一段只补**每一版各判了什么**。 */}
+      {c.segments.length > 0 ? (
+        <p
+          data-calibration-segments
+          className="mt-1 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+        >
+          分段：
+          {c.segments.map((s, i) => (
+            <span key={s.sha || 'unknown'} data-calibration-segment={s.sha || ''}>
+              {i > 0 ? ' · ' : ''}
+              {s.current ? '本版 ' : s.sha ? `${s.sha.slice(0, 6)} ` : '版本未知 '}
+              {s.n} 条
+              {s.mean != null ? `（均值 ${s.mean}）` : ''}
+            </span>
+          ))}
+        </p>
+      ) : null}
+
+      {/* 会话侧（PLAN2 P2-3）：同一张卡上的另一半——那里比的是**两个总体**（自己标的 vs
+          让它判的），而不是同一批会话的对照。所以摆的是两个计数和一个差，**不摆百分比**；
+          两边的样本不是同一批、样本又小，这两件事都写在下面那行口径里（后端给的原文）。 */}
+      {s ? (
+        <div
+          data-session-calibration
+          className="mt-4 border-t border-neutral-100 pt-3 dark:border-neutral-800"
+        >
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">会话侧</h3>
+            <span className="text-xs text-neutral-500 dark:text-neutral-400">说通 /（说通+半懂）</span>
+            <span
+              data-session-self
+              className="text-lg font-bold tabular-nums text-violet-600 dark:text-violet-300"
+            >
+              {s.self.n ? `${s.self.dist.got}/${s.self.n}` : '—'}
+            </span>
+            <span className="text-[11px] text-neutral-400">自己标的</span>
+            <span
+              data-session-judged
+              className="text-lg font-bold tabular-nums text-sky-600 dark:text-sky-300"
+            >
+              {s.judged.n ? `${s.judged.dist.got}/${s.judged.n}` : '—'}
+            </span>
+            <span className="text-[11px] text-neutral-400">让它判的</span>
+            <div className="flex-1" />
+            <span
+              data-session-gap
+              className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400"
+            >
+              {s.gap === null ? '差 —' : `差 ${s.gap > 0 ? '+' : ''}${s.gap}`}
+            </span>
+          </div>
+          {!s.readable ? (
+            <p data-session-error className="mt-2 text-xs text-rose-500">
+              这半边现在读不出来（{s.error}）。
+            </p>
+          ) : null}
+          <p
+            data-session-rule
+            className="mt-2 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+          >
+            {s.rules.rate}。{s.rules.confound}
+            {s.rules.mixed ? ` ${s.rules.mixed}` : ''}
+            {s.rules.sample ? ` ${s.rules.sample}` : ''}
+          </p>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+/** 过程指标（PLAN §7.2 · 半懂率按周）。与北极星同一条红线的第二条曲线：
+ *  那条说「这周动没动」，这条说「动的那部分有没有落下」。
+ *
+ *  三条纪律：
+ *  1. **不摆百分比**（沿 §7.1 的先例）：写的是「半懂 12 / 共 27 场」，比率只在柱子高度里。
+ *     一旦写成「44% 半懂」，它会立刻变成一个要压低的考核数——而压低它最省事的办法
+ *     就是少标「半懂」，那正好把这个数变成假的；
+ *  2. **空的一周是空的**：`rate` 为 `null` 的那一格画成一条浅灰底线、标 `—`——
+ *     「这周没开过教学」与「这周全都说通了」不是一件事，也不该长得一样；
+ *  3. **一处都不催**：没有目标线、没有「还差几周」，也没有「这周比上周好」的评语。
+ *
+ *  （导出是给测试用的，同 `NorthStarCard` / `CalibrationCard`。）
+ */
+export function ProcessCard({ p }: { p: ProcessMetrics | null }) {
+  if (!p) return null
+  const t = p.totals
+  return (
+    <section
+      data-process
+      className="wb-card p-5"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">半懂</h2>
+        <span
+          data-process-total
+          className="text-2xl font-bold tabular-nums text-violet-600 dark:text-violet-300"
+        >
+          {/* 摆的是**两个计数**，不是百分比（见上面第 1 条） */}
+          {p.readable ? `${t.half} / ${t.n}` : '—'}
+        </span>
+        <span className="text-xs text-neutral-500 dark:text-neutral-400">
+          场：这 {p.window.weeks} 个自然周里标了「半懂」的 / 说通或半懂的总场次
+        </span>
+        <div className="flex-1" />
+        <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+          {p.window.start.slice(5)} – {p.window.end.slice(5)}
+        </span>
+      </div>
+
+      {!p.readable ? (
+        <p data-process-error className="mt-2 text-xs text-rose-500">
+          这条曲线现在读不出来（{p.error}）。零是「这周没开过教学」，读不到是另一回事——不拿零充数。
+        </p>
+      ) : t.n === 0 ? (
+        <p data-process-empty className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+          这 {p.window.weeks} 个自然周里还没有开过教学：讲完一场、标一次「懂了 / 半懂」，这里就有格子了。
+        </p>
+      ) : (
+        <div className="mt-4 flex items-end gap-2">
+          {p.weeks.map((w) => (
+            <div
+              key={w.start}
+              data-process-week={w.start}
+              data-rate={w.rate === null ? '' : String(w.rate)}
+              className="flex flex-1 flex-col items-center gap-1"
+            >
+              <span className="text-[10px] tabular-nums text-neutral-500 dark:text-neutral-400">
+                {w.n === 0 ? '—' : `${w.half}/${w.n}`}
+              </span>
+              <div className="flex h-16 w-full flex-col justify-end">
+                <div
+                  data-process-bar
+                  title={
+                    w.n === 0
+                      ? '这一周没开过教学'
+                      : `半懂 ${w.half} · 说通 ${w.got}（共 ${w.n} 场）`
+                  }
+                  className={`w-full rounded-t ${
+                    w.rate === null
+                      ? 'bg-neutral-200 dark:bg-neutral-800'
+                      : w.is_current
+                        ? 'bg-violet-500'
+                        : 'bg-violet-400/70'
+                  }`}
+                  style={{ height: w.rate === null ? '6px' : `${Math.max(6, w.rate * 100)}%` }}
+                />
+              </div>
+              <span
+                className={`text-[10px] tabular-nums ${
+                  w.is_current
+                    ? 'font-semibold text-violet-600 dark:text-violet-300'
+                    : 'text-neutral-400 dark:text-neutral-500'
+                }`}
+              >
+                {w.start.slice(5)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 口径原文来自后端，界面不自己编一份说法 */}
+      <p data-process-rule className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {p.rules.half}。{p.rules.useless}。{p.rules.week}
+      </p>
+    </section>
+  )
+}
+
+/** 技能闭环（PLAN3 §6）：**试用期漏斗** + **注入命中率**。
+ *
+ *  与这一页别的曲线同一条红线：只摆事实——没有目标、没有排名、没有一句「继续努力」，
+ *  也不进零柒嘴里。三条口径都由后端给（`rules`），界面照抄，不自己编一份说法：
+ *
+ *  - 漏斗三段数的是**不同单位**（被注入的次数 / 用例的条数 / 升格技能的份数），所以摆的是
+ *    三个计数与一根箭头，**不摆转化率**——比率会把「一份技能被用 10 次」与「10 份各被用 1 次」
+ *    读成同一件事；
+ *  - 被用过那一段是**窗口内**的（每个任务只留最近 20 条运行），所以它只会变小、不会变大；
+ *  - 注入那一格是**观察性差异、不是对照**（技能是因为话题相关才被注入的），而且接地分只在
+ *    「开了检索 + 命中材料 + 有产出」时才有——读不到就写读不到，不补 0。
+ */
+export function SkillLoopCard({ s }: { s: SkillLoop | null }) {
+  if (!s) return null
+  const f = s.funnel
+  const hit = s.injection
+  const inj = hit.grounded.injected
+  const plain = hit.grounded.plain
+  return (
+    <section
+      data-skill-loop
+      className="wb-card p-5"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">技能闭环</h2>
+        <span
+          data-skill-funnel-total
+          className="text-2xl font-bold tabular-nums text-teal-600 dark:text-teal-300"
+        >
+          {f.readable ? `${f.totals.used} → ${f.totals.cases} → ${f.totals.registered}` : '—'}
+        </span>
+        <span className="text-xs text-neutral-500 dark:text-neutral-400">
+          被用过（次） → 用例（条） → 升格（份）
+        </span>
+      </div>
+
+      {!f.readable ? (
+        <p data-skill-funnel-error className="mt-2 text-xs text-rose-500">
+          这张表现在读不出来（{f.error}）。
+        </p>
+      ) : f.totals.skills === 0 ? (
+        <p data-skill-funnel-empty className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+          还没有一份草稿：读一份材料、或在运行记录上点「读成技能」，这里就有第一行。
+        </p>
+      ) : (
+        <ul data-skill-funnel-rows className="mt-3 space-y-1">
+          {f.skills.map((r) => (
+            <li
+              key={r.name}
+              data-skill-row={r.name}
+              className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-neutral-500 dark:text-neutral-400"
+            >
+              <span className="text-neutral-700 dark:text-neutral-200">{r.name}</span>
+              <span className="tabular-nums">{r.used} 次</span>
+              <span className="text-neutral-300 dark:text-neutral-600">·</span>
+              <span className="tabular-nums">{r.cases} 条用例</span>
+              <span className="text-neutral-300 dark:text-neutral-600">·</span>
+              <span>
+                {r.registered ? '已升格' : r.stale ? '改过、得重新量' : '还没量过'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-4 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="text-xs text-neutral-500 dark:text-neutral-400">带技能跑的运行</span>
+          <span
+            data-skill-inject-total
+            className="text-lg font-bold tabular-nums text-teal-600 dark:text-teal-300"
+          >
+            {hit.readable ? `${hit.runs.injected} / ${hit.runs.total}` : '—'}
+          </span>
+          <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+            （近 {hit.days} 天，只数引擎运行）
+          </span>
+        </div>
+
+        {!hit.readable ? (
+          <p data-skill-inject-error className="mt-1 text-xs text-rose-500">
+            这一格现在读不出来（{hit.error}）。
+          </p>
+        ) : hit.runs.total === 0 ? (
+          <p data-skill-inject-empty className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
+            近 {hit.days} 天还没有引擎运行跑过——这里暂时没有可看的对照。
+          </p>
+        ) : (
+          <p data-skill-inject-grounded className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+            接地分：带技能{' '}
+            {inj.mean === null ? '读不到' : `${inj.mean}（${inj.n} 次有分）`} · 没带{' '}
+            {plain.mean === null ? '读不到' : `${plain.mean}（${plain.n} 次有分）`}
+          </p>
+        )}
+
+        {/* 口径原文来自后端，界面不自己编一份说法 */}
+        <p data-skill-loop-rule className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+          {s.funnel_rules.window}。{s.injection_rules.bias}。{s.injection_rules.grounded}。
+        </p>
+      </div>
+    </section>
+  )
+}
+
+/** 双轨矛盾率（PLAN2 §6 · T1 的对面）。这条数是**本规划要消灭的东西**，所以这张卡的
+ *  写法与别的卡正好相反：它越接近 0 越好，而这一页**绝对不许这么说**——
+ *  没有目标线、没有「还差多少」、没有一句「继续努力」。只摆三个事实：分子、分母、窗口，
+ *  以及「这条数在量什么」。分母为 0 时说「还没有已掌握的概念」，不摆 0%。
+ *
+ *  （导出是给测试用的，同 `NorthStarCard`。）
+ */
+export function GapRateCard({ g, a }: { g: CardGapRate | null; a?: PrereqAdoption | null }) {
+  if (!g) return null
+  return (
+    <section
+      data-gap-rate
+      className="wb-card p-5"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">双轨</h2>
+        <span
+          data-gap-rate-count
+          className="text-2xl font-bold tabular-nums text-amber-600 dark:text-amber-300"
+        >
+          {/* 分母为 0 时不摆 0/0：那是「还没有数据」，不是「一条矛盾都没有」 */}
+          {g.readable && g.denominator > 0 ? `${g.n}/${g.denominator}` : '—'}
+        </span>
+        <span className="text-xs text-neutral-500 dark:text-neutral-400">
+          个已掌握的概念，名下的卡这 {g.days} 天还在重来
+        </span>
+        <div className="flex-1" />
+        <Link
+          to="/tutor"
+          className="text-[11px] text-neutral-400 transition-colors hover:text-violet-600 dark:text-neutral-500"
+        >
+          去地图看每个概念 →
+        </Link>
+      </div>
+
+      {!g.readable ? (
+        <p data-gap-rate-error className="mt-2 text-xs text-rose-500">
+          这条数现在读不出来（{g.error}）。读不到就说读不到——不拿 0 充数。
+        </p>
+      ) : g.denominator === 0 ? (
+        <p data-gap-rate-empty className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+          还没有已掌握的概念，所以这条数现在没有分母。
+        </p>
+      ) : null}
+
+      {/* 口径原文来自后端，界面不自己编一份说法；**也一个字都不催** */}
+      <p
+        data-gap-rate-rule
+        className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+      >
+        {g.rule}
+      </p>
+
+      {/* 回指采纳（PLAN2 §6 第三条 · T3 的对面）：拉取式功能「有没有人看」是它唯一的
+          生死指标。这张卡放它是因为它和上面那条同属「两条轨之间的桥」——那条量桥通没通，
+          这条量桥有没有人走。**尤其不能变成目标**：它的用途是「没人看就撤」。 */}
+      {a ? (
+        <div data-adoption className="mt-4 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">回指</h3>
+            <span
+              data-adoption-count
+              className="text-lg font-bold tabular-nums text-violet-600 dark:text-violet-300"
+            >
+              {a.readable ? `${a.n}/${a.denominator}` : '—'}
+            </span>
+            <span className="text-xs text-neutral-500 dark:text-neutral-400">
+              张：翻过「可能缺前置」的搁置卡里，真从候选开了课的
+            </span>
+            <div className="flex-1" />
+            <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+              近 {a.days} 天
+            </span>
+          </div>
+          {!a.readable ? (
+            <p data-adoption-error className="mt-2 text-xs text-rose-500">
+              这条数现在读不出来（{a.error}）。读不到就说读不到——不拿 0 充数。
+            </p>
+          ) : a.denominator === 0 ? (
+            <p data-adoption-empty className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+              这 {a.days} 天里还没有人翻过搁置卡的候选——所以这条数现在没有分母。
+            </p>
+          ) : null}
+          <p
+            data-adoption-rule
+            className="mt-2 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+          >
+            {a.rule} {a.bias}
+          </p>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+/** 引擎接地分（R1 · PLAN5 §3）——九条尺子里**唯一一条不是曲线而是分数**的读数。
+ *
+ *  它量的是「成文引擎有没有在材料之外编造」：0-5，只在「开了检索 + 命中材料 + 有产出」
+ *  时才有分（`task_runs.grounded` 同一个口径）。所以**空着不是 0 分**——把两者画成一样，
+ *  这张卡就会替没量过的那几次报喜（§4-8）。
+ *
+ *  **画成柱子，不是印一个数。** 0-5 是一个**有刻度的量**，而一个孤零零的数字
+ *  ("4.25") 读不出它在刻度上的哪儿——四个引擎并排时更读不出彼此的差别。
+ *  所以每一行是「名字 · 数 · **0-5 的轨道**」，柱子按 `score/5` 落位，
+ *  轨道两端钉住 0 和 5（`data-grounded-scale`）。
+ *
+ *  **轨道上不许有目标线。** 这条最容易被下一个人"顺手加上"（画一条 4.0 的虚线
+ *  看着多专业）——那会让这面墙从计量变成考核（§4-2）。柱子只回答"量到哪儿了"。
+ *
+ *  **警告那一格是这张卡的一半。** `engine_eval.health()` 会说「接地分全在 4.5 以上，
+ *  分档压在顶部、区分度低」——一个永远读「满分」的标尺和没有标尺是一回事。
+ *  所以**柱子顶到头不是好消息**：那正是「区分度低」的形状。摆它，是因为
+ *  它回答的正是这张卡自己的问题：**这把尺子现在还信不信得过**。
+ *
+ *  红线：不设目标、不排名、不给百分比。四个引擎各摆各的分与条数，**不排座次**。
+ */
+export function GroundedCard({ e }: { e: EngineEvalLatest | null }) {
+  // 还没读到就整块不渲染（与页面上另外五张卡同一个写法）：壳里分不清「还没读到」
+  // 和「读到了但读不出来」——后者是 `readable=false` 的载荷，那才是要说出来的那一句。
+  if (!e) return null
+  const runs = Object.entries(e?.by_engine || {})
+  const scored = runs.filter(([, r]) => r && r.grounded !== null)
+  return (
+    <MetricCard
+      title="接地分"
+      marker="data-grounded"
+      headline={`${scored.length}/${runs.length}`}
+      headlineNote="个引擎量到了分"
+      scope="每个引擎最近一次自动分"
+      readable={!!e}
+      rules={e ? GROUNDED_RULES : undefined}
+      // 「空」= **一个引擎都没量到分**（四个都还没跑过、或都只跑了结构判分）——
+      // 这时摆一句陈述，而不是一张四行全是 `—` 的假表
+      empty={scored.length === 0}
+      emptyHint="还没有引擎跑过分——先在设置页跑一遍 golden set，之后才有得比。"
+    >
+      <ul className="mt-4 space-y-2.5">
+        {runs.map(([engine, r]) => {
+          const score = r && r.grounded !== null ? r.grounded : null
+          return (
+            <li key={engine} data-grounded-row={engine}>
+              <div className="flex items-baseline gap-2">
+                <span className="w-16 shrink-0 truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
+                  {engine}
+                </span>
+                {/* 没跑过 / 这次只跑了结构判分 → 摆 —，**不补一个 0 分** */}
+                <span
+                  data-grounded-score={engine}
+                  className={`w-12 shrink-0 text-right text-sm font-semibold tabular-nums ${
+                    score === null
+                      ? 'text-neutral-300 dark:text-neutral-600'
+                      : 'text-neutral-800 dark:text-neutral-100'
+                  }`}
+                >
+                  {score === null ? '—' : score.toFixed(2)}
+                </span>
+                {/* 0-5 的轨道：柱子按 score/5 落位。轨道**故意画得比柱子淡**，
+                    它是刻度不是数据；没量到分时整条轨道是空的（不是半格） */}
+                <div
+                  data-grounded-scale={engine}
+                  className="relative h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800"
+                >
+                  {score === null ? null : (
+                    <div
+                      className="h-full rounded-full bg-violet-500 dark:bg-violet-400"
+                      style={{ width: `${Math.max(0, Math.min(100, (score / 5) * 100)).toFixed(1)}%` }}
+                    />
+                  )}
+                </div>
+                <span className="w-24 shrink-0 text-right text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
+                  {r
+                    ? `用例 ${r.total}${
+                        e?.coverage?.[engine] != null ? ` · 集 ${e.coverage[engine]}` : ''
+                      }`
+                    : '还没跑过'}
+                </span>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+
+      {/* 刻度说明：**只标两端**（0 与 5），中间不画线、不设目标值。
+          这句话是这张卡的关键——柱子顶到头意味着「区分度低」，不是「满分」。 */}
+      <div className="mt-3 flex items-center gap-2">
+        <span className="w-16 shrink-0" />
+        <span className="w-12 shrink-0" />
+        <div className="flex min-w-0 flex-1 justify-between text-[10px] tabular-nums text-neutral-300 dark:text-neutral-600">
+          <span>0</span>
+          <span>5</span>
+        </div>
+        <span className="w-24 shrink-0" />
+      </div>
+
+      {/* 标尺自己的健康度：**原文照抄后端**，界面不自己判「这算不算顶格」。
+          与校准卡的基线同一套琥珀色（都是「这条读数有个前提要知道」），
+          但这里不叫「基线」——它说的是这把尺子现在**量不出差别**。 */}
+      {e && e.warnings.length > 0 ? (
+        <ul
+          data-grounded-warnings
+          className="mt-3 space-y-1 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-950/20"
+        >
+          {e.warnings.map((w) => (
+            <li key={w} className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">
+              {w}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </MetricCard>
+  )
+}
+
+/** 接地分那张卡的口径。**不是从后端来的**（`engine_eval` 没有 rules 字段），
+ *  所以只有这一处能写——它必须与 `core/engine_eval.py` 开篇那两句一致，改那边就改这里。 */
+const GROUNDED_RULES: Record<string, string> = {
+  score: '0-5，量的是「有没有在材料之外编造」：材料之外的编造扣分，「材料里没有」**明说出来的算有据**',
+  empty:
+    '只在「开了检索 + 命中材料 + 有产出」时才有分——空着不是 0 分（那是「这次没量」，不是「这次编了」）',
+  selfcheck:
+    '柱子顶到头不是好消息：一个永远读满分的标尺和没有标尺是一回事，所以上面那几句是标尺自己的体检结论',
+}
+
+/** 回合读数（R1 · PLAN5 §3）——聊天那条路上跑过的回合，各毛病几例。
+ *
+ *  **它接的是「为什么不落盘」那个缺口**（W5 的诊断工具）。上墙时只做一件事：
+ *  把**计数**摆出来。**没有成功率、没有趋势箭头**——`turn_trace` 是诊断工具，
+ *  不是考核仪表；一列数一旦有了分母，下一个人就会去算比率、去追。所以：
+ *  `turns` 摆出来只是让那些计数有个参照，**不是让人除的**。
+ *
+ *  **柱子量的是「这一类占了多少轮」，不是「有多严重」。** 四类毛病之间没有可比性
+ *  （「慢」和「声称存了没存」不是一回事），所以这里**不排序、不加权、不给分**——
+ *  柱子只让你一眼看出「哪一类是主要的」，剩下的判断留给人。
+ *
+ *  只摆**有过的**毛病：一屏十二格全是 0 读起来像「什么都没发生」，
+ *  而这里要回答的是「最近有没有出毛病」。
+ */
+export function TurnSummaryCard({ t }: { t: TurnSummary | null }) {
+  if (!t) return null // 还没读到就整块不渲染（见 `GroundedCard` 那条注）
+  const counts = t?.counts || {}
+  const labels = new Map((t?.filters || []).map((f) => [f.key, f]))
+  const hits = Object.entries(counts).filter(([, n]) => n > 0)
+  // 柱子的分母是**窗口里的回合数**：这样柱长读作「这类毛病占了这些轮里的多少」
+  const span = Math.max(1, t?.turns ?? 1)
+  return (
+    <MetricCard
+      title="回合读数"
+      marker="data-turn-summary"
+      headline={`${t?.turns ?? 0}`}
+      headlineNote="个回合里，有这些毛病"
+      scope={t ? `近 ${t.days} 天` : ''}
+      // **判可读性要读 `t.readable`，不是 `!!t`**：读不到时后端照样回一个对象
+      // （`readable=false` + 一排 0 + 那句错误），`!!t` 于是是 true——
+      // 于是这张卡会把「读不出来」渲染成一屏 0，正好是它该防的那件事。
+      readable={t?.readable ?? false}
+      // 错误原话要**原样带出去**：不带的话壳只会说「原因没给出来」，
+      // 而读不到时那句话就是唯一的线索（与 `calibration` / `north-star` 同一个规矩）
+      error={t?.error}
+      rules={t?.rules}
+      // 「空」只在**读到了、但这个窗口里一轮都没有**时成立。读不到是另一回事：
+      // 那种情况由壳摆那句「读不出来」，不是摆「还没有聊过天」——
+      // 后者会把「读不到」说成一个具体的事实（§4-8 的同一个道理，换了个方向）。
+      empty={!!t && t.readable && t.turns === 0}
+      emptyHint={t ? `这 ${t.days} 天里还没有聊过天——所以这条路上一轮都没有。` : ''}
+    >
+      {hits.length === 0 ? (
+        <p data-turn-summary-clean className="mt-3 text-xs text-neutral-400 dark:text-neutral-500">
+          这 {t?.turns} 轮里，上面那几类毛病一例都没有。
+        </p>
+      ) : (
+        <ul className="mt-4 space-y-2.5">
+          {hits.map(([key, n]) => (
+            <li key={key} data-turn-count={key}>
+              <div className="flex items-baseline gap-2">
+                <span className="w-32 shrink-0 truncate text-xs text-neutral-700 dark:text-neutral-200">
+                  {labels.get(key)?.label ?? key}
+                </span>
+                <span
+                  data-turn-count-n={key}
+                  className="w-8 shrink-0 text-right text-sm font-semibold tabular-nums text-neutral-800 dark:text-neutral-100"
+                >
+                  {n}
+                </span>
+                <div className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+                  <div
+                    className="h-full rounded-full bg-rose-400 dark:bg-rose-500/80"
+                    style={{ width: `${Math.min(100, (n / span) * 100).toFixed(1)}%` }}
+                  />
+                </div>
+                <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
+                  /{t?.turns}
+                </span>
+              </div>
+              {/* 每一类的判据就是它自己的 hint（与筛选按钮同一份文案），不另立说法 */}
+              <p className="mt-0.5 pl-0 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                {labels.get(key)?.hint ?? ''}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {t && t.truncated ? (
+        <p data-turn-summary-truncated className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+          只数到最近 {t.turns} 轮（窗口里其实有 {t.total} 轮）——这个数是窗口的**下界**，
+          不是全量。
+        </p>
+      ) : null}
+    </MetricCard>
+  )
+}
+
+/** 提示词评测（R1 补齐 · PLAN5 §2-2 点名的九条之一）——九条里最后补上的一格。
+ *
+ *  **它量的是「尺子本身有没有被量过」，不是「哪条提示词更好」。** 与接地分同族
+ *  （资产指标）：登记表里那些提示词，跑过 golden set 的有几条、量出来的结论站得住的
+ *  又有几条——回答的是「提示词这一层到底有没有基线」。
+ *
+ *  **这一格最容易变成排行榜**（后端 `prompt_eval.cards()` 本来就是按分数倒序排的，
+ *  那是给小屋的技能卡用的），所以三层都堵住：
+ *  1. 后端载荷里**没有一条提示词的名字或分数**（`board()` 只给计数）；
+ *  2. 这里只摆计数——**不排序、不给条形图**：条形一比长短，它立刻就成了排名；
+ *  3. 空态说的是「一条都还没跑过，去哪跑」，不是「你还差 N 条」。
+ */
+export function PromptEvalCard({ p }: { p: PromptEvalBoard | null }) {
+  if (!p) return null // 还没读到就整块不渲染（见 `GroundedCard` 那条注）
+  const rows = [
+    {
+      key: 'decidable',
+      label: '下得了结论',
+      n: p?.decidable ?? 0,
+      hint: 'Wilson 区间够窄的那些——样本小的时候区间很宽，那是真相不是 bug',
+    },
+    {
+      key: 'stale',
+      label: '分数已过期',
+      n: p?.stale ?? 0,
+      hint: '基线跑完之后内容又改过（sha 变了）：那个分数不是现在这一版的',
+    },
+    {
+      key: 'cases',
+      label: '跑过的用例',
+      n: p?.cases ?? 0,
+      hint: '有成绩的那些提示词一共跑过多少条 golden set 用例',
+    },
+  ]
+  return (
+    <MetricCard
+      title="提示词评测"
+      marker="data-prompt-eval"
+      headline={`${p?.measured ?? 0}/${p?.registered ?? 0}`}
+      headlineNote="条量过（跑过 golden set）"
+      // 判可读性读 `p.readable`，不是 `!!p`：读不到时后端照样回一个对象（同一个坑，
+      // 回合读数那张卡踩过一次——见它上面那段注释）
+      readable={p?.readable ?? false}
+      error={p?.error}
+      rules={p?.rules}
+      bias={p?.bias}
+      // 「空」只在读到了、但一条都没跑过时成立；读不到是另一回事（§4-8）
+      empty={!!p && p.readable && p.measured === 0}
+      emptyHint={
+        p
+          ? `登记表里 ${p.registered} 条提示词，一条都还没跑过 golden set——去提示词实验室跑一遍，这里就有数了。`
+          : ''
+      }
+    >
+      <ul className="mt-4 space-y-2.5">
+        {rows.map((r) => (
+          <li key={r.key} className="flex items-baseline gap-3" data-prompt-eval-row={r.key}>
+            <span className="w-24 shrink-0 text-xs text-neutral-700 dark:text-neutral-200">
+              {r.label}
+            </span>
+            <span
+              {...{ [`data-prompt-eval-${r.key}`]: '' }}
+              className="w-10 shrink-0 text-right text-sm font-semibold tabular-nums text-neutral-800 dark:text-neutral-100"
+            >
+              {r.n}
+            </span>
+            <span className="min-w-0 flex-1 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+              {r.hint}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {/* 这一句是这一格的**结论**：没有它，那三个数会被读成「还有多少没做」 */}
+      <p className="mt-3 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        这一格数的是「尺子有没有被量过」，不是「哪条提示词更好」——所以这里不摆任何一条的名字或分数。
+      </p>
+    </MetricCard>
   )
 }

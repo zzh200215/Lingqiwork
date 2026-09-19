@@ -510,7 +510,6 @@ export default function ThreadsPage({ chromeless }: { chromeless?: boolean }) {
     <PageShell
       title="事"
       description="把材料、笔记、卡片、卡点、成品、判断挂到同一件事上——“这件事我到哪了”才答得出来。删掉一件事只少一层索引，东西一件都不动。"
-      maxWidth="5xl"
     >
       {body}
     </PageShell>

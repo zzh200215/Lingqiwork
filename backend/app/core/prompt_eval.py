@@ -1,6 +1,6 @@
 """提示词对照台（Q1）——把「这条提示词改了以后是变好还是变坏」变成一次可复算的跑分。
 
-**为什么需要它。** `prompts.py` 的登记表把 32 条提示词锁住了（改了就测试红），但**没人
+**为什么需要它。** `prompts.py` 的登记表把每一条系统提示词锁住了（改了就测试红），但**没人
 回答得了「改完到底好没好」**：`docs/upgrade-plan.md` §7 自己记着「提示词改动带 A/B 证据
 的比例：**0**」。这台机器补的就是这一步：读登记表 → 按 golden set 重放 → 确定性断言 →
 `k/n` + Wilson 区间 + 成本。
@@ -231,6 +231,30 @@ def cases_for(key: str) -> dict | None:
     return fixtures().get(key)
 
 
+# ---------- golden set 的两种形状 ----------
+#
+# **形状是这套用例自己的属性，不是调用方的选择。** 聊天型提示词的用例是「一句真实输入 +
+# 它必须满足的断言」，重放走 `tutor.build_messages`；判分型（P2-1 的重讲判分）的用例是
+# 「卡三样 + 重讲原文 + 人工档位」，重放走 `retell.card_prompt` 那条路，**判据是与人比对**，
+# 不是断言。
+#
+# 少了这道标记，`check()` 会拿聊天那套拼装逻辑去跑判分提示词——那会**静默地**产出一次
+# 什么都不测的跑分，而且它还会被当成这条提示词的基线存下来（`variant_sha=""`）。
+# 那比没有基线更坏：它看起来像一条基线。
+FIXTURE_KINDS = ("chat", "grade")
+
+
+def fixture_kind(key: str) -> str:
+    """这套 golden set 是哪种形状（没写 = `chat`）。"""
+    fx = cases_for(key) or {}
+    kind = str(fx.get("kind") or "chat").strip().lower()
+    return kind if kind in FIXTURE_KINDS else "chat"
+
+
+def is_grading(key: str) -> bool:
+    return fixture_kind(key) == "grade"
+
+
 # ---------- golden set 的写：把一次事故变成一条用例（喂食）----------
 #
 # 这是本模块**唯一**会写盘的地方，而且写的不是提示词，是**用例文件**：
@@ -272,6 +296,12 @@ def add_case(key: str, *, user: str, intent: str, checks: list[str], case_id: st
     fx = cases_for(key)
     if not fx:
         raise ValueError(f"{key} 还没有 golden set（backend/evals/prompts/）")
+    if is_grading(key):
+        raise ValueError(
+            "这套是**判分金标集**：用例是「卡三样 + 重讲原文 + 人工档位」，喂不进聊天型用例"
+            "（它的判据是人工档位，不是断言）。要加一条就去改那个 JSON，并在 intent 里写清"
+            "为什么是这一档。"
+        )
     user = (user or "").strip()
     intent = (intent or "").strip()
     if not user:
@@ -304,10 +334,20 @@ def remove_case(key: str, case_id: str) -> dict:
     """从金标集里去掉一条。坏用例会污染指标，所以给的出口和入口一样大。
 
     删的是**文件里的一行**，git 里看得见；提示词本身一个字节都不动。
+
+    **判分型那套的出口在文件里，不在这里**：它的条数有下限（30 条，见
+    `judge_eval.MIN_CASES`），从界面上一条条删很容易在不知情的情况下把整套跑到跑不动
+    （那时报的是「用例数 29 不在 30–50」——一个跟「我删了一条坏用例」看不出关系的信息）。
+    要删就去改那个 JSON，顺手补一条替换的。
     """
     fx = cases_for(key)
     if not fx:
         raise ValueError(f"{key} 还没有 golden set（backend/evals/prompts/）")
+    if is_grading(key):
+        raise ValueError(
+            "判分金标集不从界面删：它的条数有下限（30 条），删到线以下整套就跑不了了。"
+            "要换一条就去改那个 JSON——顺手补上一条替换的。"
+        )
     cases = [c for c in (fx.get("cases") or []) if str(c.get("id")) != str(case_id)]
     if len(cases) == len(fx.get("cases") or []):
         raise ValueError(f"没有这条用例：{case_id}")
@@ -359,13 +399,19 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return (max(0.0, (center - half) / d), min(1.0, (center + half) / d))
 
 
+# 「下得了结论」的那条线。**给它一个名字**是因为仪表盘那一格的口径原文要引它
+# （`BOARD_RULES`）：把 0.34 在两处各写一遍，改一处忘一处的那天，界面说的和代码做的
+# 就不是一回事了——这个仓库为这类分叉付过账（§4-7 一事一处）。
+CAN_TELL_WIDTH = 0.34
+
+
 def can_tell(lo: float, hi: float) -> bool:
-    """这次跑分下得了结论吗：区间宽度 ≤ 0.34（约 ±0.17）才算有分辨力。
+    """这次跑分下得了结论吗：区间宽度 ≤ `CAN_TELL_WIDTH`（约 ±0.17）才算有分辨力。
 
     宽度这件事要摆在明面上：n=8 且全过时区间是 [0.68, 1.00]（宽 0.32），
     也就是说「8 个用例全过」**还不足以**说它比 [0.53, 0.99] 的那版更好。
     """
-    return (hi - lo) <= 0.34
+    return (hi - lo) <= CAN_TELL_WIDTH
 
 
 # ---------- 一次跑分 ----------
@@ -420,28 +466,46 @@ def _summarize(run) -> dict:
     }
 
 
-async def latest_baselines() -> dict[str, dict]:
-    """每条提示词**已登记内容**的最新一次成绩，一个查询搞定。
+# 一次最多捞多少行「最新成绩」。400 行够覆盖登记表里每条提示词的很多轮历史；
+# 它同时是**说话的上限**（别为了一页墙把整张表捞进内存）。
+LATEST_ROWS = 400
 
-    小屋那张技能卡要读它，而挂件每 60 秒就会拉一次房间——按 key 各查一次是 32 个往返，
-    没必要。`registry` 那种一次性面（人打开才看）用 `baseline()` 逐条查没关系，这里不行。
+
+async def _latest_rows(limit: int = LATEST_ROWS) -> list:
+    """`variant_sha` 为空的最新若干行，**新 → 旧**。**I/O 只在这一处**。
+
+    与 `turn_trace._summary_rows` / `metrics._day_counts` 同一个形状（那两处留同样的缝）：
+    要验「读不到」时 monkeypatch 这一条，不必去跟 sessionmaker 较劲。
+
+    **它抛出去**：吞掉的话调用方就分不清「一条都没有」和「读不出来」了（§4-8）。
+    要吞的是它上面那一层（`latest_baselines` 给小屋用，那里空列表是安全的）。
     """
     from sqlalchemy import select
 
     from app.db import SessionLocal
     from app.models import PromptEvalRun
 
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(PromptEvalRun)
+                .where(PromptEvalRun.variant_sha == "")
+                .order_by(PromptEvalRun.id.desc())
+                .limit(max(1, int(limit)))
+            )
+        ).scalars().all()
+    return list(rows)
+
+
+async def latest_baselines() -> dict[str, dict]:
+    """每条提示词**已登记内容**的最新一次成绩，一个查询搞定。
+
+    小屋那张技能卡要读它，而挂件每 60 秒就会拉一次房间——按 key 各查一次就是登记表条数
+    那么多个往返，没必要。`registry` 那种一次性面（人打开才看）用 `baseline()` 逐条查没关系，这里不行。
+    """
     out: dict[str, dict] = {}
     try:
-        async with SessionLocal() as db:
-            rows = (
-                await db.execute(
-                    select(PromptEvalRun)
-                    .where(PromptEvalRun.variant_sha == "")
-                    .order_by(PromptEvalRun.id.desc())
-                    .limit(400)
-                )
-            ).scalars().all()
+        rows = await _latest_rows()
     except Exception:  # noqa: BLE001
         log.warning("prompt eval latest baselines failed", exc_info=True)
         return out
@@ -490,6 +554,82 @@ async def cards() -> list[dict]:
             }
         )
     out.sort(key=lambda c: (c["rate"], c["cases"]), reverse=True)
+    return out
+
+
+# ---------- R1 补齐：提示词评测上墙（PLAN5 §2-2 点名的九条之一）----------
+#
+# **这一格量的是「尺子本身有没有被量过」，不是「哪条提示词更好」。** 它是资产指标
+# （与接地分同族）：登记表里那些提示词，其中跑过 golden set 的有几条、量出来的结论
+# 站得住的又有几条——回答的是「提示词这一层到底有没有基线」。
+#
+# **为什么不摆每条提示词的分数。** `cards()` 是给小屋的技能卡用的，它按 rate 倒序排
+# （「技能只有一个到手方式：它被证明有效过」）。原样搬上墙就成了一面排行榜——§4-2 明令
+# 不许，而且墙上那些数一旦能比大小，下一个人就会去追它。所以这里**只给计数**。
+#
+# **读不到就说读不到**（§4-8）：`_latest_rows` 抛了就 `readable=false`，不给一排 0
+# 充数——「一条都没读到」与「读到了、一条都没跑过」是两件事。
+BOARD_RULES = {
+    "registered": "分母 = 登记表里的提示词条数（`prompts.inventory()`；内容活在源码里，这里只数）",
+    "measured": "分子 = 其中跑过 golden set、有成绩的条数（`prompt_eval_runs` 里 `variant_sha` 为空的最新一条）",
+    "decidable": f"「站得住」= Wilson 区间宽度 ≤ {CAN_TELL_WIDTH}（`can_tell`）——样本小的时候区间很宽，那是真相不是 bug",
+    "stale": "「过期」= 基线跑完之后这条提示词的内容又改过（sha 变了）：那个分数不是现在这版的",
+}
+
+
+async def board() -> dict:
+    """墙上那一格：登记了多少条、量过几条、其中几条站得住、几条已经过期。
+
+    **输出里没有任何一条提示词的名字或分数**——它不排座次（见上面那段）。
+    """
+    from app.core import prompts
+
+    out = {
+        "readable": False,
+        "error": "",
+        "registered": 0,
+        "measured": 0,
+        "decidable": 0,
+        "stale": 0,
+        "cases": 0,
+        "rules": BOARD_RULES,
+        "bias": "基线是**某一个模型**跑出来的（每行都记着 `model_id`）：换模型之后这个分数不适用。",
+    }
+    try:
+        rows = await _latest_rows()
+        inventory = prompts.inventory()
+    except Exception as e:  # noqa: BLE001 - 派生视图，坏了照实说，不假装零
+        log.warning("prompt eval board failed", exc_info=True)
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
+    latest: dict[str, dict] = {}
+    for r in rows:  # 已按 id 倒序：每个 key 的第一条就是最新的
+        latest.setdefault(r.key, _summarize(r))
+
+    measured = decidable = stale = cases = 0
+    for p in inventory:
+        b = latest.get(p.name)
+        # `content is None` = 登记的那段文字在源码里找不到了（漂移）。判据与 `cards()`
+        # 同一份，免得「量过几条」在小屋和墙上给出两个答案（§4-7 一事一处）。
+        if not b or p.content is None:
+            continue
+        measured += 1
+        cases += int(b["cases"] or 0)
+        if can_tell(float(b["ci_low"]), float(b["ci_high"])):
+            decidable += 1
+        if b["prompt_sha"] != p.sha:
+            stale += 1
+
+    out.update(
+        readable=True,
+        error="",
+        registered=len(inventory),
+        measured=measured,
+        decidable=decidable,
+        stale=stale,
+        cases=cases,
+    )
     return out
 
 
@@ -604,6 +744,12 @@ async def check(
     fx = cases_for(key)
     if not fx:
         raise ValueError(f"{key} 还没有 golden set（backend/evals/prompts/）")
+    if is_grading(key):
+        raise ValueError(
+            f"{key} 的用例是**判分型**（卡三样 + 重讲原文 + 人工档位），不走这条重放路："
+            "它的判据是跟人工档位比对，不是对回复跑断言。跑它用 `core/judge_eval.py`"
+            "（界面上的「跑一次」会自动走对的那条）。"
+        )
     cases = [c for c in (fx.get("cases") or []) if c.get("id") and c.get("user")]
     if not cases:
         raise ValueError(f"{key} 的 golden set 里没有用例")

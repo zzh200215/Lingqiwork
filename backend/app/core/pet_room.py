@@ -21,6 +21,14 @@
 全部先归一成 aware datetime，再输出两个字段给前端：`at`（本地墙钟串，给人看）
 与 `at_ts`（epoch，给排序和「多久以前」用）。**前端就不必猜时区了**——这是这一层
 存在的意义，也是它唯一复杂的部分。
+
+## 屋里有两类东西，规矩不一样（P2 补记）
+
+- **攒下的**（`things` / `meals`）：跨过门槛就多一件，**只增不减、不欠账**；
+- **镜子**（`concept_cards`，P2 · F13）：学习地图在小屋里的倒影。镜子照的是**此刻**
+  ——一个概念从上一次会话读出它现在在哪一档（已掌握 / 在学 / 卡住），状态会来回动。
+  它不是第二份真值（读的就是 `tutor.learning_map()` 分好的档），也不是账：
+  **「未触及」那一档根本不读**，屋里不摆「你还没碰的 N 个概念」。见 `concept_cards`。
 """
 from __future__ import annotations
 
@@ -365,6 +373,93 @@ def _now_and_tz(
     return now, tz or now.tzinfo
 
 
+# ---------- 概念卡（P2 · F13）：学习地图在小屋里的镜子 ----------
+
+CONCEPT_CARDS_CAP = 12  # 屋里摆得下的量；再多去学页那张地图上看
+
+# 屋里的概念卡只有这三档，**与学习地图的前三档同名同义**。
+#
+# 「未触及」不在里面，而且不是「暂时不摆」：那一档是「拆出来、还没开成教」的点，
+# 也就是一张**还没做的事**的清单——屋里不摆账（本模块第三条规矩）。
+#
+# 这三档的**词与色**是界面的事：`frontend/src/conceptState.ts` 那一份是唯一出处
+# （学页那张地图与这儿的卡读的是同一个文件）。这里只给档位名、不发词——同一句话在
+# 两个地方各写一遍，迟早一处叫「在学」、另一处叫「学过」。
+# 有一条测试盯着这三档与 `tutor.learning_map()` 的三个键同形。
+CONCEPT_STATES = ("mastered", "learning", "stuck")
+
+
+def _as_count(value: object) -> int:
+    """读一个计数：读不出来当 0，负数夹回 0。**不抛**——镜子坏了不该挡住整间屋子。"""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
+def concept_cards(
+    board: dict | None,
+    *,
+    now: datetime | None = None,
+    tz: tzinfo | None = None,
+    limit: int = CONCEPT_CARDS_CAP,
+) -> dict:
+    """学习地图（`tutor.learning_map()` 的返回）→ 屋里那几张概念卡。**纯函数**。
+
+    它读的是地图**已经分好的三档**，不自己再判一次「掌握没掌握」：一条是运气、两场
+    才算那条规则只有 `tutor.is_mastered` 一份，这个模块连一次都不重写。所以这里的
+    依赖是「地图怎么分，屋里就怎么摆」——地图改了档，这里跟着改，不会各说各的。
+
+    `total` 是三档里的概念总数（镜子照到的全量）。它**不含** `untouched`：
+    「还有 N 个没碰」是一张欠账，不是屋里的一件东西。屋里只摆得下 `limit` 张，
+    界面上要说清「这是最近碰到的 N 个，全部在地图上」。
+
+    两处如实交代：
+
+    - **时间读不出来的行整张不摆**（不摆一张「什么时候碰的：不知道」的卡，也不计进
+      `total`）——同「读不到就说读不到」；
+    - 一个概念只会出现在一档里（地图已经分好了）。真出现两次时**以靠前的档为准**
+      （已掌握 > 在学 > 卡住），因为那是更强的那个判断。
+    """
+    _, tz = _now_and_tz(now, tz)
+    raw = board if isinstance(board, dict) else {}
+    cards: list[dict] = []
+    seen: set[str] = set()
+
+    for state in CONCEPT_STATES:
+        rows = raw.get(state)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("concept") or "").strip()
+            if not name or name in seen:
+                continue
+            at = _parse_utc_text(str(row.get("last_at") or ""))
+            if at is None:
+                continue
+            seen.add(name)
+            stamp, ts = _stamp(at, tz)
+            cards.append(
+                {
+                    "id": f"concept:{name}",
+                    "name": name,
+                    "state": state,
+                    "sessions": _as_count(row.get("sessions")),
+                    # 卡在哪：只有「卡住」那一档有这句话，别的档一律空（不拿上一场的旧卡点充数）
+                    "stuck": str(row.get("stuck") or "").strip() if state == "stuck" else "",
+                    "at": stamp,
+                    "at_ts": ts,
+                }
+            )
+
+    # 同一秒里碰到两个概念要有确定顺序——用 id 兜底（与 `_things_from` 同一条）
+    cards.sort(key=lambda c: (c["at_ts"], c["id"]), reverse=True)
+    return {"cards": cards[: max(0, limit)], "total": len(cards)}
+
+
 def carried(
     current: dict | None,
     shelf: list[dict] | None,
@@ -398,6 +493,10 @@ def carried(
     kind = str(row.get("label") or "").strip()
     return {
         "id": f"file:{row.get('path') or ''}",
+        # 架上那一行的 `path`。**界面靠它标出「它叼的就是这份」**，不必自己再算一遍
+        # 「谁最新」——那会是第二份判定，两处迟早各指一件东西。
+        # 门槛那件（不是文件）没有这个字段：它本来就不在架上。
+        "ref": str(row.get("path") or ""),
         "kind": "output",
         "module": "work",
         "module_label": MODULES["work"],
@@ -448,6 +547,10 @@ def room(
     `shelf`（架上那几份真产出）与 `carried` 的升级由**路由**补进来：列产出是
     `routers/work.py` 的事，核心层不该反过来去引路由（那份实现连标题提取在内只有
     一处，不抄第二份）。这里给的是「没有任何产出时」的答案。
+
+    概念卡（`concepts`）也由**路由**补进来：它要的是 `tutor.learning_map()`，那是异步的、
+    而且真值在 `tutor_sessions`——镜子照什么由 `concept_cards()` 决定，这一层只负责
+    「哪儿来的」不进这儿。
     """
     now, tz = _now_and_tz(now, tz)
     src = _collect(mastered, tz)

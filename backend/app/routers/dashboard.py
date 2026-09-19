@@ -36,6 +36,78 @@ _BRIEFING_DEFAULTS = {
 }
 
 
+@router.get("/north-star")
+async def north_star():
+    """北极星（PLAN §7）：周内「重讲作答 ≥1 且 消化材料 ≥1」的天数 / 7。
+
+    **只画曲线**——不设目标、不排名、不进零柒嘴里（规则与红线都在 `core/metrics.py`，
+    这里只把那条曲线端出来）。读不出来时 `readable=false`，界面照实说「读不到」，
+    而不是给一条全零的曲线充数。
+    """
+    from app.core import metrics
+
+    return await metrics.north_star()
+
+
+@router.get("/process")
+async def process():
+    """过程指标（PLAN §7.2）：半懂率按周——八个自然周，每周「半懂 / (说通 + 半懂)」。
+
+    与北极星同一条红线：**只进仪表盘**，不设目标、不排名、不进零柒嘴里。
+    判分档位分布那一条在 T2 的校准曲线里，不在这里重算一份。
+    """
+    from app.core import metrics
+
+    return await metrics.half_rate()
+
+
+@router.get("/skill-loop")
+async def skill_loop():
+    """技能闭环的两条（PLAN3 §6）：**试用期漏斗** + **注入命中率**。
+
+    与北极星/过程指标同一条红线：**只进仪表盘**——不设目标、不排名、不进零柒嘴里。
+    两个数都不是新真值：漏斗读 `skill_eval.report()`（与技能页同一个出处），
+    注入那条读运行日志里那条 `skill_inject`（S1 留的痕）。
+    """
+    from app.core import skill_metrics
+
+    board, hit = await skill_metrics.funnel_board(), await skill_metrics.injection()
+    return {
+        "funnel": {k: v for k, v in board.items() if k != "rules"},
+        "funnel_rules": board.get("rules") or {},
+        "injection": {k: v for k, v in hit.items() if k != "rules"},
+        "injection_rules": hit.get("rules") or {},
+    }
+
+
+@router.get("/turns")
+async def turns_summary(days: int = 30):
+    """回合读数（R1 · PLAN5 §3）：窗口内跑过几个聊天回合、各毛病几例。
+
+    **只给计数，不给成功率**——`core/turn_trace.py` 开篇写死的是「诊断工具，不是考核仪表」，
+    与北极星/过程指标同一条红线（不设目标、不排名、不进零柒嘴里）。判据复用
+    `turn_trace.summary()`，界面照它摆，不自己再算一遍。读不到时 `readable=false`，
+    不给一排 0 充数。
+    """
+    from app.core import turn_trace
+
+    return await turn_trace.summary(days=days)
+
+
+@router.get("/prompt-eval")
+async def prompt_eval_board():
+    """提示词评测（R1 补齐 · PLAN5 §2-2 点名的九条之一）：登记了多少条、量过几条、几条站得住。
+
+    与北极星/接地分同一条红线：**只进仪表盘**——不设目标、不排名、不进零柒嘴里。
+    这一格尤其不能变成排行榜：`prompt_eval.board()` 的输出里**没有任何一条提示词的名字或
+    分数**，界面上也不许自己再算一份（那是第二份判据）。读不到时 `readable=false`，
+    不给一排 0 充数。
+    """
+    from app.core import prompt_eval
+
+    return await prompt_eval.board()
+
+
 @router.get("")
 async def dashboard(db: AsyncSession = Depends(get_db)):
     from app.core import usage as usage_core

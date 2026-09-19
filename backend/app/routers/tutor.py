@@ -27,6 +27,8 @@ class StartIn(BaseModel):
     repo: str = ""  # 代码库陪读：非空则取材限定在该仓库
     mode: str = "socratic"  # socratic（老师问你答）| feynman（你讲它追问）
     origin_point_id: int | None = None  # 从「材料拆出的点」开场时带上，标记它已教
+    # PLAN2 §6「回指采纳」：从哪张搁置卡的前置候选点进来的（别的开场一律不带）
+    prereq_card_id: int | None = None
 
 
 class SayIn(BaseModel):
@@ -54,7 +56,11 @@ async def start(body: StartIn):
     instead of on the first reply."""
     try:
         return await core.start(
-            body.topic, repo=body.repo, mode=body.mode, origin_point_id=body.origin_point_id
+            body.topic,
+            repo=body.repo,
+            mode=body.mode,
+            origin_point_id=body.origin_point_id,
+            prereq_card_id=body.prereq_card_id,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -107,6 +113,38 @@ async def list_sessions(limit: int = 50):
     return {"sessions": await core.sessions(limit)}
 
 
+class JudgeIn(BaseModel):
+    model_id: str = ""
+
+
+@router.post("/sessions/{session_id}/judge")
+async def judge_session(session_id: int, body: JudgeIn | None = None):
+    """「我来讲」的判分（M1 · PLAN §3 G1 场景 B）：它读对话全文给一个自评档。
+
+    **判完之后走的是同一条 `end()`**——概念/别名/卡点照常提取、「又卡住」那条链路
+    一行都不用改就会触发。判不出来就如实回 `judged=false`，界面退回人工自评：
+    **不编分**（"判分没跑成 ≠ 差评"）。
+    """
+    from app.core import retell as core_retell
+
+    model_id = (body.model_id if body else "") or ""
+    out = await core_retell.judge_session(session_id, model_id=model_id)
+    if not out.get("ok"):
+        return {"judged": False, "reason": out.get("reason") or "判分没跑成", "ended": None}
+    # P2-3：告诉 `end()` **这一个 verdict 是判分器定的**，并带上判它的那一版指纹——
+    # 会话侧校准要分得清「自己标的」和「让它判的」。指纹只有一个出处（登记表）。
+    ended = await core.end(
+        session_id, out["verdict"], judged_sha=core_retell.session_judge_sha()
+    )
+    return {
+        "judged": True,
+        "verdict": out["verdict"],
+        "missed_points": out.get("missed_points") or [],
+        "model_id": out.get("model_id") or "",
+        "ended": ended,
+    }
+
+
 @router.get("/stuck")
 async def list_stuck(limit: int = 200):
     """全量卡点：不受右栏会话列表 50 条的显示上限约束。带 `resolved_at`。"""
@@ -124,6 +162,17 @@ async def resolve_stuck(session_id: int, body: ResolveStuckIn):
         return await core.resolve_stuck(session_id, body.resolved)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+
+
+@router.get("/recurring")
+async def list_recurring(days: int = 7):
+    """近几天「接住过、又没走通」的概念——宠物那句「又卡住了」的**同一个判据**。
+
+    它存在的理由不是给界面加一栏（学习地图的「卡住」档已经覆盖了那个需求），
+    而是让「宠物为什么说这句话」**查得到**：台词落在一张会滚动的流里，派生视图才是
+    「它现在凭什么这么说」的可核查处。纯派生，不落库。
+    """
+    return {"recurring": await core.recurring_mistakes(days)}
 
 
 @router.get("/concepts")
@@ -166,6 +215,17 @@ async def get_mastery():
     """成长事件：概念「学会了」的时刻（A3）。规则与学习地图「已掌握」同一条——
     纯派生，是零柒成长模型的原料。"""
     return await core.mastery_events()
+
+
+@router.get("/calibration")
+async def get_calibration(days: int = 90):
+    """会话侧校准（PLAN2 P2-3）：自己标的 vs 让它判的，各是什么成色。
+
+    **只进仪表盘**——不设目标、不排名、不进零柒嘴里（口径与四条须知都在
+    `tutor.verdict_calibration` 里，界面照抄不自己编）。样本小是它的已知性质：
+    两个说通率各带 95% Wilson 区间，`decidable` 说了算。
+    """
+    return await core.verdict_calibration(days)
 
 
 @router.get("/neighbors")

@@ -26,13 +26,13 @@ from app.models import Card, DecisionLog, ScheduledTask, Thread, ThreadItem, Tut
 
 log = logging.getLogger(__name__)
 
-KINDS = ("material", "note", "card", "tutor", "output", "task", "decision")
+KINDS = ("material", "note", "card", "session", "output", "task", "decision")
 
 # 五步 → 哪些 kind 落进这一步。PLAN 写的第五步是「再用」；手里真有数据的第五类是**判断**，
 # 所以这里叫「判断」——"再用"（检索命中一键挂进来）是 §4-14 的事，加一个桶即可，表不用动。
 STEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("in", "进来", ("material",)),
-    ("learn", "搞懂", ("tutor", "card")),
+    ("learn", "搞懂", ("session", "card")),
     ("keep", "留下", ("note",)),
     ("deliver", "交付", ("output", "task")),
     ("judge", "判断", ("decision",)),
@@ -53,6 +53,16 @@ _VAULT_DIRS = (
 )
 _CATALOG_CAP = 200  # 每类最多列这么多——九百多个仓库分块全列出来只是噪音
 _DATE_LEN = 10
+
+# 「成品」在哪几个目录（M2 的自动挂接用）。**不含 `tasks/`**：那是工作流的运行留痕，
+# 与 `pet.is_output_path()` 收口过的那个口径是同一件事——同一个词在两处必须指同一批文件。
+PRODUCT_DIRS = ("research", "decisions", "conflicts", "recap", "deliver", "meetings")
+#                                                                      ↑ M5（2026-09-17）：
+# 会议进主线。一场会议的产物（纪要 / 待办 / 跟进短稿）落在 `meetings/<日期>-<录音名>/` 里，
+# 而这个子目录名**就是这一场会议的名字**（`tasks._resolve_run_dir` 用录音名 + 日期拼的）。
+# 在这之前 `meetings` 不在成品目录里，所以会议结论一份都挂不上「一件事」——
+# `docs/work-module.md` §8 当时记的理由是「它们没有『一个题目』这个天然的名字来源」，
+# 而那个名字其实是有的（见 `tasks.thread_name_for_run_dir`）。
 
 
 # ---------- 小工具 ----------
@@ -172,7 +182,7 @@ async def _catalog() -> list[dict]:
         ).scalars():
             out.append(
                 {
-                    "kind": "tutor",
+                    "kind": "session",
                     "ref": str(s.id),
                     "title": s.topic or "",
                     "label": s.concept or s.topic or "",
@@ -203,7 +213,7 @@ async def _resolve(rows: list[ThreadItem]) -> list[dict]:
     """
     ids: dict[str, list[int]] = {}
     for r in rows:
-        if r.kind in ("card", "tutor", "decision", "task") and (r.ref or "").isdigit():
+        if r.kind in ("card", "session", "decision", "task") and (r.ref or "").isdigit():
             ids.setdefault(r.kind, []).append(int(r.ref))
 
     found: dict[tuple[str, str], str] = {}
@@ -211,11 +221,11 @@ async def _resolve(rows: list[ThreadItem]) -> list[dict]:
         if ids.get("card"):
             for c in (await db.execute(select(Card).where(Card.id.in_(ids["card"])))).scalars():
                 found[("card", str(c.id))] = (c.front or "")[:80]
-        if ids.get("tutor"):
+        if ids.get("session"):
             for s in (
-                await db.execute(select(TutorSession).where(TutorSession.id.in_(ids["tutor"])))
+                await db.execute(select(TutorSession).where(TutorSession.id.in_(ids["session"])))
             ).scalars():
-                found[("tutor", str(s.id))] = s.topic or ""
+                found[("session", str(s.id))] = s.topic or ""
         if ids.get("decision"):
             for d in (
                 await db.execute(select(DecisionLog).where(DecisionLog.id.in_(ids["decision"])))
@@ -230,7 +240,7 @@ async def _resolve(rows: list[ThreadItem]) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         key = (r.kind, r.ref)
-        if r.kind in ("card", "tutor", "decision", "task"):
+        if r.kind in ("card", "session", "decision", "task"):
             title = found.get(key, "")
             exists = key in found
         else:
@@ -259,7 +269,9 @@ def _href(kind: str, ref: str) -> str:
     """
     if kind == "card":
         return f"/review?card={ref}"
-    if kind == "tutor":
+    if kind == "session":
+        # 注意：**这一格是路由，不是 kind**。页面的路由仍然叫 `/tutor`
+        # （改名去动前端路由与书签是另一件事，R3 不做）；这里只是「哪一类挂接」。
         return f"/tutor?session={ref}"
     if kind == "decision":
         return f"/dashboard?decision={ref}"
@@ -301,6 +313,78 @@ async def create(name: str, note: str = "") -> dict:
         await db.commit()
         await db.refresh(row)
     return _out(row, {})
+
+
+async def resolve(name: str) -> dict:
+    """拿一个名字换一条「事」：**撞得上就用那条，撞不上才新建**。
+
+    给工作链当起链时的落点（M2）：你输入的题目就是这件事的名字。同名复用是 §1 那条
+    「能完全不手打标签」的直接延伸——同一天把「向量库选型」跑第二遍，产物进的是同一件事，
+    不是第二件名字一模一样的事。判定用 `_matches`（子串包含，不猜语义），与建议挂接同一把尺子。
+    """
+    title = (name or "").strip()[:120]
+    if not title:
+        raise ValueError("题目不能为空")
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(select(Thread).where(Thread.archived.is_(False)).order_by(Thread.id))
+        ).scalars().all()
+    for t in rows:
+        if _matches(title, t.name):
+            return {**_out(t, {}), "created": False}
+    row = await create(title)
+    return {**row, "created": True}
+
+
+# 会议目录里也有**不是成品**的东西：`inbox/` 是等着被处理的录音与材料（见 `attach_output`
+# 的注释）。所以会议这一层要看第三段：一场会议是 `meetings/<日期>-<录音名>/`，成品在它里面。
+# 与 `tasks.MEETING_INBOX` 是同一个词（那边用它判断「这一格是不是一场会议」），有测试钉着。
+_MEETING_INBOX = "inbox"
+
+
+def is_product(rel: str) -> bool:
+    """这条引用是不是一件「成品」。Pure。
+
+    一条命名的规矩：只有**产出目录**里的才算（`PRODUCT_DIRS`）。`tasks/` 是工作流的运行留痕、
+    `tasks/handoff/` 是中间的工序、`meetings/inbox/` 是等待处理的材料、`notes/` 是你自己的
+    笔记——挂错了，「这件事到哪了」里就会混进一堆其实不属于它的东西。
+
+    判据只有这一处：`attach_output` 与它的测试都读它，不各写一遍。
+    """
+    parts = [p for p in (rel or "").split("/") if p]
+    if len(parts) < 2 or parts[0] not in PRODUCT_DIRS:
+        return False
+    if parts[0] == "meetings":
+        return len(parts) >= 3 and parts[1] != _MEETING_INBOX
+    return True
+
+
+async def attach_output(thread_id: int, filename: str) -> dict:
+    """把一份刚落的成品挂到这件事上（M2 的自动挂接）。
+
+    **一条命名的规矩**：只有产出目录里的才算成品（`PRODUCT_DIRS`，判据在 `is_product`）。
+    `tasks/` 是工作流的运行留痕、`meetings/inbox/` 是等待处理的材料、`tasks/handoff/` 更是
+    中间的工序——挂错了，「这件事到哪了」里就会混进一堆其实不属于它的东西。要留痕也留在这件
+    事上的话，**由你手动挂**（`AttachToThread` 那条路直接走 `attach()`，不受这条规矩管）。
+
+    **不看盘上有没有这个文件**（那是 `_resolve` 的活，它早就写好了「引用不在了照常列出来、
+    标 `（已不存在）`」）。挂接这一层只判断「它是不是一件成品」——两处判据不重叠，也就不会
+    出现「同一份产物在这边算数、那边不算」的第二份真值。
+
+    幂等（`attach` 自己带），引用为空/越界一律不挂——自动挂接挂了不该让一次运行失败。
+    """
+    try:
+        rel = _clean_ref(filename)
+    except ValueError:
+        return {"attached": False, "reason": "ref 越界"}
+    if not rel:
+        return {"attached": False, "reason": "没有落点"}
+    if not is_product(rel):
+        return {"attached": False, "reason": "不是成品（落点不在产出目录里）"}
+    try:
+        return await attach(thread_id, "output", rel)
+    except LookupError:
+        return {"attached": False, "reason": "这件事不在了"}
 
 
 async def update(
@@ -414,14 +498,19 @@ async def deliver_into(thread_id: int, genre: str, audience: str) -> dict:
     if not sources:
         raise ValueError("这件事上还没有可用的材料——先往里挂点东西")
 
+    # S1 引擎吃 skill：这件事的名字就是这次的话题——与六个引擎走同一个匹配函数。
+    # 这条路没有 SSE、也没有运行记录，所以注入清单随返回值给界面（`routers/threads.py`）。
+    from app.core import skill_match
+
+    inj = skill_match.injection(name)
     async with usage_ledger.span("deliver", name, thread_id=thread_id):
-        rep = await _report.synthesize(name, sources, prompt)
+        rep = await _report.synthesize(name, sources, skill_match.with_skills(prompt, inj))
     if rep is None:
         raise ValueError("成文失败——默认模型不可用，或输出无法解析")
 
     saved = await deliver_engine.save(rep, sources)
     await attach(thread_id, "output", saved["filename"])
-    return saved
+    return {**saved, "skills": inj["names"]}
 
 
 async def detail(thread_id: int, *, suggest: bool = True) -> dict:

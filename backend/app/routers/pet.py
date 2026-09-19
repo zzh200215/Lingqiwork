@@ -1,14 +1,15 @@
-"""零柒's HTTP surface: feed / status / say / chat (SSE, ephemeral).
+"""零柒's HTTP surface: feed / status / say / chat (SSE) / chats.
 
-Pet chat intentionally does NOT persist a conversation (same stance as the
-selection assistant): it is a conversation with the companion, backed by the
-memory table, not another chat list.
+Chat used to be intentionally ephemeral (same stance as the selection
+assistant); P5（加深脑子）让它落库（`pet_chats`）——「它记得你」靠前端内存
+那 6 轮兜不住，刷新、隔天回来就断。仍然**不是**又一个会话列表：没有标题、
+没有管理界面，只有最近几轮，给界面回放、给后端在客户端没带历史时补上下文。
 """
 import json
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from app.core import usage_ledger
 
 router = APIRouter(prefix="/api/pet", tags=["pet"])
@@ -31,16 +32,23 @@ async def pet_status():
 @router.get("/growth")
 async def pet_growth():
     """零柒的成长（B1）：等级 / 称号 / 累计 EXP / 各来源明细。纯派生、只增不减、
-    只正面呈现（没有「还欠 N」）。"""
-    from app.core import pet
+    只正面呈现（没有「还欠 N」）。
 
-    return pet.growth()
+    Z4（PLAN4）：称号旁那一行**风味小注**也在这儿给（`pet_tone.flavor()`，同一份喂养
+    分布）——不给新端点：成长页与面板读的都是这一个载荷，就不会两处各说一句。
+    """
+    from app.core import pet
+    from app.core import pet_tone
+
+    out = pet.growth()
+    out["flavor"] = await pet_tone.flavor()
+    return out
 
 
 @router.get("/room")
 async def pet_room(limit: int = 8):
     """零柒的小屋（P4 · 维度四）：它攒下的东西 + 今天喂了它什么 + 架上那几份成品
-    + **它学会的技能**（Q2：跑过对照的那些提示词）。
+    + **它学会的技能**（Q2：跑过对照的那些提示词）+ **它记住的概念**（P2：学习地图的镜子）。
 
     「已掌握」的规则只有 `tutor.mastery_events()` 那一份（一场是运气、两场才算），
     这里**把它取来喂给纯函数**，而不是在房间模块里再写一遍 SQL——两处规则迟早分叉。
@@ -51,6 +59,7 @@ async def pet_room(limit: int = 8):
     """
     from app.core import pet
     from app.core import pet_room as room
+    from app.core import pet_tone
     from app.core import prompt_eval
     from app.core import form as form_core
     from app.core import tutor
@@ -68,6 +77,13 @@ async def pet_room(limit: int = 8):
     # 形态（Q3）：**只有长出枝的领域**进屋。三个数里差一样就不算枝，小屋不摆它——
     # 「为什么这根枝还没长出来」在工作页那张诊断表里一次说清，不在这儿念（念出来就是催）。
     out["form"] = [b for b in (await form_core.branches())["domains"] if b["grown"]]
+    # 它记住的概念（P2 · F13）：学习地图在小屋里的**镜子**。摆的是地图已经分好的三档，
+    # **「未触及」那一档一个字都不进屋**——那是「还没做的事」的清单，屋里不摆账。
+    out["concepts"] = room.concept_cards(await tutor.learning_map())
+    # Z4（PLAN4）：称号旁那一行风味小注。这一页没有称号（等级只在成长页与面板上），
+    # 但「喂它什么」正是小屋的题眼——所以这一行摆在小屋顶上，与成长页那一行**同源**
+    # （都是 `pet_tone.flavor()` 那一句）。
+    out["flavor"] = await pet_tone.flavor()
     return out
 
 
@@ -129,6 +145,119 @@ async def pet_state(idle_sec: int | None = None, path: str = ""):
     return state.snapshot(idle_sec=idle_sec, path=(path or "")[:100])
 
 
+@router.get("/chats")
+async def pet_chats(limit: int = 30):
+    """跟零柒最近几轮问答（旧 → 新）。P5 落库之后，这一条给界面回放——
+    刷新、隔天回来，面板和陪伴页都从这里把「上一场聊到哪」铺出来。"""
+    from app.core import pet
+
+    return {"chats": pet.recent_chats(limit)}
+
+
+# ---------- 陈述式周报（M4 · PLAN §3 G4）----------------------------------------
+
+@router.get("/weekly-report")
+async def pet_weekly_report():
+    """这一周**已经发生的事**：几份材料、几个概念说通/半懂、几份成品、「又卡住」的有哪些。
+
+    任何一天都能打开（**拉取式**，与决策日志同一个立场）；周日 21:00 那句问候说的是
+    **同一份**（`pet.greeting` 里判 `weekday()`，不新增 cron——同一天 21:00 冒两句
+    问候是另一种坏味道）。返回的 `text` 就是它会说的那句，界面不再另写一份文案。
+
+    区间是**本自然周（周一 → 今天）**：周三点开时它是一周的半截，所以 `week` 一起
+    给出来，别让「半周的数」看起来像「整周的数」。
+    """
+    from app.core import weekly
+
+    return await weekly.report()
+
+
+class WeeklyPodcastIn(BaseModel):
+    voice: str = ""
+
+    @field_validator("voice")
+    @classmethod
+    def _known_voice(cls, v: str) -> str:
+        from app.core import tts
+
+        if v and v not in tts.VOICES:
+            raise ValueError("音色不在可用列表中")
+        return v
+
+
+@router.post("/weekly-report/podcast")
+async def pet_weekly_podcast(body: WeeklyPodcastIn | None = None):
+    """周报 → 一段音频（M4 · G4 的「一键转播客」）。
+
+    **单音色念稿、不过模型**：稿子已经是 `weekly.text()` 出来的成品文本，这里要的不是
+    编剧只是一张嘴——所以没有 provider 的机器上这一条照样能用。音频与别的播客一起
+    登记在 `data/podcasts/index.json`，播放地址是 `/api/podcast/audio/<file>`。
+    """
+    from app.core import weekly
+
+    result = await weekly.to_podcast(voice=(body.voice if body else ""))
+    if not result.get("ok"):
+        # 没内容（422）与合成失败（400）分开：前者是「这周还没什么可说的」，
+        # 界面上不该显示成一个错误。
+        raise HTTPException(422 if result.get("empty") else 400, result.get("error") or "转播客失败")
+    return result
+
+
+# ---------- 事件流（SSE）：有事发生就立刻说 --------------------------------------
+#
+# **轮询是兜底，不是主路。** 原来零柒靠每 15 秒问一次 `/feed` 与 `/state`：任务跑完、
+# 一份成品落盘、有活开始跑，都可能晚 15 秒才被看见，而它恰恰是那个「先开口」的角色。
+#
+# 这条流只送两样东西：
+#   1. `event` —— 新台词，就是 `/feed` 会给的那几行（**同一条路，不是第二份真值**）；
+#   2. `work`  —— 此刻在跑什么变了（一个指纹，变了才发），界面据此重算一次状态。
+#
+# **状态本身不由这条流算**：它取决于你此刻在哪个页面、多久没动键鼠——那是客户端才知道
+# 的事（`idle_sec` 从来只活在浏览器里）。所以流只负责说「有新东西了」，算还是 `/state` 算。
+PET_STREAM_POLL = 2.0  # 服务端看一眼新台词的间隔（一次按 id 的索引查询）
+PET_STREAM_PING = 25.0  # 一直没话说就发个注释帧，别让中间的代理把连接掐了
+
+
+async def _pet_stream(since_id: int):
+    import asyncio
+
+    from app.core import pet
+    from app.core import pet_state as state
+
+    last = max(0, int(since_id or 0))
+    fingerprint = state.work_fingerprint()
+    yield _sse("hello", {"since_id": last, "poll": PET_STREAM_POLL})
+    idle = 0.0
+    while True:
+        spoke = False
+        rows = pet.feed(limit=20, since_id=last)
+        if rows:
+            last = max(int(r["id"]) for r in rows)
+            # 倒过来：台词按**说出口的顺序**冒出来，不是最新那条先跳出来
+            for r in reversed(rows):
+                yield _sse("event", r)
+            spoke = True
+        fresh = state.work_fingerprint()
+        if fresh != fingerprint:
+            fingerprint = fresh
+            yield _sse("work", {"fingerprint": fresh})
+            spoke = True
+        if spoke:
+            idle = 0.0
+        else:
+            idle += PET_STREAM_POLL
+            if idle >= PET_STREAM_PING:
+                idle = 0.0
+                yield ": ping\n\n"  # 注释帧：`sseFrames` 只认 data: 行，会直接跳过
+        await asyncio.sleep(PET_STREAM_POLL)
+
+
+@router.get("/stream")
+async def pet_stream(since_id: int = 0):
+    """零柒的事件流。客户端断开时 Starlette 会取消这个生成器，不用自己收尾。"""
+    return StreamingResponse(_pet_stream(since_id), media_type="text/event-stream")
+
+
 class SayIn(BaseModel):
     mode: str = "morning"  # morning | evening | free
     prompt: str | None = None
@@ -178,6 +307,10 @@ _PET_TOOL_RULE = """你手上有几个工具，可以真的替用户做事，而
 class PetChatIn(BaseModel):
     message: str
     model_id: str | None = None
+    # Z1（PLAN4）：最近几轮对话，**前端内存里那一份**（仍然不落库）。
+    # 刻意用宽松的 `list[object]` 而不是一个严格模型：客户端带了脏数据时该被**忽略**，
+    # 不该 422 掉整次聊天——归一化、截断、条数上限都在 `pet_context.history` 一处做。
+    history: list[object] | None = None
 
 
 def _sse(event: str, data: dict) -> str:
@@ -231,14 +364,16 @@ async def _pet_tools(prefs: dict) -> list[dict]:
 
 @router.post("/chat")
 async def pet_chat(body: PetChatIn):
-    """Ephemeral streamed chat with 零柒's persona + memory + **tools**（P3）。
+    """Streamed chat with 零柒's persona + memory + **tools**（P3）。
 
-    仍然是**不落库**的：这是跟陪伴者的对话，不是又一个会话列表。但工具是真的会执行——
-    「开始 25 分钟专注」现在会让面板上的倒计时真的走起来。
+    P5（加深脑子）之后**落库**：一问一答真的成立（它回了话）就写进 `pet_chats`，
+    报错与中断的那轮不落。工具是真的会执行——「开始 25 分钟专注」现在会让面板上的
+    倒计时真的走起来。
     """
     import asyncio
 
     from app.core import memory, pet
+    from app.core import pet_context, pet_tone
     from app.core.llm import ProviderInfo, run_agentic_chat
     from app.core.mcp import begin_turn, mcp_manager
     from app.core.prefs import load_config
@@ -258,6 +393,10 @@ async def pet_chat(body: PetChatIn):
 
     prefs = load_config()
     system = pet.CHAT_SYSTEM
+    # P2 性格微调：按**读出来的**喂养分布追加一句用词倾向。只追加、不替换——
+    # 开关关着、或数不出够分量的领域时原样返回（**人设常量本身一个字都不改**：
+    # 它是登记过的一等提示词，改它等于把整条人设换了个版本）。
+    system = await pet_tone.apply(system, prefs)
     try:
         if prefs.get("memory_enabled", True):
             mem = await memory.format_memories(msg)
@@ -266,22 +405,52 @@ async def pet_chat(body: PetChatIn):
     except Exception:  # noqa: BLE001 - memory is an enhancement, not a requirement
         pass
 
+    # Z1（PLAN4）**镜子走进对话**：让陪伴页的它知道**今天**。
+    # 两段：收工那句事实（`pet.day_statement`，与收工**同源**）+ 它最近说过的五句；
+    # 历史真的在场时再补一句「你们正在连着聊」（真机 drill 撞出来的：不加这句，
+    # flash 级模型会答「我看不见之前的对话」——那是拿假话回用户）。
+    # 只追加、不替换（`pet_tone` 同款纪律）；一天还没动静就两段都不加——
+    # **不注入「今天你什么都没干」**，那是欠账口吻（PLAN4 §8.7）。
+    # 历史由前端带（内存里那一份），上限与截断在 `pet_context.history` 一处夹：
+    # **不信任客户端**带多少来。
+    turns = pet_context.history(body.history)
+    system = pet_context.apply(
+        system,
+        said=pet.day_statement(),
+        lines=pet_context.recent_lines(),
+        has_history=bool(turns),
+    )
+
     tools = await _pet_tools(prefs)
     if tools:
         # 工具真的存在才说这句话——否则是在指使模型去调一个它根本没有的能力
         # （同 `chat.py`：工具关掉时不能注入工具规矩）。
         system += "\n\n" + _PET_TOOL_RULE
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": msg}]
+    # 最近几轮对话（Z1）：后端每一轮原本都是**全新**的 messages，所以它不记得你上一句
+    # ——「那第 2 条呢」这种追问答不上来。
+    # P5 落库之后多一层**兜底**：客户端一份历史都没带（刚刷新、隔天回来）时，从
+    # `pet_chats` 补——「它记得你」是跨会话的，不能只靠前端那份内存。客户端带了就
+    # 照旧用客户端的：它永远最新，连刚说出口的那句都在。
+    turns = pet_context.history(body.history)
+    if not turns:
+        turns = pet_context.history(pet.recent_chats(pet_context.HISTORY_MESSAGES))
+    messages = [{"role": "system", "content": system}]
+    messages += turns
+    messages += [{"role": "user", "content": msg}]
 
     async def gen():
         p = resolved.provider
         info = ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key)
         q: asyncio.Queue = asyncio.Queue()
         usage: dict = {}
+        # P5：这一轮的**成品**——正文与工具回执在流式过程中攒着，流正常收尾时一起落库。
+        reply: list[str] = []
+        receipts: list[dict] = []
 
         # 回调是同步的（`run_agentic_chat` 在 await 里调它们），没法直接 yield；
         # 所以照 `chat.py` 的老办法：跑工具的任务往队列里塞，这边把队列泵成 SSE。
         def on_delta(t: str) -> None:
+            reply.append(t)
             q.put_nowait(("delta", t))
 
         def on_tool(name: str, args: dict) -> None:
@@ -290,6 +459,9 @@ async def pet_chat(body: PetChatIn):
         def on_tool_result(name: str, args: dict, meta: dict) -> None:
             # 工具的副产物 → 界面。与 chat.py 同一条约定：模型仍会用自己的话说结果，
             # 这里给的是**可核对的事实**（面板此刻的样子），不是又一句台词。
+            pet_r = (meta or {}).get("pet")
+            if pet_r:
+                receipts.append(pet_r)
             q.put_nowait(("tool_result", {"name": name, "meta": meta}))
 
         async def runner():
@@ -318,6 +490,10 @@ async def pet_chat(body: PetChatIn):
             while True:
                 kind, a = await q.get()
                 if kind == "stop":
+                    # P5：这一轮真的成立了（它回了话）才落库。报错那支走的是 error 帧、
+                    # 直接 break，到不了这儿——残句不进记忆（`save_chat_turn` 里还有一道
+                    # 空串守卫，两处有一处兜住就行）。
+                    pet.save_chat_turn(msg, "".join(reply), receipts)
                     break
                 if kind == "error":
                     yield _sse("error", {"message": a})

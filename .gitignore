@@ -33,3 +33,4 @@ Thumbs.db
 
 # damaged git history kept as backup (not tracked)
 .git.corrupt*/
+.zcode/

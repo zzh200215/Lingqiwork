@@ -18,13 +18,23 @@ export default defineConfig({
   plugins: [react()],
   build: {
     rollupOptions: {
-      // 只有三个真实入口：SPA 外壳，加两个全局热键弹的无边框窗口。
+      // 三个真实入口：SPA 外壳，加两个全局热键弹的无边框窗口。
       // `quick` / `selection` 刻意不进 SPA——它们要的是极短冷启动，
       // 且是独立窗口，没有共享导航状态可言。
+      // （零柒的桌面小窗试过第四个入口 pet.html，P5 末尾换成了原生分层窗
+      // `backend/desktop_pet.py`——WebView2 的子窗口进不了分层窗的合成，
+      // 透明像素透出来的永远是表单底色，见 desktop_pet.py 开头的弯路记录。）
       input: {
         index: resolve(__dirname, 'index.html'),
         quick: resolve(__dirname, 'quick.html'),
         selection: resolve(__dirname, 'selection.html'),
+      },
+      output: {
+        // echarts（2026-09-19 起图表用）单独拆包：它只被几个指标页异步用到，
+        // 混进主包会把首屏凭空拖大几百 KB。
+        manualChunks: {
+          echarts: ['echarts'],
+        },
       },
     },
   },

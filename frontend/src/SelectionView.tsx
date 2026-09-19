@@ -7,20 +7,9 @@ import { asSingleUrl } from './capture'
 // desktop.py grabs the selected text via simulated Ctrl+C, then navigates this
 // window to selection.html#t=<urlencoded text>. 翻译/解释/总结/自定义 stream
 // from /api/ask；教学 / 剪藏 是两个跳转动作——进教学会话、落盘进知识库。
-
-declare global {
-  interface Window {
-    pywebview?: {
-      api?: {
-        hide_quick?: () => void
-        open_main?: () => void
-        hide_selection?: () => void
-        hide_pet?: () => void
-        open_tutor?: (sessionId: number) => void
-      }
-    }
-  }
-}
+//
+// pywebview 的 window.api 形状**只在 QuickView.tsx 声明一份**（全局合并）：
+// 这里再写一份，两边的属性列表迟早不同步——TS 会用 TS2717 当场拦下（撞过）。
 
 const ACTIONS = [
   { key: 'translate', label: '翻译' },

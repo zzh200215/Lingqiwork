@@ -204,7 +204,7 @@ export default function HabitStrip({
     'rounded-md border border-neutral-300 bg-white px-2 py-1 text-sm outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900'
 
   return (
-    <section className="rounded-2xl border border-neutral-200/80 bg-white p-4 dark:border-neutral-800/80 dark:bg-neutral-900/40">
+    <section className="wb-card p-4">
       <div className="mb-3 flex items-center gap-2">
         <span className="text-sm font-medium">✅ 习惯</span>
         {data && data.total > 0 && (

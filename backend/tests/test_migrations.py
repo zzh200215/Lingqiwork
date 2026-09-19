@@ -230,6 +230,118 @@ async def test_a_new_column_lands_on_an_old_db_and_not_twice():
     assert again["applied"] == []
 
 
+async def test_v10_adds_the_judge_version_to_an_old_revlog():
+    """v10（PLAN2 §9.4）：判分器换版之后曲线要按 sha 分段，所以复习记录得记着是哪一版判的。
+
+    老库（有 `judged` 没有 `judged_sha`）补上这一列，**但不回填**——那时候的行哪一版判的
+    本来就不知道，回填一个当前的 sha 等于给它们编一个版本（空串 = 「判过，但不知道哪一版」）。
+    """
+    await _reset_db()
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE card_reviews"))
+        await conn.execute(
+            text("CREATE TABLE card_reviews (id INTEGER PRIMARY KEY, card_id INTEGER, grade INTEGER)")
+        )
+    out = await mig.run()
+    versions = [m.version for m in mig.MIGRATIONS]
+    assert [m["version"] for m in out["applied"]] == versions
+    async with engine.begin() as conn:
+        await conn.execute(text("INSERT INTO card_reviews (card_id, grade, judged) VALUES (1, 3, 1)"))
+        cols = {r["name"]: r for r in (await conn.execute(text("PRAGMA table_info(card_reviews)"))).mappings()}
+        row = (await conn.execute(text("SELECT judged, judged_sha FROM card_reviews"))).first()
+    assert {"judged", "judged_sha"} <= set(cols)
+    # 老行：判过，但版本是空的（「不知道」），而不是被填成当前那一版
+    assert row[0] == 1 and (row[1] or "") == ""
+    assert cols["judged_sha"]["dflt_value"] in ("''", '""')
+
+
+async def test_v12_adds_the_two_marks_the_adoption_metric_needs():
+    """v12（PLAN2 §6 回指采纳）：`cards.prereq_seen_at` + `tutor_sessions.prereq_card_id`。
+
+    两列都是 nullable、**不回填**——旧行一律 NULL 在它们上是**真的**（这个功能上线之前
+    一次都没有过），不是「未知」。
+    """
+    await _reset_db()
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE cards"))
+        await conn.execute(text("CREATE TABLE cards (id INTEGER PRIMARY KEY, front TEXT)"))
+        await conn.execute(text("DROP TABLE tutor_sessions"))
+        await conn.execute(
+            text("CREATE TABLE tutor_sessions (id INTEGER PRIMARY KEY, topic TEXT)")
+        )
+    out = await mig.run()
+    assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+    async with engine.begin() as conn:
+        card_cols = {r["name"] for r in (await conn.execute(text("PRAGMA table_info(cards)"))).mappings()}
+        sess_cols = {
+            r["name"] for r in (await conn.execute(text("PRAGMA table_info(tutor_sessions)"))).mappings()
+        }
+    assert "prereq_seen_at" in card_cols
+    assert "prereq_card_id" in sess_cols
+
+
+async def test_v13_adds_the_injection_mark_to_the_feedback_log():
+    """v13（PLAN3 §9.2 决策4）：质量闭环要能按「有注入 / 没注入 / 不知道」多摆一行，而反馈行
+    与运行没有任何关联（只有 kind/sha/model/ref）——所以这一列只能由点 👍 的那一刻带上来。
+
+    **三态、不回填**：老行留 `""`（不知道），而不是被填成 `"[]"`（没注入）。这个功能上线
+    之前，那些行确实**没有**「有没有注入」这个属性；编一个「没注入」比空着坏。
+    """
+    await _reset_db()
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE artifact_feedback"))
+        await conn.execute(
+            text("CREATE TABLE artifact_feedback (id INTEGER PRIMARY KEY, kind TEXT, verdict TEXT)")
+        )
+    out = await mig.run()
+    assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO artifact_feedback (kind, verdict) VALUES ('compose', 'good')")
+        )
+        cols = {
+            r["name"]: r
+            for r in (await conn.execute(text("PRAGMA table_info(artifact_feedback)"))).mappings()
+        }
+        row = (await conn.execute(text("SELECT injected FROM artifact_feedback"))).first()
+    assert "injected" in cols
+    assert (row[0] or "") == ""  # 老行：不知道，而不是「没注入」
+    assert cols["injected"]["dflt_value"] in ("''", '""')
+
+
+async def test_v14_renames_the_old_thread_kind_in_rows_already_written():
+    """v14（R3 · PLAN5 §3）：挂接的 kind 从 `tutor` 改名 `session`，**历史行要跟着改**。
+
+    代码侧的改名是原子的（`threads.KINDS`），但**已经写进库的行不会自己变**——
+    不改的话，历史挂接在改完的当天集体变成「引用不存在」（`_resolve()` 只认新 kind，
+    `exists=False`，界面上那一条就灰了）。所以这条盯的不是列，是**值**。
+    """
+    await _reset_db()
+    await mig.run()  # 先把库推到最新
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO thread_items (thread_id, kind, ref, created_at) "
+                "VALUES (1, 'tutor', '7', '2026-09-01 00:00:00')"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO thread_items (thread_id, kind, ref, created_at) "
+                "VALUES (1, 'card', '9', '2026-09-01 00:00:00')"
+            )
+        )
+        # 把 v14 从账本里撤掉，让下一次 run() 真的会再跑它一遍
+        await conn.execute(text("DELETE FROM schema_migrations WHERE version = 14"))
+    out = await mig.run()
+    assert 14 in [m["version"] for m in out["applied"]]
+    async with engine.begin() as conn:
+        rows = (
+            await conn.execute(text("SELECT kind, ref FROM thread_items ORDER BY ref"))
+        ).all()
+    assert [(k, r) for k, r in rows] == [("session", "7"), ("card", "9")]  # 只改那一个值
+
+
 def test_status_reports_where_the_db_is():
     async def run() -> dict:
         await _reset_db()

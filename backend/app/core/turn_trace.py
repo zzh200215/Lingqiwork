@@ -228,7 +228,113 @@ async def recent(limit: int = 50, only: str = "") -> dict:
     return {"traces": items, "filters": FILTERS, "only": only}
 
 
+# ---------- R1：回合读数上墙（PLAN5 §3 R1）----------
+#
+# **为什么是「窗口内各几种」而不是成功率。** 这一栏要上的是仪表盘那面墙，而墙上已经有一条
+# 铁律：不设目标、不排名（§4-2）。一列数一旦有了分母，下一个人就会去算比率、去比较、去追——
+# 而 `turn_trace` 开篇写死的就是「这是诊断工具，不是考核仪表」。所以这里**只给计数**：
+# 窗口里跑过几个回合、各有几例毛病。分母（`turns`）摆在同一行是为了让计数有参照，
+# 不是为了让人除。
+#
+# **窗口是两个数，不是一个。** `days` 说「最近几天」，`max_rows` 是**说话的上限**——
+# 库很大时不许为了一页墙把几万行捞进内存。所以 `turns` 可能小于「窗口里真实跑了多少轮」，
+# 这时 `truncated=true`，界面上照实说「这个数只数到最近 N 轮」。
+#
+# **读不到就说读不到**（§4-8）：抛了就 `readable=false`、`turns=0`，
+# 而不是给一排 0 充数——「一条都没读到」与「读到了、一例都没有」是两件事。
+SUMMARY_DAYS = 30
+SUMMARY_MAX_ROWS = 2000
+
+
+# 口径原文：界面上照抄，不自己编一份说法（与 `metrics.RETELL_RULE` 同一个规矩）。
+_SUMMARY_RULES = {
+    "window": f"窗口 = 最近 N 天（默认 {SUMMARY_DAYS} 天）里落过账的聊天回合",
+    "counts": "每一格是「窗口内命中这一类毛病的回合数」，判据与逐条清单、与筛选项**同一份实现**",
+    "no_rate": "这里**没有成功率**：这个模块是诊断工具，不是考核仪表（不设目标、不排名、不催）",
+    "truncated": f"库很大时只数最近 {SUMMARY_MAX_ROWS} 轮（内存在此打住）——超了会标出来，不静默截断",
+}
+
+
+async def _summary_rows(since, cap: int) -> tuple[int, list]:
+    """窗口里的 `(总行数, 最多 cap 行)`。**I/O 只在这一处**——`summary()` 是纯派生。
+
+    与 `metrics._day_counts` 同一个形状（那一处留同样的缝）：测试要验「读不到」时
+    monkeypatch 这一条，不必去跟 sessionmaker 较劲。
+    """
+    from sqlalchemy import func, select
+
+    from app.db import SessionLocal
+    from app.models import TurnTrace
+
+    async with SessionLocal() as db:
+        total = int(
+            (
+                await db.execute(
+                    select(func.count(TurnTrace.id)).where(TurnTrace.created_at >= since)
+                )
+            ).scalar()
+            or 0
+        )
+        rows = (
+            await db.execute(
+                select(TurnTrace)
+                .where(TurnTrace.created_at >= since)
+                .order_by(TurnTrace.id.desc())
+                .limit(cap)
+            )
+        ).scalars().all()
+    return total, list(rows)
+
+
+async def summary(days: int = SUMMARY_DAYS, max_rows: int = SUMMARY_MAX_ROWS) -> dict:
+    """窗口内跑过多少个回合、各毛病几例。**只给计数，不给比率**（见上面那段）。
+
+    判据复用 `_matches`——与逐条清单、与筛选按钮**同一份实现**：这里另写一遍「算不算谎报」，
+    两份分叉的那天这个数就没人敢信了。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    span = max(1, min(int(days or SUMMARY_DAYS), 365))
+    cap = max(1, min(int(max_rows or SUMMARY_MAX_ROWS), 20000))
+    out = {
+        "readable": False,
+        "error": "",
+        "days": span,
+        "turns": 0,
+        "total": 0,
+        "truncated": False,
+        "counts": {f["key"]: 0 for f in FILTERS},
+        "filters": FILTERS,
+        "rules": _SUMMARY_RULES,
+    }
+    since = datetime.now(timezone.utc) - timedelta(days=span)
+    try:
+        total, rows = await _summary_rows(since, cap)
+    except Exception as e:  # noqa: BLE001 - 派生视图，坏了照实说，不假装零
+        log.warning("turn trace summary failed", exc_info=True)
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
+    counts = {f["key"]: 0 for f in FILTERS}
+    for r in rows:
+        view = _view(r)
+        for key in view["flags"]:
+            if key in counts:
+                counts[key] += 1
+    out.update(
+        readable=True,
+        error="",
+        turns=len(rows),
+        total=total,
+        truncated=total > len(rows),
+        counts=counts,
+    )
+    return out
+
+
 # 每一条都是**实测到的**一类毛病（upgrade-plan 的缺口三 / 四），不是想象出来的。
+# （`summary()` 在上面先引用了它——那没问题：函数体在调用时才查模块级名字，
+# 而 `SUMMARY_DAYS` / `_SUMMARY_RULES` 的取值也不需要它。）
 FILTERS: list[dict] = [
     {"key": "lie", "label": "声称存了没存", "hint": "校验过的回合里，说了已存入但这一轮没落盘"},
     {"key": "no_save", "label": "长正文没落盘", "hint": "正文很长、却没有任何产出回执"},

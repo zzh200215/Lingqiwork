@@ -73,6 +73,12 @@ _DEFAULTS: dict[str, Any] = {
     "pet_greet_enabled": True,  # 零柒: daily morning/evening greeting (生物钟)
     "pet_morning_time": "08:30",  # 零柒: morning greeting schedule (HH:MM)
     "pet_evening_time": "21:00",  # 零柒: evening recap schedule (HH:MM)
+    # 零柒: 语气微调（P2）——按读出来的喂养分布调整它的**用词**（不夸、不评）。
+    # 默认开：默认关掉的功能在这个仓库里死过一次（见 `models.Habit` 的 docstring）。
+    "pet_tone": True,
+    # 零柒: 称号旁那一行风味小注（Z4 · PLAN4）——同一份喂养分布，摆成一句事实。
+    # 与 `pet_tone` 分开：一个改它怎么说话，一个只是成长页上多一行字。
+    "pet_flavor": True,
     # --- 复习卡片（SM-2 间隔复习）---
     "cards_new_per_day": 20,  # new cards introduced per day
     "cards_review_per_day": 200,  # reviews per day (keeps a backlog from snowballing)

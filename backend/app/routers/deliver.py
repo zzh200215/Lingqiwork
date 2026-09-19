@@ -41,6 +41,10 @@ class SaveIn(BaseModel):
     sections: list[Section] = Field(default_factory=list)
     used: list[int] = Field(default_factory=list)
     sources: list[SourceRef] = Field(default_factory=list)
+    # M5：体裁与读者**随存盘一起交上来**，落在文件头的 frontmatter 里。
+    # 在这之前它们只活在预览的 payload 里，存完就丢了——「这份是给谁写的」只剩文件名。
+    genre: str = ""
+    audience: str = ""
 
 
 def _sse(event: str, data: dict) -> str:
@@ -95,4 +99,22 @@ async def save(body: SaveIn):
     rep = Report(title=body.title.strip(), sections=body.sections, used=body.used)
     if not rep.title and not rep.sections:
         raise HTTPException(422, "没有可保存的交付结果")
-    return await core.save(rep, [s.model_dump() for s in body.sources])
+    return await core.save(
+        rep,
+        [s.model_dump() for s in body.sources],
+        genre=body.genre,
+        audience=body.audience,
+    )
+
+
+@router.get("/witness")
+async def deliver_witness():
+    """交付的**事后见证**（M5）：到点的一份交付，一条 + 还有几份在等着。
+
+    与 `/api/decisions/witness` 同一个形状（只给一条，念不念、什么时候念是前端那条 nudge
+    管线的事：一天一条、可关）。真值在文件系统——`vault/deliver/` 里的文件就是交出去的
+    东西本身（`routers/work.py` 早就写过：「产出没有登记表，真值是文件系统」）。
+    """
+    from app.core import delivery
+
+    return await delivery.witness()

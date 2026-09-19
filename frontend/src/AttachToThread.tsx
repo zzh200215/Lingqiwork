@@ -15,11 +15,19 @@ export default function AttachToThread({
   kind,
   ref: itemRef,
   className = '',
+  // **别叫 `label`**：这个组件里 `label` 已经是「派生出来的那件事的名字」（下面那个
+  // `useState`），两个同名会直接编译不过——这个名字说的是**按钮上那句话**。
+  label: buttonLabel = '挂到…',
+  onAttached,
 }: {
   kind: ThreadKind
   ref: string
   /** 放按钮的容器样式（悬停才现身、缩进之类由调用方决定） */
   className?: string
+  /** 按钮上那句话。默认「挂到…」；那一问里叫「工作留痕」（同一个动作，说法跟着那一格走） */
+  label?: string
+  /** 挂上之后叫一声。**那一问那张单子靠它把这一份划掉**（挂完还留在单子上就成了假的） */
+  onAttached?: (name: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [picks, setPicks] = useState<ThreadRow[]>([])
@@ -53,6 +61,7 @@ export default function AttachToThread({
       await api.attachThreadItem(t.id, kind, itemRef)
       setAttached(t.name)
       setOpen(false)
+      onAttached?.(t.name)
     } catch {
       /* 失败就保持原样，别把界面改成假的"已挂上" */
     } finally {
@@ -70,6 +79,7 @@ export default function AttachToThread({
       await api.attachThreadItem(t.id, kind, itemRef)
       setAttached(t.name)
       setOpen(false)
+      onAttached?.(t.name)
     } catch {
       /* 同上 */
     } finally {
@@ -90,7 +100,7 @@ export default function AttachToThread({
         title="把这一条挂到某件事上"
         className="shrink-0 rounded-full border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-400 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-500"
       >
-        挂到…
+        {buttonLabel}
       </button>
       {open ? (
         <span className="mt-1 flex flex-wrap items-center gap-1.5">

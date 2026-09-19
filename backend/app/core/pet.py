@@ -27,6 +27,8 @@ log = logging.getLogger(__name__)
 KINDS = {
     "task_done",
     "task_failed",
+    "gate_ok",
+    "gate_rejected",
     "digest",
     "backup",
     "feeds",
@@ -37,6 +39,12 @@ KINDS = {
     "cards_remedy",
     "habits_due",
     "mastered",
+    "repeated",
+    "output",
+    "retell",
+    "digested",
+    "cards_made",
+    "skill_draft",
     "plugin",
 }
 
@@ -109,14 +117,89 @@ def _default_model_id() -> str | None:
     return default_model_id()
 
 
-def compose(kind: str, name: str = "", detail: str = "", count: int = 0) -> str:
-    """Template line for an event. 零柒's voice: terse, a little dry."""
+def _part_of_day(now: datetime | None = None) -> str:
+    """「早上 / 下午 / 晚上」——问候语的时段。**只有这一份**（`compose` 与开工/收工那两句共用）。"""
+    hour = (now or datetime.now()).hour
+    return "早上" if hour < 11 else ("下午" if hour < 18 else "晚上")
+
+
+# ---------- 台词池（Z3 · PLAN4）：同一件事，几句话轮着说 ----------
+#
+# 只给**高频**的那几种备说法（一天可能说好几遍的那种）。每条池的第一句就是**原话**
+# ——`compose(..., n=0)` 拿到的还是从前那一句，所以不传 `n` 的调用方一个字节都没变。
+#
+# 两条界线（计划里写死的）：
+# 1. **里程碑句不轮换**：`mastered` 的「taught / twice」、`output` 的「第一份 / 第 N 份」
+#    是**事件语义**（你教它 / 连着第二次 / 头一份），不是措辞；
+# 2. **只换说法，不换事实**：占位符（名字、数字、缺口、连着几天）每一句里都得照样拼对，
+#    有一条测试逐句验这件事。
+POOLS: dict[str, tuple[str, ...]] = {
+    "task_done": (
+        "「{name}」跑完了。{tail}",
+        "「{name}」这一轮成了。{tail}",
+        "「{name}」收了。{tail}",
+    ),
+    "task_failed": (
+        "「{name}」没跑成。{tail}",
+        "「{name}」倒在半路。{tail}",
+        "「{name}」这一轮没过去。{tail}",
+    ),
+    "cards_done": (
+        "今天 {count} 张过完了{tail}。",
+        "今天 {count} 张卡清了{tail}。",
+        "今天这 {count} 张，过了{tail}。",
+    ),
+    "output": (
+        "「{name}」交出去了。{tail}",
+        "「{name}」落地了。{tail}",
+        "「{name}」我收进架子了。{tail}",
+    ),
+    "mastered": (
+        "你把「{name}」搞懂了{tail}。",
+        "「{name}」这下通了{tail}。",
+        "「{name}」算是真懂了{tail}。",
+    ),
+}
+
+
+def _pick(pool: tuple[str, ...], n: int) -> str:
+    """从池子里挑第 `n` 句。**确定性**：同一个 `n` 永远同一句，没有随机数。
+
+    读不出来 / 负数当 0（负数取模会绕到池子最后一句话，那是「越界的下标看起来像有意的」）——
+    挑不出来就说原话，绝不抛：`compose` 是 `emit` 的主路径，它一抛，那条台词就整条没了。
+    """
+    try:
+        i = int(n)
+    except (TypeError, ValueError):
+        return pool[0]
+    if i <= 0:
+        return pool[0]
+    return pool[i % len(pool)]
+
+
+def compose(kind: str, name: str = "", detail: str = "", count: int = 0, n: int = 0) -> str:
+    """Template line for an event. 零柒's voice: terse, a little dry.
+
+    `n` 是**轮换位置**（Z3 · PLAN4）：同一个 kind 之前说过几次。高频那几种各备几句，
+    `n % len(pool)` 取一句——**确定性**，不用随机数（随机 = 复现不了的 bug）。
+    默认 0 = 这个 kind 的原话，所以不传 `n` 的调用方（测试、`cards.py` 那处直接
+    `compose("cards_due")`）拿到的还是老那句。
+    """
     now = datetime.now()
     if kind == "task_done":
-        tail = f" {detail.strip()[:60]}" if detail.strip() else ""
-        return f"「{name}」跑完了。{tail.strip()}"
+        tail = detail.strip()[:60]
+        return _pick(POOLS["task_done"], n).format(name=name, tail=tail)
     if kind == "task_failed":
-        return f"「{name}」没跑成。{detail.strip()[:80]}"
+        return _pick(POOLS["task_failed"], n).format(name=name, tail=detail.strip()[:80])
+    if kind == "gate_ok":
+        # Z2（PLAN4）：停在卡点上的那一步，**你点了头**。
+        # 在那之前是「等你有声、抵达无声」：等你点头那条 nudge 是气泡第一优先级，
+        # 可你点完之后链继续往下跑，它一个字都没有。这一句只说你做了什么，不夸、不催。
+        return f"「{name}」你点了头，我继续。"
+    if kind == "gate_rejected":
+        # 驳回那句必须**中性**：不打趣、不「哼」、不劝你再想想。驳回一步是正常操作，
+        # 不是犯错——这里多带一个字的情绪，都会变成一笔「你否决了它」的账。
+        return f"「{name}」那步驳回了。"
     if kind == "digest":
         return f"今日摘要好了，覆盖 {count} 个文件的变更，已放进 digests。"
     if kind == "backup":
@@ -128,7 +211,7 @@ def compose(kind: str, name: str = "", detail: str = "", count: int = 0) -> str:
         return f"今天有 {count} 张卡到期{tail}。十分钟的事。"
     if kind == "cards_done":
         tail = f"，连着 {detail} 天" if detail and detail not in ("0", "") else ""
-        return f"今天 {count} 张过完了{tail}。"
+        return _pick(POOLS["cards_done"], n).format(count=count, tail=tail)
     if kind == "cards_remedy":
         return f"你老错的那几个点我补了一段讲解（{count} 篇），在 notes 里。"
     if kind == "habits_due":
@@ -138,15 +221,56 @@ def compose(kind: str, name: str = "", detail: str = "", count: int = 0) -> str:
     if kind == "mastered":
         # 费曼模式说通的那一下，主语不是「你搞懂了」而是「你把它讲明白了」——
         # 同一个概念、两条不同的路，值得说不同的话。
+        # **轮换只换主句**：`taught` 那一句整句就是那件事的语义（你教它），一个字都不动；
+        # 「连着第二次」那半句在每一句变体里逐字保留。里程碑不是措辞，轮不得。
         if detail == "taught":
             return f"你把「{name}」给我讲明白了。我记住了。"
         # 不是 f-string：这里没有占位符，pyflakes 会报「f-string is missing
         # placeholders」，CI 的 lint 那一步就红在这一行上。
         tail = "，这次是连着第二次说通" if detail == "twice" else ""
-        return f"你把「{name}」搞懂了{tail}。"
+        return _pick(POOLS["mastered"], n).format(name=name, tail=tail)
+    if kind == "repeated":
+        # 「同一个概念又卡住」——判据是「我接住过你卡在哪儿，你带着它回来还是没过」
+        # （`tutor.is_recurring_mistake`）。这句话只**陈述**，不催、不劝、不记账：
+        # 主语是「你又」，因为这是陪伴该有的样子，不是提醒事项。
+        where = f"。上次卡在：{detail.strip()}" if detail.strip() else "。"
+        return f"「{name}」这是第 {count} 次了，还是没走通{where}"
+    if kind == "output":
+        # 环二的表达层：一份成品**交出去了**。主语是「你」（B1），不是「系统生成了」。
+        # 数字是**读出来的累计量**（`_count_outputs`：架子上真正有几份），不是宠物记的账、
+        # 更不是它发的奖——「算出来的不是发的奖」这条从 `pet_room` 开篇一直管到这里。
+        # 数不出来（0）就只留前半句：宁可少说一句，也不编一个数。
+        # 「第一份」/「第 N 份」那半句**不轮换**（里程碑是事件语义），轮换的只是主句。
+        if count == 1:
+            tail = "第一份。"
+        elif count > 1:
+            tail = f"这是第 {count} 份。"
+        else:
+            tail = ""
+        return _pick(POOLS["output"], n).format(name=name, tail=tail)
+    if kind == "retell":
+        # M1：你**讲**了一遍，它刚判完。这一句是**判词**，不是评分表——主语是「你」，
+        # 说得出的缺口就说（`detail` 是 missed_points 的第一条），说不出就只说结果。
+        # ⚠️ 这个 kind 的 `count` 是**档位**（1 重来 | 2 困难 | 3 良好 | 4 简单），不是次数。
+        gap = detail.strip()
+        if count >= 3:
+            return f"「{name}」你讲清楚了。"
+        if count == 2:
+            return f"「{name}」大概对，就差在「{gap}」。" if gap else f"「{name}」大概对，还差一点。"
+        return f"「{name}」这次没讲通。"
+    if kind == "digested":
+        # M2（PLAN §3 G2）：一份材料消化完了。**数是这次真写进去的点数**，
+        # 不是模型草稿里提了几个——「写盘的人说话」这条从 `note_output` 一路管到这里。
+        tail = f"拆出 {count} 个要搞懂的点。" if count > 0 else "没拆出什么。"
+        return f"「{name}」我嚼完了。{tail}"
+    if kind == "cards_made":
+        # 出卡完成（`POST /api/cards/batch` 那条路）。去重之后**真加进去的张数**。
+        return f"「{name}」出好了 {count} 张卡。" if count > 0 else f"「{name}」这回没出成新卡。"
+    if kind == "skill_draft":
+        # 环一的落盘话：**顺便把纪律念出来**——草稿不算数，量过才算（§4 第四条）。
+        return f"「{name}」这份工序我记下了。还没量过，不算数。"
     if kind == "greeting":
-        part = "早上" if now.hour < 11 else ("下午" if now.hour < 18 else "晚上")
-        return f"{part}好。今天的事我盯着，有进展我叫你。"
+        return f"{_part_of_day(now)}好。今天的事我盯着，有进展我叫你。"
     return detail or "在。"
 
 
@@ -165,11 +289,6 @@ def emit(
     try:
         if not _pet_enabled():
             return None
-        # 隐私闸门（B3）：无论台词是模板拼的还是模型现写的，都在这里过一遍——
-        # 路径、密钥、agent 的 prompt 片段都不许念出来。
-        line = sanitize((text or compose(kind, name=name, detail=detail, count=count)).strip())
-        if not line:
-            return None
         import sqlite3
 
         conn = sqlite3.connect(settings.db_path)
@@ -178,12 +297,41 @@ def emit(
                 "CREATE TABLE IF NOT EXISTS pet_events ("
                 "id INTEGER PRIMARY KEY, created_at TEXT, kind TEXT, text TEXT, detail TEXT)"
             )
+            # `name` 是后加的列（M2）：`detail` 当初兼着「这件事叫什么」与「补充一句」
+            # 两个角色，于是「同一个概念说过没有」查不出来（`repeated` 的冷却撞上过）。
+            # 这张表历史上不走迁移，所以这里自己补列——与 `models.PetEvent` 那段说明同源。
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(pet_events)")}
+            if "name" not in cols:
+                conn.execute("ALTER TABLE pet_events ADD COLUMN name TEXT DEFAULT ''")
+            # Z3（PLAN4）的**轮换键**：这个 kind 之前说过几次。选它而不是 `event_id`：
+            # ① `compose` 不必知道 id（插入才产生 id，那会要求先插后拼、顺序全乱）；
+            # ② 一句话的说法只跟**它自己这一类**说过几次有关，不被中间冒出来的问候带偏；
+            # ③ 表还没建过 / 查不出来 → 0（= 原话），绝不因为读不到就抛。
+            try:
+                said_before = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM pet_events WHERE kind = ?", (kind[:20],)
+                    ).fetchone()[0]
+                )
+            except Exception:  # noqa: BLE001 - 轮换是打磨，坏了大不了永远说第一句
+                said_before = 0
+            # 隐私闸门（B3）：无论台词是模板拼的还是模型现写的，都在这里过一遍——
+            # 路径、密钥、agent 的 prompt 片段都不许念出来。
+            line = sanitize(
+                (
+                    text
+                    or compose(kind, name=name, detail=detail, count=count, n=said_before)
+                ).strip()
+            )
+            if not line:
+                return None
             cur = conn.execute(
-                "INSERT INTO pet_events (created_at, kind, text, detail) VALUES (?,?,?,?)",
+                "INSERT INTO pet_events (created_at, kind, text, name, detail) VALUES (?,?,?,?,?)",
                 (
                     datetime.now().astimezone().isoformat(timespec="seconds"),
                     kind[:20],
                     line,
+                    sanitize(name)[:500],
                     sanitize(detail)[:500],
                 ),
             )
@@ -215,17 +363,117 @@ def feed(limit: int = 30, since_id: int = 0) -> list[dict]:
 
     conn = sqlite3.connect(settings.db_path)
     try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(pet_events)")}
+        if not cols:
+            # 表还没建过 = 一句话都还没说过（新库、被删过的库）。**这不是异常**：
+            # `status()` / `growth()` 一直是这么处理的，`feed` 原先会直接
+            # `no such table` 抛出去——`/api/pet/stream` 那条常驻的流一开就死在这儿。
+            return []
+        name_col = "name" if "name" in cols else "''"
         rows = conn.execute(
-            "SELECT id, kind, text, detail, created_at FROM pet_events "
+            f"SELECT id, kind, text, detail, created_at, {name_col} FROM pet_events "
             "WHERE id > ? ORDER BY id DESC LIMIT ?",
             (int(since_id), limit),
         ).fetchall()
     finally:
         conn.close()
     return [
-        {"id": r[0], "kind": r[1], "text": r[2], "detail": r[3], "created_at": r[4]}
+        {
+            "id": r[0],
+            "kind": r[1],
+            "text": r[2],
+            "detail": r[3],
+            "created_at": r[4],
+            "name": r[5] or "",
+        }
         for r in rows
     ]
+
+
+# ---------- 聊天落库（P5 · 加深脑子）---------------------------------------------
+#
+# 聊天设计上曾是 ephemeral：随请求来、随请求走。代价是刷新页面它就「忘了上一句」，
+# 隔天回来更是从头开始——「它记得你」靠前端内存那 6 轮兜不住。落到本地库里，
+# 后端补历史、前端回放才有真值可读。
+#
+# 与 `pet_events` 同一套规矩：**这张表不走迁移**，读写时自己 `CREATE TABLE IF NOT
+# EXISTS`（models.PetChat 是同一张表的声明，新库由 create_all 建、老库由这里建）；
+# 读不出来（表没建过 / 库坏了）就当没有——记忆是增强项，聊天绝不因此 500。
+#
+# 时间戳与 pet_events 同一口径（本地带偏移的 ISO）。`pet_state._away`（久别重逢）
+# 会读它当「最后一次来过」的证据，两边口径一致才比得了。
+
+
+def save_chat_turn(user_text: str, pet_text: str, tools: list | None = None) -> None:
+    """落一轮问答。**真的回了话才算一轮**：报错、中断、只问没答的那次不落——
+    残句进了记忆，往后每一场对话都要背着它。best-effort，绝不抛。"""
+    u = (user_text or "").strip()
+    a = (pet_text or "").strip()
+    if not u or not a:
+        return
+    try:
+        import json as _json
+
+        conn = _conn()
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS pet_chats ("
+                "id INTEGER PRIMARY KEY, created_at TEXT, role TEXT, text TEXT, "
+                "tools TEXT DEFAULT '[]')"
+            )
+            ts = datetime.now().astimezone().isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO pet_chats (created_at, role, text, tools) VALUES (?,?,?,?)",
+                (ts, "user", u[:20000], "[]"),
+            )
+            conn.execute(
+                "INSERT INTO pet_chats (created_at, role, text, tools) VALUES (?,?,?,?)",
+                (ts, "pet", a[:20000], _json.dumps(tools or [], ensure_ascii=False)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - 记不住这一轮，也比聊天挂掉强
+        log.debug("pet save_chat_turn failed", exc_info=True)
+
+
+def recent_chats(limit: int = 30) -> list[dict]:
+    """最近几轮问答，**旧 → 新**。给前端回放、给后端在客户端没带历史时补上下文。
+
+    `role` 直接给 `'user' / 'pet'`（`pet_context.history` 认的就是这两个字面量，
+    `pet` 由它折成 assistant——折的那一处不改）。读不出来就空表。
+    """
+    try:
+        import json as _json
+
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, created_at, role, text, tools FROM pet_chats "
+                "ORDER BY id DESC LIMIT ?",
+                (max(1, min(int(limit), 100)),),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        log.debug("pet recent_chats failed", exc_info=True)
+        return []
+    out = []
+    for r in reversed(rows):
+        try:
+            tools = _json.loads(r[4] or "[]")
+        except (TypeError, ValueError):
+            tools = []
+        out.append(
+            {
+                "id": int(r[0]),
+                "created_at": str(r[1] or ""),
+                "role": str(r[2]),
+                "text": str(r[3] or ""),
+                "tools": tools if isinstance(tools, list) else [],
+            }
+        )
+    return out
 
 
 # ---------- 本地日 → UTC 区间 ----------
@@ -406,6 +654,30 @@ def is_output_path(rel: str) -> bool:
     return rel.split("/", 1)[0] in _OUTPUT_DIRS
 
 
+def note_output(name: str, rel: str) -> int | None:
+    """一份成品落盘了 —— 零柒说一句（环二的表达层，`docs/loops.md` §2）。
+
+    **谁说**：写盘的那个地方说。会往产出目录里落东西的只有三处——五个成文引擎的
+    `report.save`、定时任务的 `tasks._write_vault`、会话与手工出口的 `mcp._save_artifact`。
+    「刚刚多了一份什么」只有写的人知道；放在这里是因为**判据**必须是同一句
+    `is_output_path`：「算不算成品」在这个仓库里只有一个答案（成长值、小屋架子、
+    工作页清单、挂接都用它），这里不另立一条。
+
+    代价是 `tasks.run_task` 得**让位**：落了成品的那一路它不再补一句「跑完了」——
+    一件事只说一句。反过来（落点不是成品，比如 `tasks/` 的留痕、`notes/` 的成文）
+    这里一个字都不说，那句「跑完了」照旧。
+
+    best-effort：说一句话不该影响落盘，任何失败都咽掉。
+    """
+    try:
+        if not is_output_path((rel or "").replace("\\", "/")):
+            return None
+        return emit("output", name=(name or "").strip(), count=_count_outputs())
+    except Exception:  # noqa: BLE001 - 台词绝不拖累写盘
+        log.debug("pet note_output failed", exc_info=True)
+        return None
+
+
 def growth() -> dict:
     """零柒的成长：**从「你走到哪了」算**，不是「系统今天干了什么」。
 
@@ -484,13 +756,89 @@ def growth() -> dict:
     }
 
 
+def _day_said(f: dict) -> str:
+    """收工那句的**陈述部分**（M2 · PLAN §3 G2）：今天真发生了什么。
+
+    **只说已经发生的事**，一件都没有就返回空串（不加一句「今天什么也没干」）。
+    刻意没有「还欠」「还剩」这种句子——那是这个仓库封存过的机制（`cards.reschedule`）。
+    """
+    bits: list[str] = []
+    if int(f.get("digested") or 0) > 0:
+        bits.append(f"消化了 {int(f['digested'])} 个点")
+    if int(f.get("cards_made") or 0) > 0:
+        bits.append(f"出了 {int(f['cards_made'])} 张卡")
+    if int(f.get("got") or 0) > 0:
+        bits.append(f"说通了 {int(f['got'])} 个概念")
+    if int(f.get("outputs") or 0) > 0:
+        bits.append(f"交出 {int(f['outputs'])} 份成品")
+    if int(f.get("reviews") or 0) > 0:
+        bits.append(f"过了 {int(f['reviews'])} 张卡")
+    return f"今天{'、'.join(bits)}。" if bits else ""
+
+
+def day_statement(now: datetime | None = None) -> str:
+    """今天**已经发生的事**说成一句话（收工那句与陪伴页注入**共用这一处**）。
+
+    一句话只有一个出处：Z1（PLAN4）把它注入陪伴页的 system 时，用的就是这一句——
+    两处各写一遍，迟早一处说「消化了 2 个点」、另一处说「出了 3 张卡」。
+
+    一件都没发生就是**空串**（调用方据此「什么都不加」，绝不写「今天你什么都没干」）；
+    读不出来也当没有——事实读不到就不说，不编。
+    """
+    try:
+        from app.core import pet_state as state
+
+        return _day_said(state.day_facts(now))
+    except Exception:  # noqa: BLE001 - 陈述读不出来就当今天没事实
+        log.debug("pet day statement failed", exc_info=True)
+        return ""
+
+
 @usage_ledger.traced("pet")
-async def greeting(mode: str = "morning") -> str:
-    """One LLM-composed line in 零柒's voice; template fallback if no provider."""
+async def greeting(mode: str = "morning", now: datetime | None = None) -> str:
+    """One LLM-composed line in 零柒's voice; template fallback if no provider.
+
+    三件仪式都挂在**这一句**上（不新增 cron）：
+    - 开工（08:30）：昨日拆出来的那一个点 → 问一句（答不答都行、不追问、不计数）；
+    - 收工（21:00）：今天的**事实陈述**（`pet_state.day_facts`）；
+    - **周日**收工：同一句位置改说**这一周**（`weekly.sunday_report`，M4 · PLAN §3 G4）
+      ——`sched.set_daily` 只支持「每天一条」，为周报单开 cron 会让周日 21:00 冒两句。
+
+    读不到数据就什么都不加——**普通问候**，不硬凑（周报也一样：那一周没数据就没有）。
+
+    `now` 只给测试用：把「今天是周几」钉死。生产路径不传，走系统时钟。
+    """
     st = status()
     gr = growth()
     mode_label = {"morning": "早间", "evening": "晚间"}.get(mode, "")
     fallback = compose("greeting")
+
+    ask: dict | None = None
+    said = ""
+    weekly_rep: dict | None = None
+    try:
+        from app.core import pet_state as state
+
+        if mode == "morning":
+            ask = state.last_digest_point(now)
+        elif mode == "evening":
+            from app.core import weekly
+
+            weekly_rep = await weekly.sunday_report(now)
+            # 周报优先：它就是周日那句。日陈述是它的子集，两句都说等于同一件事说两遍。
+            said = weekly_rep["text"] if weekly_rep else day_statement(now)
+    except Exception:  # noqa: BLE001 - 仪式读不出来就让位给普通问候
+        log.debug("pet greeting ritual facts failed", exc_info=True)
+        weekly_rep, said = None, ""
+
+    # 模板兜底也要把仪式带上：没有 provider 时那句问候同样该问、同样该说今天
+    # （周报同理——**没有 provider 的机器上这份周报照样成立**，它全是读出来的事实）。
+    # **两句封顶**——有仪式时不留那句「今天的事我盯着」（零柒的话能一句说完就不说两句）。
+    if ask:
+        fallback = f"{_part_of_day(now)}好。昨天那个「{ask['title']}」，你现在讲得清吗？"
+    if said:
+        fallback = f"{_part_of_day(now)}好。{said}"
+
     model_id = _default_model_id()
     if not model_id:
         return fallback
@@ -503,12 +851,26 @@ async def greeting(mode: str = "morning") -> str:
         info = ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key)
         when = {"morning": "早上", "evening": "晚上"}.get(mode, "现在")
         # B1：主语从「系统今天」改成「你走到哪了」——零柒该说的是你的积累，不是今天的计数。
+        ritual = ""
+        if ask:
+            ritual = (
+                f"另外，可以问他一句：昨天拆出来的「{ask['title']}」现在还讲得清吗"
+                f"（**答不答都行，不要追问、不要计数**）。"
+            )
+        elif weekly_rep:
+            # 周报这一支把**事实原文**喂进去：模型只换说法，不决定说什么（说错了就是编）。
+            ritual = (
+                f"另外，用第一人称把这一周陈述一遍，事实就用这些：{weekly_rep['text']}"
+                f"（**是这一周、不是今天**；不许说「还欠」「还没做」这类话）。"
+            )
+        elif said:
+            ritual = f"另外，把今天的事实陈述一句：{said}（**不许说「还欠」「还没做」这类话**）。"
         user = (
             f"现在是{when}。他的成长：等级 Lv.{gr['level']}「{gr['title']}」，累计 EXP {gr['exp']}，"
             f"已经搞懂 {gr['counts']['mastered']} 个概念、把 {gr['counts']['outputs']} "
             f"份东西交出去了。系统侧：今日任务完成 {st['tasks_done']} 失败 {st['tasks_failed']}。"
-            f"以零柒的身份说一句{mode_label}的话（一两句以内），可说成长也可提一句系统状况，"
-            f"直接输出那句话本身。"
+            f"{ritual}"
+            f"以零柒的身份说一句{mode_label}的话（两三句以内），直接输出那句话本身。"
         )
         parts: list[str] = []
         async for delta in stream_chat(

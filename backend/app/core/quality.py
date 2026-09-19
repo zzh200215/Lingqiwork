@@ -11,6 +11,12 @@
 
 护栏：评价是**事后的一次点击**，不是待办——不计数、不催、不设目标，
 没有「你还有 N 篇没评」这种东西。
+
+**注入那一维**（PLAN3 S1 §9.2 决策4）：S1 让引擎在命中时吃一份技能工序，而注入**不改变**
+`prompt_sha`（它是模块级常量的指纹），于是「有注入」和「没注入」的运行会把 👍/👎 混进
+同一个版本 key。所以每行反馈多带一个事实 `injected`（三态文本，见 `ArtifactFeedback`
+的注释），聚合时按它**多摆一行**——key 一个不动（改 key 会断裂历史，等于改写 PLAN.md
+的口径）。`""`（不知道）不许并进「没注入」：那是编。
 """
 
 import logging
@@ -26,7 +32,24 @@ log = logging.getLogger(__name__)
 KINDS = ("research", "compose", "recap", "decide", "conflict", "deliver")
 VERDICTS = ("good", "bad")
 REASON_CAP = 200
+INJECT_CAP = 300  # 一列技能名，够放好几份了
 RECENT_BAD = 10  # 最近几条差评连原因一起带出来——那才是能动手的部分
+# 三态的名字（顺序即界面上的顺序）：有注入 / 没注入 / 不知道。
+INJECT_STATES = ("injected", "plain", "unknown")
+
+
+def inject_state(raw: str) -> str:
+    """`injected` 那一列 → 三态之一。Pure.
+
+    `""` 与 `"[]"` 是**两件事**：「不知道」和「确实没有」。这是这一列存在的全部意义——
+    把未知记成没有，这一维就成了编出来的数。
+    """
+    s = (raw or "").strip()
+    if not s:
+        return "unknown"
+    if s in ("[]", "[ ]"):
+        return "plain"
+    return "injected"
 
 
 def _aware(dt: datetime | None) -> datetime | None:
@@ -48,10 +71,14 @@ async def record(
     model_id: str = "",
     reason: str = "",
     ref: str = "",
+    injected: str = "",
 ) -> dict:
     """记一条评价。kind / verdict 非法抛 ValueError（路由层转 400）。
 
     **不做去重**：同一次生成改主意（先 👎 后 👍）是正常的——评价是流水，不是状态。
+
+    `injected`（S1）：这份产出吃着技能生成的没有。**默认 `""` = 不知道**，而不是 `"[]"`——
+    说得出「没有」的调用方自己传 `"[]"`（点 👍 的那一刻手上就有注入清单）。
     """
     kind, verdict = (kind or "").strip(), (verdict or "").strip()
     if kind not in KINDS:
@@ -66,6 +93,7 @@ async def record(
         model_id=(model_id or "").strip()[:120],
         reason=(reason or "").strip()[:REASON_CAP],
         ref=(ref or "").strip()[:200],
+        injected=(injected or "").strip()[:INJECT_CAP],
     )
     async with SessionLocal() as db:
         db.add(row)
@@ -80,7 +108,12 @@ async def record(
 
 
 async def summary(days: int = 90) -> dict:
-    """按 (kind, prompt_sha, model_id) 聚合满意率 + 最近几条差评的原因。不抛异常。"""
+    """按 (kind, prompt_sha, model_id) 聚合满意率 + 最近几条差评的原因。不抛异常。
+
+    每个 group 里多一个 `split`：同样的 key 下，**有注入 / 没注入 / 不知道** 各是多少
+    （PLAN3 §9.2 决策4）。key 本身一个没动——原来那几个数还是原来那几个数，
+    这一维是**多加的一行**，不是换一把尺子。
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
     try:
         async with SessionLocal() as db:
@@ -90,6 +123,9 @@ async def summary(days: int = 90) -> dict:
         return {"days": days, "total": 0, "good": 0, "bad": 0, "rate": 0.0, "groups": [], "recent_bad": []}
 
     kept = [r for r in rows if (_aware(r.created_at) or cutoff) >= cutoff]
+
+    def _blank_split() -> dict:
+        return {s: {"good": 0, "bad": 0} for s in INJECT_STATES}
 
     groups: dict[tuple, dict] = {}
     for r in kept:
@@ -102,9 +138,13 @@ async def summary(days: int = 90) -> dict:
                 "model_id": r.model_id,
                 "good": 0,
                 "bad": 0,
+                "split": _blank_split(),
             },
         )
-        g["good" if r.verdict == "good" else "bad"] += 1
+        side = "good" if r.verdict == "good" else "bad"
+        g[side] += 1
+        # 老行没有这一列（回读到 None）：那就是「不知道」，不是「没注入」
+        g["split"][inject_state(getattr(r, "injected", "") or "")][side] += 1
 
     out = []
     for g in groups.values():

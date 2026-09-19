@@ -124,9 +124,17 @@ def test_every_fixture_points_at_a_registered_prompt():
 
 
 def test_every_fixture_case_declares_only_real_checks():
+    """两种形状各查各的：聊天型要有输入与断言；**判分型**（P2-1）要有卡三样 + 人工档位，
+    它的判据是人工档位而不是断言——硬按聊天那份查，会把一整套判分用例判成不合格。"""
     for key, fx in pe.fixtures().items():
         ids = [c["id"] for c in fx["cases"]]
         assert len(ids) == len(set(ids)), f"{key} 里有重复的用例 id"
+        if pe.is_grading(key):
+            for c in fx["cases"]:
+                assert c.get("front") and c.get("retell"), f"{key}/{c.get('id')} 缺卡三样或重讲"
+                assert int(c.get("grade")) in (0, 1, 2, 3, 4), f"{key}/{c.get('id')} 档位不合法"
+                assert c.get("intent"), f"{key}/{c.get('id')} 没写为什么是这一档"
+            continue
         for c in fx["cases"]:
             assert c.get("user"), f"{key}/{c.get('id')} 没有 user 输入"
             assert c.get("checks"), f"{key}/{c.get('id')} 一条断言都没有"
@@ -135,8 +143,17 @@ def test_every_fixture_case_declares_only_real_checks():
 
 
 def test_every_check_is_used_by_at_least_one_case():
-    """写了断言却没人用 = 死代码；顺便提醒：加断言时要给它配一条用例。"""
-    used = {n for fx in pe.fixtures().values() for c in fx["cases"] for n in c["checks"]}
+    """写了断言却没人用 = 死代码；顺便提醒：加断言时要给它配一条用例。
+
+    只数**聊天型**的用例：判分型的用例没有 `checks` 这个字段（它的判据是人工档位）。
+    """
+    used = {
+        n
+        for key, fx in pe.fixtures().items()
+        if not pe.is_grading(key)
+        for c in fx["cases"]
+        for n in (c.get("checks") or [])
+    }
     assert set(pe.CHECKS) - used == set(), f"没用上的断言：{set(pe.CHECKS) - used}"
 
 
@@ -603,3 +620,115 @@ def test_latest_baselines_picks_the_newest_run_per_key():
     asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="card/model", generate=_gen("1. 清单\n2. 两项")))
     second = asyncio.run(pe.latest_baselines())["FEYNMAN_PROMPT"]
     assert second["id"] > first["id"]
+
+
+# --- R1 补齐：提示词评测上墙（PLAN5 §2-2 点名的九条之一）-----------------------
+
+
+def test_board_counts_what_has_been_measured():
+    """墙上那一格：分母是登记表，分子是**跑过 golden set 且有成绩**的那些。"""
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="board/model", generate=_gen()))
+    b = asyncio.run(pe.board())
+    assert b["readable"] is True and b["error"] == ""
+    assert b["registered"] == len(prompts.inventory()) > 0
+    assert b["measured"] >= 1
+    assert b["cases"] >= 1
+    assert 0 <= b["decidable"] <= b["measured"]
+    assert 0 <= b["stale"] <= b["measured"]
+    for key in ("registered", "measured", "decidable", "stale"):
+        assert b["rules"][key]
+    assert b["bias"]
+
+
+def test_the_board_is_not_a_leaderboard():
+    """§4-2：这一格量的是「尺子有没有被量过」，**不是「哪条提示词更好」**。
+
+    `cards()` 是按 rate 倒序排的（那是小屋的技能卡）——原样搬上墙就成了一面排行榜，
+    而墙上的数一旦能比大小，下一个人就会去追它。所以这里连一条提示词的名字都不许有。
+    """
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="board/model", generate=_gen()))
+    b = asyncio.run(pe.board())
+    blob = json.dumps(b, ensure_ascii=False)
+    assert "FEYNMAN_PROMPT" not in blob  # 没有名字
+    assert "rate" not in b and "top" not in b and "ranking" not in b
+    # 「站得住」用的必须是**同一个判据**（`can_tell`），不许在这一格另算一份
+    base = asyncio.run(pe.latest_baselines())["FEYNMAN_PROMPT"]
+    want = 1 if pe.can_tell(base["ci_low"], base["ci_high"]) else 0
+    assert b["decidable"] == want
+
+
+def test_board_counts_a_stale_baseline_as_stale(monkeypatch):
+    """内容改过之后那个分数就不是这一版的了——墙上要数得出来。"""
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="board/model", generate=_gen()))
+    real = pe._entry("FEYNMAN_PROMPT")
+
+    class Fake:
+        name = real.name
+        module = real.module
+        purpose = real.purpose
+        kind = real.kind
+        content = real.content + "\n（改过一行）"
+        sha = "changed00000"
+
+    monkeypatch.setattr(prompts, "inventory", lambda: [Fake()])
+    b = asyncio.run(pe.board())
+    assert b["registered"] == 1
+    assert b["measured"] == 1
+    assert b["stale"] == 1
+
+
+def test_board_tells_read_failure_apart_from_zero(monkeypatch):
+    """§4-8：**读不到 ≠ 零**。库里一条都没有是 `readable=true` + 0；读不出来是另一件事。"""
+    empty = asyncio.run(pe.board())
+    assert empty["readable"] is True  # 这一条是「读到了」（前面已经跑出成绩了）
+
+    async def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(pe, "_latest_rows", boom)
+    broken = asyncio.run(pe.board())
+    assert broken["readable"] is False
+    assert "db down" in broken["error"]
+    assert broken["measured"] == 0  # 不是「零条量过」，是「没读到」——靠 readable 区分
+
+
+def test_reading_the_board_makes_the_pet_say_nothing():
+    """红线（与 `metrics` / `calibration` / 回合读数同一条）：跑完这一格，宠物一个字都没说。"""
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="board/model", generate=_gen()))
+    asyncio.run(pe.board())
+
+    from app.core import pet as pet_core
+
+    assert pet_core.feed(limit=50) == []
+
+
+def test_the_board_has_no_way_to_speak():
+    """比上一条更硬：真正的风险是下一个人顺手在这一格 emit 一句「还有 5 条没量过」。"""
+    import re
+    from pathlib import Path
+
+    src = Path(pe.__file__).read_text(encoding="utf-8")
+    body = src.split('"""', 2)[2]  # 去掉模块 docstring
+    for banned in ("emit", "note_output", "compose", "feed", "greeting"):
+        assert f"pet.{banned}" not in body, banned
+    assert re.findall(r"\bpet_events\b", body) == []
+
+
+def test_http_board_endpoint(monkeypatch):
+    """墙上的那一格走 `/api/dashboard/prompt-eval`（R1 决定：扩现有 /dashboard，不新增导航）。"""
+    asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="board/model", generate=_gen()))
+    monkeypatch.setenv("WB_API_TOKEN", "t")
+    from fastapi.testclient import TestClient
+
+    from app.core import auth
+    from app.main import app
+
+    monkeypatch.setattr(auth, "_cached", None)
+    c = TestClient(app)
+    h = {"X-WB-Token": "t"}
+
+    assert c.get("/api/dashboard/prompt-eval").status_code == 401
+    body = c.get("/api/dashboard/prompt-eval", headers=h).json()
+    assert body["readable"] is True
+    assert body["measured"] >= 1
+    assert "registered" in body["rules"]

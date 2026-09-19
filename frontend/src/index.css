@@ -19,6 +19,56 @@ body {
   --brand-soft: #a78bfa;
 }
 
+/* ---------- 版面 token（2026-09-18 版面改版）----------
+ *
+ * 起因：一页页量下来，正文只占窗口的一半——今日 768px、工作/资产/零柒 896px。
+ * 根因是 `PageShell` 默认 `max-w-4xl` 把每页锁在一根窄柱子里。参考项目
+ * （Robot Admin）是 full-width + 栅格，这一点抄了。
+ *
+ * **底色改回原样**（用户看过之后说的：「这个颜色还没原来的好看」）：
+ * 页面就保持原来的白 / neutral-950，卡片的分层靠阴影，不靠底色差。
+ * 这一版只留阴影与圆角。
+ */
+:root {
+  --page-bg: #ffffff;
+  --card-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px -14px rgba(16, 24, 40, 0.18);
+  --card-shadow-hover: 0 2px 4px rgba(16, 24, 40, 0.05), 0 18px 36px -18px rgba(16, 24, 40, 0.24);
+}
+.dark {
+  --page-bg: #0a0a0a;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px -14px rgba(0, 0, 0, 0.6);
+  --card-shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 18px 36px -18px rgba(0, 0, 0, 0.7);
+}
+
+/* 页面底：非会话页的 `main`（会话页自己管滚动与底色，不套这个） */
+.wb-page {
+  background-color: var(--page-bg);
+}
+
+/* 卡片：白底 + 一圈很淡的边 + 软阴影。**边框留着**（阴影单独撑不住深色模式下的分层），
+ *  只是把它调淡——原来那种 1px 实边是「线框图」感的来源。 */
+.wb-card {
+  @apply rounded-2xl border border-neutral-200/70 bg-white dark:border-neutral-800 dark:bg-neutral-900/70;
+  box-shadow: var(--card-shadow);
+}
+
+/* 可点的卡片：hover 抬 2px + 阴影加深。曲线与时长照参考项目那套（0.2s / cubic-bezier）。 */
+.wb-card-hover {
+  transition:
+    box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.wb-card-hover:hover {
+  box-shadow: var(--card-shadow-hover);
+  transform: translateY(-2px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-card-hover:hover {
+    transform: none;
+  }
+}
+
 /* ---------- scrollbars ---------- */
 *::-webkit-scrollbar {
   width: 8px;
@@ -29,6 +79,52 @@ body {
 }
 *::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ---------- bento 驾驶舱 token（2026-09-19）----------
+ *
+ * 彩色指标卡与图表用的一层薄皮肤：
+ * - `.wb-chip`  指标卡左上角那个「彩色圆角块里坐一个图标」的容器，色由调用方给
+ * - `.wb-card-hero`  页面顶上的 hero 卡：淡品牌渐变底，跟白卡区分层级
+ * - `--wb-chart-N`  ECharts 调色板（violet 领衔的 6 色阶），亮/暗各一套，
+ *   EChart.tsx 启动时读 CSS 变量——图表配色跟主题走，不写死在 JS 里
+ */
+.wb-chip {
+  @apply flex shrink-0 items-center justify-center rounded-xl;
+}
+.wb-card-hero {
+  @apply border border-violet-200/60 bg-gradient-to-r from-violet-50 via-white to-fuchsia-50 dark:border-violet-500/20 dark:from-violet-950/40 dark:via-neutral-900/70 dark:to-fuchsia-950/30;
+  box-shadow: var(--card-shadow);
+}
+:root {
+  --wb-chart-0: #7c5cff;
+  --wb-chart-1: #e879f9;
+  --wb-chart-2: #38bdf8;
+  --wb-chart-3: #34d399;
+  --wb-chart-4: #fbbf24;
+  --wb-chart-5: #fb7185;
+  --wb-chart-grid: rgba(16, 24, 40, 0.08);
+  --wb-chart-label: #6b7280;
+}
+.dark {
+  --wb-chart-0: #a78bfa;
+  --wb-chart-1: #f0abfc;
+  --wb-chart-2: #7dd3fc;
+  --wb-chart-3: #6ee7b7;
+  --wb-chart-4: #fcd34d;
+  --wb-chart-5: #fda4af;
+  --wb-chart-grid: rgba(255, 255, 255, 0.1);
+  --wb-chart-label: #9ca3af;
+}
+
+/* 调度台 pipeline 节点：running 的那颗呼吸（脉的是外圈光晕，不是节点本身，
+   避免跟 wb-card-hover 那种位移动画打架） */
+@keyframes wb-node-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(124, 92, 255, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(124, 92, 255, 0); }
+}
+.wb-node-running {
+  animation: wb-node-pulse 1.6s ease-in-out infinite;
 }
 
 /* ---------- code highlight: github light + dark overrides ---------- */
@@ -106,4 +202,54 @@ body {
    一次性提示（2.5 秒后由 deeplink.ts 摘掉），不是常驻选中态。 */
 .wb-hot {
   @apply rounded-xl ring-2 ring-violet-400;
+}
+
+/* ---------- 零柒的动画（挂件与桌面壳小窗共用一份）----------
+ *
+ * 呼吸画在外层、Q 弹画在 img 上——两个 transform 各占一层才不打架。
+ * 之前这些 keyframes 藏在 PetWidget 的 <style> 里，桌面壳那只小窗要用时
+ * 只能再抄一份；动画的归宿是样式表，抄一份迟早分叉（§4-7 一事一处）。 */
+@keyframes pet-idle {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-4px) scale(1.03);
+  }
+}
+.pet-idle {
+  animation: pet-idle 3.2s ease-in-out infinite;
+}
+
+@keyframes pet-squash {
+  0% {
+    transform: scale(1, 1);
+  }
+  30% {
+    transform: scale(1.14, 0.84);
+  }
+  62% {
+    transform: scale(0.95, 1.07);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+.pet-squash {
+  animation: pet-squash 0.38s ease-out;
+}
+
+@keyframes pet-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.pet-bubble {
+  animation: pet-bubble-in 0.22s ease-out;
 }

@@ -470,3 +470,62 @@ async def test_stuck_podcast_endpoint(pod_env, monkeypatch):
     monkeypatch.setattr("app.core.tutor.stuck_blocks", empty)
     with pytest.raises(HTTPException, match="卡点"):
         await pod_router.stuck_podcast(pod_router.StuckPodcastIn())
+
+
+# ---------- 单音色念稿（M4 · 周报的一键转播客） ----------
+#
+# 与上面那条路的区别只有一处、也是最要紧的一处：**不过模型**。稿子已经是成品文本
+# （`weekly.text()` 出来的），这里要的不是编剧只是一张嘴——所以这几条用例里没有
+# `_resolve_writer` / `_llm_script` 的替身，它们根本不该被碰到。
+
+
+def test_split_sentences_breaks_on_chinese_punctuation_and_lines():
+    got = podcast._split_sentences("第一句。第二句！第三句？\n第四句")
+    assert got == ["第一句。", "第二句！", "第三句？", "第四句"]
+
+
+def test_split_sentences_caps_count_and_length():
+    assert len(podcast._split_sentences("句。" * 200)) == podcast.MAX_TURNS
+    # 没有标点的长段：硬切，别让一句合成撑爆单句上限
+    got = podcast._split_sentences("字" * (podcast.MAX_TURN_CHARS * 2 + 5))
+    assert [len(s) for s in got] == [podcast.MAX_TURN_CHARS, podcast.MAX_TURN_CHARS, 5]
+
+
+def test_speak_text_renders_one_voice(pod_env, monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def fake_synth(text, voice):
+        calls.append((text, voice))
+        p = pod_env / f"tts-{len(calls)}.wav"
+        _tiny_wav(p, seconds=0.1, rate=24000)
+        return p
+
+    monkeypatch.setattr(podcast, "_synth_turn", fake_synth)
+    r = _run(
+        podcast.speak_text("这周你消化了 2 份材料。周三说通了 1 个概念！", title="周报 09-14–09-16")
+    )
+
+    assert r["ok"] is True and r["turns"] == 2
+    assert [t["text"] for t in r["script"]] == ["这周你消化了 2 份材料。", "周三说通了 1 个概念！"]
+    # 单音色：两句同一个声音——这就是「念稿」与「对话」的区别
+    assert {v for _t, v in calls} == {podcast.HOST_VOICE}
+    # 音频是真的，而且进了**同一个**索引（陪伴页那张列表里就能看到它）
+    wav = podcast.PODCAST_DIR / r["file"]
+    assert wav.exists() and wav.read_bytes()[:4] == b"RIFF"
+    assert r["sources"] == [] and r["title"] == "周报 09-14–09-16"
+    assert podcast.list_podcasts()[0]["id"] == r["id"]
+
+
+def test_speak_text_defaults_the_title_and_refuses_an_empty_script(pod_env, monkeypatch):
+    async def fake_synth(text, voice):
+        p = pod_env / "t.wav"
+        _tiny_wav(p, seconds=0.1, rate=24000)
+        return p
+
+    monkeypatch.setattr(podcast, "_synth_turn", fake_synth)
+    # 没有材料文件名可借（`sources` 是空的）→ 标题就老老实实叫「播客」
+    assert _run(podcast.speak_text("一句。"))["title"] == "播客"
+    # 空稿子不叫 TTS，也不该留下一条空音频
+    r = _run(podcast.speak_text("   \n\n"))
+    assert r["ok"] is False and "没有可念" in r["error"]
+    assert [e["title"] for e in podcast.list_podcasts()] == ["播客"]

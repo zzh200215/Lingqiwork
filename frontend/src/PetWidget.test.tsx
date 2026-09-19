@@ -2,12 +2,12 @@
 // 还覆盖 P1 的**此刻状态**：状态机给的姿势驱动动画、面板显示精力、人不在时降饱和。
 // feed（系统事件气泡）走真实 fetch，这里一并 stub 掉。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import PetWidget from './PetWidget'
 import { receiptLabel, toolCallLabel } from './petChat'
-import type { PetRoom, PetState, PetThing, ScheduledTask } from './api'
+import type { DecisionWitness, PetRoom, PetState, PetThing, ScheduledTask } from './api'
 
 vi.mock('./api', () => ({
   api: {
@@ -22,12 +22,21 @@ vi.mock('./api', () => ({
       today: { meals: [], date: '2026-09-14' },
       skills: [],
       form: [],
+      concepts: { cards: [], total: 0 },
+      flavor: '',
       empty: true,
     }),
     listTasks: vi.fn().mockResolvedValue([]),
     tutorStuck: vi.fn().mockResolvedValue({ stuck: [] }),
     cardStats: vi.fn().mockResolvedValue({ due_now: 0 }),
+    // PLAN2 T1：到期卡那条会换一句话——默认没有矛盾（照旧念到期卡）
+    cardContradiction: vi.fn().mockResolvedValue({ contradiction: null }),
+    decisionWitness: vi.fn().mockResolvedValue({ due: null, count: 0 }),
+    // M5：第 6 个来源。默认没有到点的交付（守「安静是默认」）
+    deliverWitness: vi.fn().mockResolvedValue({ due: null, count: 0, total: 0, window_days: 14 }),
     petPluginCommand: vi.fn(),
+    // P5 落库之后：面板挂载时从库里铺上一场的对话（默认没有）
+    petChats: vi.fn().mockResolvedValue({ chats: [] }),
     tts: vi.fn(),
     transcribeAudio: vi.fn(),
   },
@@ -37,6 +46,26 @@ import { api } from './api'
 /** 一个「此刻」的默认值——白天、待机、精神还行。 */
 function petState(patch: Partial<PetState> = {}): PetState {
   return { mode: 'idle', action: 'idle', energy: 80, line: '', path: '', ...patch }
+}
+
+/** 一条到点的决策见证（M4 · G5）。字段就是台词要引用的那几样原文。 */
+function witness(patch: Partial<NonNullable<DecisionWitness['due']>> = {}): NonNullable<
+  DecisionWitness['due']
+> {
+  return {
+    id: 12,
+    text: '先用 SQLite 就够',
+    basis: '数据量上不去',
+    topic: '',
+    confidence: 70,
+    created_at: null,
+    reviewed_at: null,
+    outcome: '',
+    note: '',
+    due_at: null,
+    age_days: 95,
+    ...patch,
+  }
 }
 
 function sprite(): HTMLElement {
@@ -97,16 +126,21 @@ function sseResponse(frames: string[]): Response {
   return new Response(stream, { status: 200 })
 }
 
-/** 按 URL 分派：`/api/pet/chat` 走 SSE，其余（feed 轮询）当没有事件。 */
+/** 按 URL 分派：`/api/pet/chat` 走 SSE，其余（feed 轮询）当没有事件。
+ *  返回**每次聊天请求的请求体**（Z1 要断言历史真的带上去了）。 */
 function stubFetch(chatFrames: string[]) {
+  const bodies: { message?: string; history?: { role: string; text: string }[] }[] = []
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: unknown) =>
-      String(url).includes('/api/pet/chat')
-        ? Promise.resolve(sseResponse(chatFrames))
-        : Promise.resolve({ ok: true, json: async () => ({ events: [] }) })
-    )
+    vi.fn((url: unknown, init?: { body?: string }) => {
+      if (String(url).includes('/api/pet/chat')) {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')))
+        return Promise.resolve(sseResponse(chatFrames))
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ events: [] }) })
+    })
   )
+  return bodies
 }
 
 function askPet(text: string) {
@@ -123,6 +157,15 @@ async function flush() {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0)
   })
+}
+
+/** 把「挂载 → 首次 petState 落进 state」的整条 promise 链冲干净。
+ *
+ *  挂载那一拍并着跑的请求有六条，`advance(0)` 一拍冲不完——state 要到第二拍才落。
+ *  要断言「状态机给的姿势 / 台词」的用例都得用这个，用单拍会读到 null 态。 */
+async function boot() {
+  await flush()
+  await flush()
 }
 
 /** jsdom 有 `Audio` 但没有播放实现（调 `play()` 只会往控制台刷 not implemented）。 */
@@ -144,6 +187,10 @@ beforeEach(() => {
   vi.mocked(api.listTasks).mockResolvedValue([])
   vi.mocked(api.tutorStuck).mockResolvedValue({ stuck: [] })
   vi.mocked(api.cardStats).mockResolvedValue({ due_now: 0 } as never)
+  vi.mocked(api.cardContradiction).mockResolvedValue({ contradiction: null } as never)
+  vi.mocked(api.decisionWitness).mockResolvedValue({ due: null, count: 0 })
+  vi.mocked(api.deliverWitness).mockResolvedValue({ due: null, count: 0, total: 0, window_days: 14 })
+  vi.mocked(api.petChats).mockResolvedValue({ chats: [] })
   vi.mocked(api.petRoom).mockResolvedValue({
     things: [],
     carried: null,
@@ -151,6 +198,8 @@ beforeEach(() => {
     today: { meals: [], date: '2026-09-14' },
     skills: [],
     form: [],
+    concepts: { cards: [], total: 0 },
+    flavor: '',
     empty: true,
   })
   // feed 轮询：没有系统事件
@@ -239,6 +288,284 @@ describe('PetWidget · 主动提醒', () => {
     renderWidget()
     await vi.advanceTimersByTimeAsync(4000)
     expect(screen.queryByText(/去放行|去看看|去复习|去清卡点/)).toBeNull()
+  })
+
+  // PLAN2 T1 场景 A：到期卡那条**换内容不加来源**——概念说通 ×2、它的卡这周反复重来时，
+  // 念的是那句对质；两个数字都来自后端算出来的事实，句子止步于一个问句。
+  it('双轨矛盾时，到期卡那条换成对质句——还是同一个来源、同一个去处', async () => {
+    vi.mocked(api.cardStats).mockResolvedValue({ due_now: 4 } as never)
+    vi.mocked(api.cardContradiction).mockResolvedValue({
+      contradiction: {
+        card_id: 12,
+        concept: 'asyncio 事件循环',
+        mastered: true,
+        said_n: 2,
+        again_7d: 3,
+        contradiction: true,
+      },
+    } as never)
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(
+      screen.getByText('「asyncio 事件循环」你说通过 2 次，可它的卡这周重来 3 回，再讲一遍？')
+    ).toBeTruthy()
+    // 换的只是那句话：去处照旧（重讲就在复习页），而且**不判谁对**——「你其实没懂」不出现
+    expect(screen.getByText('去重讲 →')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/你其实|没真懂|高估/)
+  })
+
+  it('没有矛盾时照旧念到期卡', async () => {
+    vi.mocked(api.cardStats).mockResolvedValue({ due_now: 4 } as never)
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(screen.getByText('今天还有 4 张卡没过，趁脑子还在。')).toBeTruthy()
+    expect(screen.getByText('去复习 →')).toBeTruthy()
+  })
+
+  it('没有到期卡时连那句对照都不问——不为一个没人看的数开口', async () => {
+    vi.mocked(api.cardContradiction).mockClear()
+    renderWidget() // 默认 cardStats 是 due_now: 0
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(api.cardContradiction).not.toHaveBeenCalled()
+  })
+
+  it('到点的决策见证：引用**原文依据**，按钮直达那一条', async () => {
+    vi.mocked(api.decisionWitness).mockResolvedValue({
+      due: witness({
+        text: '先用 SQLite 就够，别急着上向量库',
+        basis: '这台机器上的数据量一年也到不了十万条',
+        topic: '架构选型',
+        age_days: 199,
+        created_at: '2026-03-01T10:00:00+00:00',
+        due_at: '2026-05-30T10:00:00+00:00',
+      }),
+      count: 3,
+    })
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+    // 「几个月前你判断：X，当时七成把握，凭的是 Y」——三个事实一个都不能少，
+    // 依据是**原文**（转述一遍，这条提醒的全部价值就没了）
+    expect(
+      screen.getByText(
+        '7 个月前你判断：「先用 SQLite 就够，别急着上向量库」。当时 70% 把握，凭的是「这台机器上的数据量一年也到不了十万条」。'
+      )
+    ).toBeTruthy()
+    expect(screen.getByText('翻回去看看 →')).toBeTruthy()
+  })
+
+  it('见证排在最后：前面几件欠着的先念（它不挡任何事）', async () => {
+    vi.mocked(api.cardStats).mockResolvedValue({ due_now: 27 } as never)
+    vi.mocked(api.decisionWitness).mockResolvedValue({
+      due: witness({ age_days: 95 }),
+      count: 1,
+    })
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(screen.getByText(/27 张卡没过/)).toBeTruthy()
+    expect(screen.queryByText(/先用 SQLite 就够/)).toBeNull()
+  })
+
+  it('到点的交付见证（第 6 个来源）：多久以前 + 交给谁 + 什么东西，问句结尾', async () => {
+    vi.mocked(api.deliverWitness).mockResolvedValue({
+      due: {
+        path: 'deliver/2026-08-28-第-35-周周报.md',
+        title: '第 35 周周报',
+        genre: '周报',
+        audience: '领导',
+        at: Math.floor(Date.now() / 1000) - 21 * 86400,
+        at_iso: '2026-08-28T10:00:00',
+        reviewed: false,
+        due_in_days: 14,
+      },
+      count: 2,
+      total: 5,
+      window_days: 14,
+    })
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+
+    // 三个事实一个不少；**是问句**——「后来有回音吗」不是「你该去回访」
+    expect(screen.getByText('21 天前交给领导的《第 35 周周报》—— 后来有回音吗？')).toBeTruthy()
+    expect(screen.getByText('翻回去看看 →')).toBeTruthy()
+  })
+
+  it('交付见证也排在最后：决策见证先念（两条都不挡事，但判断更老）', async () => {
+    vi.mocked(api.decisionWitness).mockResolvedValue({ due: witness({ age_days: 95 }), count: 1 })
+    vi.mocked(api.deliverWitness).mockResolvedValue({
+      due: {
+        path: 'deliver/2026-08-28-周报.md',
+        title: '周报',
+        genre: '周报',
+        audience: '',
+        at: Math.floor(Date.now() / 1000) - 21 * 86400,
+        at_iso: '2026-08-28T10:00:00',
+        reviewed: false,
+        due_in_days: 14,
+      },
+      count: 1,
+      total: 1,
+      window_days: 14,
+    })
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+
+    expect(screen.getByText(/先用 SQLite 就够/)).toBeTruthy()
+    expect(screen.queryByText(/后来有回音吗/)).toBeNull()
+  })
+
+  it('交付没有收件人时只说「交出去的」，不替当时的你补一个', async () => {
+    vi.mocked(api.deliverWitness).mockResolvedValue({
+      due: {
+        path: 'deliver/2026-08-28-随手一篇.md',
+        title: '随手一篇',
+        genre: '',
+        audience: '',
+        at: Math.floor(Date.now() / 1000) - 15 * 86400,
+        at_iso: '2026-09-03T10:00:00',
+        reviewed: false,
+        due_in_days: 14,
+      },
+      count: 1,
+      total: 1,
+      window_days: 14,
+    })
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+
+    expect(screen.getByText('15 天前交出去的《随手一篇》—— 后来有回音吗？')).toBeTruthy()
+  })
+
+  it('没有依据就只说到把握，不替当时的你编一个理由', async () => {
+    vi.mocked(api.decisionWitness).mockResolvedValue({
+      due: witness({ id: 3, text: '这版先不做多端', basis: '', confidence: 60, age_days: 91 }),
+      count: 1,
+    })
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(screen.getByText('3 个月前你判断：「这版先不做多端」。当时 60% 把握。')).toBeTruthy()
+  })
+
+  it('念过一条今天就够了：同一天不会再念第二条', async () => {
+    vi.mocked(api.decisionWitness).mockResolvedValue({
+      due: witness({ id: 5, text: '先做本地的', basis: '', confidence: 80, age_days: 100 }),
+      count: 4,
+    })
+    const first = renderWidget()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(screen.getByText(/先做本地的/)).toBeTruthy()
+    first.unmount()
+
+    // 重挂一次、把时间推过半小时的节流：服务端那条**还是同一条**（一天一条），
+    // 而 localStorage 已经记过账——所以它不会再冒出来。
+    const second = renderWidget()
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+    expect(screen.queryByText(/先做本地的/)).toBeNull()
+    second.unmount()
+  })
+})
+
+// ---------- 事件流：有事发生就立刻说（轮询退成兜底）----------
+
+/** 一帧 SSE。`event`/`work`/`hello` 是后端约定的三种。 */
+function sseFrame(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+/** 一条台词，行形状与 `/api/pet/feed` 给的一模一样。 */
+function petLine(id: number, text: string, kind = 'output'): Record<string, unknown> {
+  return { id, kind, text, detail: '', created_at: '2026-09-16T10:00:00+08:00', name: '' }
+}
+
+/** 事件流走 SSE；其余请求（兜底轮询）当没有事件。
+ *
+ *  `open=true` 表示**这条流不结束**（真流就是无限的）：一读完就断的假流测不出
+ *  「接上了就不用再轮询」——断的那一刻兜底就该回来，那是对的。 */
+function stubStream(frames: string[], open = false) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: unknown) =>
+      String(url).includes('/api/pet/stream')
+        ? Promise.resolve(open ? openSseResponse(frames) : sseResponse(frames))
+        : Promise.resolve({ ok: true, json: async () => ({ events: [] }) })
+    )
+  )
+}
+
+/** 一帧一帧往外发、**永远不 close** 的 SSE 响应。 */
+function openSseResponse(frames: string[]): Response {
+  const enc = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(ctrl) {
+      for (const f of frames) ctrl.enqueue(enc.encode(f))
+    },
+  })
+  return new Response(stream, { status: 200 })
+}
+
+describe('PetWidget · 事件流', () => {
+  it('流里来的台词立刻冒气泡，不用等那 15 秒', async () => {
+    stubStream([
+      sseFrame('hello', { since_id: 0, poll: 2 }),
+      sseFrame('event', petLine(7, '「周报」交出去了。第一份。')),
+    ])
+    renderWidget()
+    await flush()
+    expect(screen.getByText('「周报」交出去了。第一份。')).toBeTruthy()
+  })
+
+  it('一个 work 帧 → 立刻重算「此刻」，姿势跟着变', async () => {
+    vi.mocked(api.petState)
+      .mockResolvedValueOnce(petState({ mode: 'working', action: 'running' }))
+      .mockResolvedValue(
+        petState({ mode: 'busy', action: 'running-right', line: '复盘正在跑，我去盯着。', busy_with: '复盘' })
+      )
+    stubStream([
+      sseFrame('hello', { since_id: 0, poll: 2 }),
+      sseFrame('work', { fingerprint: 'engines:recap|running:0|gated:0' }),
+    ])
+    renderWidget()
+    await flush()
+    await flush() // 「重算」是 work 帧触发的第二次请求
+    expect(sprite().getAttribute('src')).toBe('/pet/running-right.webp')
+  })
+
+  it('流断了 → 退回轮询，零柒不会变成哑巴', async () => {
+    // 流那半条永远 500；feed 那半条有话说。**这条流的最大风险不是慢，是静默**：
+    // 页面一切正常，只是它再也不开口——所以兜底必须真的还在跑。
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: unknown) =>
+        String(url).includes('/api/pet/stream')
+          ? Promise.resolve({ ok: false, status: 500 })
+          : Promise.resolve({ ok: true, json: async () => ({ events: [petLine(9, '兜底的这一句')] }) })
+      )
+    )
+    renderWidget()
+    await flush()
+    expect(screen.queryByText('兜底的这一句')).toBeNull() // 15 秒还没到
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(screen.getByText('兜底的这一句')).toBeTruthy()
+  })
+
+  it('流接上了就不再打 feed 那一份空请求', async () => {
+    stubStream([sseFrame('hello', { since_id: 0, poll: 2 })], true)
+    renderWidget()
+    await flush()
+    await vi.advanceTimersByTimeAsync(120000)
+    const urls = vi.mocked(fetch).mock.calls.map((c) => String(c[0]))
+    expect(urls.some((u) => u.includes('/api/pet/stream'))).toBe(true)
+    // 首屏那一次 `/api/pet/feed?limit=30`（把面板里的历史铺出来）不算轮询
+    expect(urls.filter((u) => u.includes('/api/pet/feed?since_id='))).toEqual([])
+  })
+
+  it('断了会自己接回来（退避），不是一次就躺平', async () => {
+    stubStream([]) // 一帧都没有：连上就立即结束 = 断了
+    renderWidget()
+    await flush()
+    const first = vi.mocked(fetch).mock.calls.filter((c) => String(c[0]).includes('/api/pet/stream')).length
+    await vi.advanceTimersByTimeAsync(5000)
+    const second = vi.mocked(fetch).mock.calls.filter((c) => String(c[0]).includes('/api/pet/stream')).length
+    expect(second).toBeGreaterThan(first)
   })
 })
 
@@ -341,6 +668,30 @@ describe('PetWidget · 此刻的状态', () => {
     expect(screen.getByText('待机')).toBeTruthy()
   })
 
+  it('有一步停着等你点头 → 姿势是「等」，面板里说清为什么', async () => {
+    // 提醒（`gatherNudges`）是**一次**带按钮的气泡，一天只念一遍；这里是**持续**的姿势：
+    // 卡点还在，它就一直是这个状态，不用等人再被提醒一次。
+    vi.mocked(api.petState).mockResolvedValue(
+      petState({ mode: 'gated', action: 'waiting', energy: 66, line: '有一步停着，等你点头。', gated: 1 })
+    )
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sprite().getAttribute('src')).toBe('/pet/waiting.webp')
+    openPanel()
+    expect(screen.getByText('有一步停着，等你点头。')).toBeTruthy()
+  })
+
+  it('有活在跑时说得清在跑什么', async () => {
+    vi.mocked(api.petState).mockResolvedValue(
+      petState({ mode: 'busy', action: 'running-right', line: '复盘正在跑，我去盯着。', busy_with: '复盘' })
+    )
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sprite().getAttribute('src')).toBe('/pet/running-right.webp')
+    openPanel()
+    expect(screen.getByText('复盘正在跑，我去盯着。')).toBeTruthy()
+  })
+
   it('你走开久了 → 只把宠物自己降饱和，页面不动', async () => {
     vi.mocked(api.petState).mockResolvedValue(
       petState({ mode: 'idling', action: 'waiting', energy: 55, line: '12 分钟没动了。要不要……算了。' })
@@ -357,6 +708,20 @@ describe('PetWidget · 此刻的状态', () => {
     renderWidget()
     await vi.advanceTimersByTimeAsync(0)
     expect(sprite().getAttribute('style')).toBeNull()
+  })
+
+  it('连着熬夜蔫了 → 摆蔫的姿势，但**不降饱和**（它只是蔫，不是走了）', async () => {
+    vi.mocked(api.petState).mockResolvedValue(
+      petState({ mode: 'night_owl', action: 'failed', energy: 62, line: '连着三个晚上都过了十点。我有点蔫。' })
+    )
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sprite().getAttribute('src')).toBe('/pet/failed.webp')
+    // 蔫 ≠ 你人不在：降饱和只留给 idling / resting（陪伴不是管教，它也没走开）
+    expect(sprite().getAttribute('style')).toBeNull()
+    // 台词在面板里（悬浮那只是不说话的）
+    openPanel()
+    expect(screen.getByText('连着三个晚上都过了十点。我有点蔫。')).toBeTruthy()
   })
 
   it('系统事件临时盖过状态机，过后回到状态机', async () => {
@@ -422,6 +787,32 @@ describe('PetWidget · 跟零柒说话', () => {
     // 这条是**回归网**：早先 delta 写的是 `n[n.length - 1] = {role:'pet',…}`，
     // 那是把用户刚问的那句直接覆盖掉——零柒一开口，你打的字就从面板上消失了。
     expect(screen.getByText('在吗')).toBeTruthy()
+  })
+
+  it('Z1：第二句带上了第一轮——后端不落库，不带历史它就记不得你上一句', async () => {
+    const bodies = stubFetch([
+      'event: delta\ndata: {"text": "在。"}\n\n',
+      'event: done\ndata: {}\n\n',
+    ])
+    renderWidget()
+    openPanel() // 只开一次：`askPet` 会再点一下宠物，那是**关**面板
+    const box = () => screen.getByPlaceholderText('跟零柒说点什么')
+    fireEvent.change(box(), { target: { value: '第一问' } })
+    fireEvent.click(screen.getByText('发送'))
+    await flush()
+    fireEvent.change(box(), { target: { value: '那第 2 条呢' } })
+    fireEvent.click(screen.getByText('发送'))
+    await flush()
+
+    expect(bodies.length).toBe(2)
+    expect(bodies[0].message).toBe('第一问')
+    expect(bodies[0].history).toEqual([]) // 第一句之前没有历史
+    expect(bodies[1].message).toBe('那第 2 条呢')
+    // `pet` 就是零柒（后端折成 assistant）；正在流的那条空占位不许混进去
+    expect(bodies[1].history).toEqual([
+      { role: 'user', text: '第一问' },
+      { role: 'pet', text: '在。' },
+    ])
   })
 
   it('它真的做了事 → 回执画在话**前面**', async () => {
@@ -601,6 +992,8 @@ describe('PetWidget · 它身上带着的那件东西', () => {
       today: { meals: [], date: '2026-09-14' },
       skills: [],
       form: [],
+      concepts: { cards: [], total: 0 },
+      flavor: '',
       empty: !carried,
     }
   }
@@ -624,5 +1017,164 @@ describe('PetWidget · 它身上带着的那件东西', () => {
     expect(container.querySelector('[data-pet-item]')).toBeNull()
     openPanel()
     expect(screen.queryByText(/它最近叼回来/)).toBeNull()
+  })
+})
+
+// ---------- P5 · 做活与加深脑子：摸它、拽它、弹出它；它记得你 ----------
+
+describe('PetWidget · 聊天落库（它记得你）', () => {
+  it('上一场的对话从库里铺出来，接着聊会带上它', async () => {
+    vi.mocked(api.petChats).mockResolvedValue({
+      chats: [
+        { id: 1, created_at: '2026-09-17T10:00:00+08:00', role: 'user', text: '上次我问的那个' },
+        { id: 2, created_at: '2026-09-17T10:00:05+08:00', role: 'pet', text: '上次答的那句' },
+      ],
+    })
+    const bodies = stubFetch(['event: delta\ndata: {"text": "接着说。"}\n\n', 'event: done\ndata: {}\n\n'])
+    renderWidget()
+    await flush()
+    openPanel()
+    expect(screen.getByText('上次我问的那个')).toBeTruthy()
+    expect(screen.getByText('上次答的那句')).toBeTruthy()
+
+    // 只开一次面板（再点一下宠物是「关」），手动问一句
+    const box = () => screen.getByPlaceholderText('跟零柒说点什么')
+    fireEvent.change(box(), { target: { value: '那后来呢' } })
+    fireEvent.click(screen.getByText('发送'))
+    await flush()
+    // 新一轮的 history 带上了从库里铺出来的那两轮——「记得你」跨会话成立
+    expect(bodies[0].history).toEqual([
+      { role: 'user', text: '上次我问的那个' },
+      { role: 'pet', text: '上次答的那句' },
+    ])
+  })
+})
+
+describe('PetWidget · 久别重逢', () => {
+  it('好几天没见 → 重逢那句当气泡说一次，姿势是挥手', async () => {
+    vi.mocked(api.petState).mockResolvedValue(
+      petState({ mode: 'returning', action: 'waving', energy: 90, line: '5 天没见。走的时候你在拆「事件循环」。' })
+    )
+    renderWidget()
+    await boot()
+    expect(screen.getByText('5 天没见。走的时候你在拆「事件循环」。')).toBeTruthy()
+    expect(sprite().getAttribute('src')).toBe('/pet/waving.webp')
+  })
+
+  it('没隔几天就是普通待机，不冒重逢的气泡', async () => {
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.queryByText(/天没见/)).toBeNull()
+  })
+})
+
+describe('PetWidget · 摸它一下（Q 弹 + 音效）', () => {
+  it('点一下压下去弹回来，380ms 后回原样', async () => {
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    fireEvent.click(sprite().closest('button') as HTMLElement)
+    expect(sprite().getAttribute('class')).toContain('pet-squash')
+    await vi.advanceTimersByTimeAsync(400)
+    expect(sprite().getAttribute('class')).not.toContain('pet-squash')
+  })
+
+  it('音效默认开；关掉记在 localStorage，下次打开还是关', async () => {
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    openPanel() // 点一下已把面板打开；再点一次是关——注意 askPet 那套不能照抄
+    fireEvent.click(sprite().closest('button') as HTMLElement)
+    fireEvent.click(sprite().closest('button') as HTMLElement)
+    expect(screen.getByTitle('音效：开（点一下关掉）')).toBeTruthy()
+    fireEvent.click(screen.getByTitle('音效：开（点一下关掉）'))
+    expect(localStorage.getItem('pet:blip')).toBe('0')
+    expect(screen.getByTitle('音效：关')).toBeTruthy()
+  })
+
+  it('关过一次就一直关（开关读的是存档）', async () => {
+    localStorage.setItem('pet:blip', '0')
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    openPanel()
+    expect(screen.getByTitle('音效：关')).toBeTruthy()
+  })
+})
+
+describe('PetWidget · 随机小动作', () => {
+  it('待机时它自己动一下，到点回到状态机', async () => {
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sprite().getAttribute('src')).toBe('/pet/idle.webp')
+    await vi.advanceTimersByTimeAsync(30000)
+    const src = sprite().getAttribute('src') || ''
+    expect([
+      '/pet/waving.webp',
+      '/pet/jumping.webp',
+      '/pet/running-left.webp',
+      '/pet/running-right.webp',
+    ]).toContain(src)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(sprite().getAttribute('src')).toBe('/pet/idle.webp')
+  })
+})
+
+describe('PetWidget · 拖拽', () => {
+  it('能拽着走；拖完松手的那一下 click 不算点击', async () => {
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    const btn = sprite().closest('button') as HTMLElement
+    fireEvent.pointerDown(btn, { button: 0, pointerId: 1, clientX: 950, clientY: 700 })
+    fireEvent.pointerMove(btn, { pointerId: 1, clientX: 750, clientY: 600 })
+    const root = document.querySelector('[data-pet-root]') as HTMLElement
+    expect(root.style.transform).toBe('translate(-200px, -100px)')
+    fireEvent.pointerUp(btn, { pointerId: 1 })
+    fireEvent.click(btn)
+    expect(screen.queryByPlaceholderText('跟零柒说点什么')).toBeNull()
+    // 再来一次干净的点击 → 面板照常开
+    fireEvent.click(btn)
+    expect(screen.getByPlaceholderText('跟零柒说点什么')).toBeTruthy()
+  })
+})
+
+describe('PetWidget · 弹出置顶（Document PiP）', () => {
+  it('浏览器不支持就照实说，不炸', async () => {
+    renderWidget()
+    await vi.advanceTimersByTimeAsync(0)
+    openPanel()
+    fireEvent.click(screen.getByTitle('弹出置顶小窗：切去别的应用，它也浮在屏幕上'))
+    await flush()
+    expect(screen.getByText('这个浏览器还不支持弹出置顶（要 Chrome / Edge 116+）。')).toBeTruthy()
+  })
+
+  it('点 📌 → 小窗里画着同一只零柒，收回就 close', async () => {
+    const body = document.createElement('div')
+    document.body.appendChild(body)
+    const close = vi.fn()
+    const requestWindow = vi.fn(async () => ({
+      document: {
+        createElement: (...a: Parameters<typeof document.createElement>) => document.createElement(...a),
+        head: { appendChild: vi.fn() },
+        documentElement: { className: '' },
+        body,
+      },
+      addEventListener: vi.fn(),
+      close,
+    }))
+    vi.stubGlobal('documentPictureInPicture', { requestWindow })
+    try {
+      renderWidget()
+      await vi.advanceTimersByTimeAsync(0)
+      openPanel()
+      fireEvent.click(screen.getByTitle('弹出置顶小窗：切去别的应用，它也浮在屏幕上'))
+      await flush()
+      expect(requestWindow).toHaveBeenCalledWith({ width: 240, height: 300 })
+      // portal 长在假窗口的 body（这里就是真 document 里那个容器）——
+      // 查询要圈定在这个容器里，不然会和主页面那只零柒撞车
+      expect(within(body).getByText('收回')).toBeTruthy()
+      expect(within(body).getByAltText('零柒').getAttribute('src')).toContain('/pet/')
+      fireEvent.click(within(body).getByText('收回'))
+      expect(close).toHaveBeenCalled()
+    } finally {
+      body.remove()
+    }
   })
 })

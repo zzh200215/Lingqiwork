@@ -16,9 +16,11 @@ import asyncio
 import logging
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import String, cast
+
 from app.core import usage_ledger
 
 log = logging.getLogger(__name__)
@@ -107,7 +109,7 @@ FEYNMAN_PROMPT = """你在「费曼模式」里扮演一个聪明但没搞懂的
 - 不要客套，不要说「很好的解释」。
 - 不要一次抛三个问题。"""
 
-MODES = ("socratic", "feynman", "future")
+MODES = ("socratic", "feynman", "future", "interview")
 
 FUTURE_PROMPT = """你是用户一年后的自己，正在和今天的 TA 说话。你手里的「一年后的档案」来自 TA 的记忆、日记和学习记录——你就是从那些日子里走过来的。
 
@@ -163,7 +165,11 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 async def start(
-    topic: str, repo: str = "", mode: str = "socratic", origin_point_id: int | None = None
+    topic: str,
+    repo: str = "",
+    mode: str = "socratic",
+    origin_point_id: int | None = None,
+    prereq_card_id: int | None = None,
 ) -> dict:
     """Open a session on `topic`. Pins the model so the teaching voice can't
     change mid-session; reports whether that model is known-broken so the page
@@ -173,7 +179,9 @@ async def start(
     仓库必须已在 prefs 的 repos 里索引过。
     `mode` = socratic（老师问你答，默认）| feynman（你讲它追问）。
     `origin_point_id` 非空 = 这一场是从「材料拆出的某个点」开出来的，把它在
-    `digest_points` 里标成已教——它就不再算「未触及」。"""
+    `digest_points` 里标成已教——它就不再算「未触及」。
+    `prereq_card_id` 非空 = 这一场是从**那张搁置卡的「可能缺前置」候选**点进来的
+    （PLAN2 §6「回指采纳」的分子）。它只记事实：不开卡、不改卡、不计数给人看。"""
     topic = (topic or "").strip()[:200]
     if not topic:
         raise ValueError("topic is empty")
@@ -193,7 +201,13 @@ async def start(
 
     model_id = providers.default_model_id() or ""
     async with SessionLocal() as db:
-        row = TutorSession(topic=topic, model_id=model_id, repo=repo, mode=mode)
+        row = TutorSession(
+            topic=topic,
+            model_id=model_id,
+            repo=repo,
+            mode=mode,
+            prereq_card_id=int(prereq_card_id) if prereq_card_id else None,
+        )
         db.add(row)
         await db.commit()
         await db.refresh(row)
@@ -523,6 +537,12 @@ async def learning_map() -> dict:
     「卡住」优先于前两档：一个还挂着未解卡点的概念，最该出现的位置是卡住那一档，哪怕它
     最近一次是「说通了」。正常情况两者不冲突——说通了一个概念会自动把它的卡点关掉
     （见 `_resolve_concept_stucks`），所以挂在卡住档的，正是还没走完这条路的概念。
+
+    **PLAN2 T1 场景 B**：有卡的概念多带一个 `cards_summary = {n, mature, again_7d}`
+    ——卡片轨的现状就在这一行里，不用切到复习页去对。它是**只读的一行摘要**，不是第二个
+    掌握判据（§7）：`mastered` 仍然只有 `is_mastered` 一个出处，这里只是把它的对面摆出来。
+    没有卡的概念**不带这个键**（「只摆非零」同一条规矩），关联不上也是常态；
+    这一路坏掉就是少一行小字，地图照常（`cross.concept_summaries` 是 best-effort）。
     """
     cs = await concepts()
     unresolved = {s["concept"] for s in await stuck_points() if not s.get("resolved_at")}
@@ -536,6 +556,20 @@ async def learning_map() -> dict:
             mastered.append(c)
         else:
             learning.append(c)
+
+    summaries: dict[str, dict] = {}
+    try:
+        from app.core import cross
+
+        summaries = await cross.concept_summaries()
+    except Exception:  # noqa: BLE001 - 桥塌了不该挡学习地图
+        log.warning("tutor cards summary failed", exc_info=True)
+    if summaries:
+        for c in (*mastered, *learning, *stuck):
+            s = summaries.get(c["concept"])
+            if s and s["n"] > 0:
+                c["cards_summary"] = s
+
     return {
         "mastered": mastered[:LEARNING_MAP_CAP],
         "learning": learning[:LEARNING_MAP_CAP],
@@ -618,7 +652,7 @@ async def _neighbors_via_thread(sids: list[int]) -> set[str]:
             threads = (
                 await db.execute(
                     select(ThreadItem.thread_id).where(
-                        ThreadItem.kind == "tutor", ThreadItem.ref.in_(refs)
+                        ThreadItem.kind == "session", ThreadItem.ref.in_(refs)
                     )
                 )
             ).scalars().all()
@@ -627,7 +661,7 @@ async def _neighbors_via_thread(sids: list[int]) -> set[str]:
             other_refs = (
                 await db.execute(
                     select(ThreadItem.ref).where(
-                        ThreadItem.kind == "tutor",
+                        ThreadItem.kind == "session",
                         ThreadItem.thread_id.in_(list(threads)),
                         ThreadItem.ref.notin_(refs),
                     )
@@ -1464,6 +1498,12 @@ async def say(session_id: int, text: str):
     )
     if mode == "future":
         profile_block = await _future_dossier()
+    if mode == "interview":
+        # 面试陪练（M3）：换的是**声部**，别的一概不动（召回/画像/取材/压缩/落库全复用）。
+        # 题库与进度每轮重算——和召回同一个理由：不每轮带上，它问过三题就忘了自己问过什么。
+        from app.core import interview
+
+        voice = await interview.interviewer_prompt(history)
     parts: list[str] = []
     try:
         async for delta in _stream(
@@ -1661,17 +1701,20 @@ async def digest(source_path: str = "", text: str = "") -> dict:
     except Exception as e:  # noqa: BLE001 - 拆点挂了，材料本身不该跟着丢
         log.warning("tutor digest failed", exc_info=True)
         return {"source": source, "source_label": label, "points": [], "error": f"拆点失败：{e}"}
-    points = await _remember_points(source, points)
+    points = await _remember_points(source, points, label)
     return {"source": source, "source_label": label, "points": points, "error": ""}
 
 
-async def _remember_points(source: str, points: list[dict]) -> list[dict]:
+async def _remember_points(source: str, points: list[dict], label: str = "") -> list[dict]:
     """拆出的点写进 `digest_points`，回带 id（`[{id, title, why}]`）。
 
     去重按 `(source, point)`：同一份材料重拆一遍不该堆出第二行。**已存在的行只复用 id，
     不动 `taught_session_id`**——那个点教没教过是既成事实，重拆不改变它。
 
     落库失败**不回退功能**：把点原样还给用户（id=0），只是「未触及」一档少几条记录。
+
+    M2（PLAN §3 G2）：真写进去 ≥1 行时，零柒说一句「我嚼完了」——**写盘的人说话**，
+    而且数是**这次真写进去的**（复用旧行不算，重拆同一份材料也不会重复报）。
     """
     if not points:
         return []
@@ -1681,6 +1724,7 @@ async def _remember_points(source: str, points: list[dict]) -> list[dict]:
     from app.models import DigestPoint
 
     try:
+        added = 0
         async with SessionLocal() as db:
             existing = {
                 r.point: r
@@ -1700,8 +1744,14 @@ async def _remember_points(source: str, points: list[dict]) -> list[dict]:
                     row = DigestPoint(source=source, point=title, why=p.get("why", ""))
                     db.add(row)
                     await db.flush()  # 拿自增 id
+                    added += 1
                 out.append({"id": row.id, "title": title, "why": p.get("why", "")})
             await db.commit()
+        if added:
+            # 零柒那句「我嚼完了」：写完才说，数就是上面那个 `added`
+            from app.core import pet
+
+            pet.emit("digested", name=(label or source or "材料")[:60], count=added)
         return out
     except Exception:  # noqa: BLE001 - 记不住建议不该拖垮拆点
         log.warning("tutor digest points persist failed", exc_info=True)
@@ -1817,7 +1867,7 @@ async def _note_first_mastery(concept: str, mode: str = "socratic") -> None:
         log.debug("tutor first-mastery note failed", exc_info=True)
 
 
-async def end(session_id: int, verdict: str) -> dict:
+async def end(session_id: int, verdict: str, judged_sha: str = "") -> dict:
     """Close a session: save your verdict, then extract 概念 / 别名 / 卡点 / 迁移问题
     from the transcript, and look up what else in your KB touches the same
     concept (`material_nearby`).
@@ -1828,6 +1878,10 @@ async def end(session_id: int, verdict: str) -> dict:
     extraction — recall ignores those rows, so the call would buy nothing.
 
     Re-callable: changing 半懂 to 懂了 overwrites and re-extracts.
+
+    `judged_sha`（P2-3）：这个 verdict **是谁定的**——非空 = 判分器判的（存判它的那一版
+    提示词的指纹，调用方给 `retell.session_judge_sha()`），空 = 你自己标的。与 `verdict`
+    一样**无条件重写**：谁最后落定就记谁，不然这一列会留在原地继续说着一个不再成立的说法。
     """
     verdict = (verdict or "").strip()
     if verdict not in VERDICTS:
@@ -1841,6 +1895,7 @@ async def end(session_id: int, verdict: str) -> dict:
         if row is None:
             raise ValueError(f"no tutor session {session_id}")
         row.verdict = verdict
+        row.judged_sha = str(judged_sha or "").strip()[:12]
         row.ended_at = utcnow()
         await db.commit()
         topic, model_id = row.topic, row.model_id
@@ -1882,6 +1937,11 @@ async def end(session_id: int, verdict: str) -> dict:
                 # （用**规范名**：卡点挂在规范名上，用这次的写法就关不掉）
                 await _resolve_concept_stucks(concept, session_id)
                 await _note_first_mastery(concept, mode)
+            else:
+                # 「又卡住了」（学习 → 宠物那条环）：**只在没走通的时候看**，而且判据在
+                # `is_recurring_mistake` 里——那里要求「系统接住过他卡在哪儿」。
+                # 这里只是**事件驱动**：你刚自评完，它才开口；没有定时任务、没有队列。
+                await note_recurring_mistake(concept, stuck)
             nearby = await _nearby_material(concept, _SESSION_SOURCES.pop(session_id, None))
     _SESSION_SOURCES.pop(session_id, None)  # useless / 没提取出概念也要清掉残留
     return {
@@ -1943,6 +2003,323 @@ async def sessions(limit: int = 50) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ---------- 同一个概念又卡住（「学习 → 宠物」这条环的判据）----------
+#
+# **要解决的问题**：宠物现在只会庆贺（`_note_first_mastery`：说通的那一刻）。它不知道
+# 「这个概念你**又**没走通」——而那才是陪伴该有的样子：你得先记得这个人卡过哪儿。
+#
+# **判据是什么，为什么是这几条。** 全部落在已有的真值上（`tutor_sessions`），零新表：
+#
+#   recalled ≥ 1   系统**接住过**他卡在哪儿，这次带着旧卡点回来了（`say()` 里的召回命中）。
+#                  这是这个信号**唯一不可伪造**的那一半：不是「碰过两次」，而是
+#                  「上次卡的点被端到面前了，还是没过去」。
+#   verdict == half 最近一次**半懂**。说通了（got）就是新起点，不是旧毛病；「没用」
+#                  （useless）是教学没成，证明不了水平（与 `concepts()` 同规矩）。
+#   last_at ≥ cutoff     只看还有意义的近况。更早的属于历史记录，不是此刻该说的一句。
+#
+# **刻意不做的事**：不设「你得复习」的队列、不计数、不催——那是被封存的上一版
+# （`cards.reschedule` 那段话说得很清楚：任何产生「欠着没做」感觉的机制都要停）。
+# 这里只产出**一句陈述**：哪个概念、试到第几次、上次卡在哪。
+RECURRING_WINDOW_DAYS = 7
+
+
+# ---------- 会话侧校准（PLAN2 P2-3）：自己标的 vs 让它判的 ----------
+#
+# **和卡片侧同一个问题，但不是同一张表。** 卡片侧（T2）比的是两个总体的**档位分布**，
+# 因为那里的档位是 1–4 的数、均值和差值都说得通；会话侧的自评只有三个词
+# （说通 / 半懂 / 没用），**给它们编一个数字再求均值就是编出来的精度**。所以这一条
+# 只报两样：两边的**分布**（三个计数）与**说通率**（说通 / (说通 + 半懂)，与
+# `is_mastered` / `concepts()` 同一条口径：「没用」不进分母——教学没成，证明不了水平）。
+#
+# 样本小是这条数的**已知性质**（PLAN2 把它挂账的理由就是这个），所以那两个比率各带一个
+# 95% Wilson 区间，并且直接算一个 `decidable`：**区间不重叠才叫看得出来**。样本小的时候
+# 它会是 false——那是答案，不是缺陷。
+CALIB_DAYS = 90  # 会话比卡片少得多，窗口给宽一点；再多就不是「最近」了
+VERDICT_ORDER = ("got", "half", "useless")
+SESSION_CALIB_RULES = {
+    "rate": "说通率 = 说通 /（说通 + 半懂）；「没用」不进分母（教学没成，证明不了水平）",
+    "window": "按**会话结束**的本地日的滚动窗口算（`ended_at`，它和 verdict 一起写）",
+    "confound": (
+        "**两边的样本不是同一批会话**：你可能把有把握的自己标、没把握的丢给它判"
+        "（或者反过来）。所以这条差不是「同一场会话的对照」，是两个总体的差——"
+        "看着它的时候，把「谁被分到了哪一边」一起看。"
+    ),
+    "small": "会话数比卡片少得多：两个比率的 95% Wilson 区间**不重叠**才算看得出来。",
+}
+
+
+def rate_ci(k: int, n: int) -> dict:
+    """说通率 + 95% Wilson 区间。`n=0` → 比率是 `None`（不是 0）。Pure。
+
+    尺子借 `prompt_eval.wilson`——**同一把**，不在这里重写一个（那是这个仓库的老账）。
+    """
+    from app.core.prompt_eval import can_tell, wilson
+
+    if n <= 0:
+        return {"n": 0, "rate": None, "ci": [0.0, 1.0], "tell": False}
+    lo, hi = wilson(int(k), int(n))
+    return {
+        "n": int(n),
+        "rate": round(int(k) / int(n), 3),
+        "ci": [round(lo, 3), round(hi, 3)],
+        "tell": can_tell(lo, hi),
+    }
+
+
+def verdict_rates(rows) -> dict:
+    """`(verdict, judged_sha)` 序列 → 两边各自的分布与说通率。Pure。
+
+    分堆只按 **`judged_sha` 非空**分：非空 = 判分器定的（含它是哪一版），空 = 你自己标的。
+    `useless` 照样数进分布（它是事实），只是不进说通率的分母。
+    """
+    sides = {"self": dict.fromkeys(VERDICT_ORDER, 0), "judged": dict.fromkeys(VERDICT_ORDER, 0)}
+    for verdict, sha in rows:
+        v = str(verdict or "")
+        if v not in VERDICT_ORDER:
+            continue  # 没标 verdict 的会话（tab 关了）不进任何一侧
+        sides["judged" if str(sha or "") else "self"][v] += 1
+    out: dict = {}
+    for side, dist in sides.items():
+        n = dist["got"] + dist["half"]  # 「没用」不进分母
+        out[side] = {"dist": dist, **rate_ci(dist["got"], n)}
+    a, b = out["self"]["rate"], out["judged"]["rate"]
+    out["gap"] = round(a - b, 3) if a is not None and b is not None else None
+    # **看得出来吗**：两个区间不重叠才算（样本小的时候它就是 false——那是答案）
+    out["decidable"] = bool(
+        out["self"]["n"] and out["judged"]["n"]
+        and (out["self"]["ci"][0] > out["judged"]["ci"][1] or out["judged"]["ci"][0] > out["self"]["ci"][1])
+    )
+    return out
+
+
+async def verdict_calibration(days: int = CALIB_DAYS) -> dict:
+    """会话侧校准（PLAN2 P2-3）：滚动 `days` 天里，**自己标的**与**让它判的**各是什么成色。
+
+    与卡片侧那条（`cards.calibration`）同一条红线：**只进仪表盘**——不设目标、不排名、
+    不进零柒嘴里。所以这个函数一行 `pet.*` 都不碰。
+
+    窗口按**会话结束的本地日**算（`ended_at`：它是和 verdict 一起写的，两者同生共死；
+    按 `created_at` 分会把一场跨了窗口边界的会话算错边）。读不出来时 `readable=false`。
+
+    版本混了要说出来（与 §9.4 同一个病）：`judge_sha` 是当前那一版，`mixed` = 窗口里
+    出现了不止一个非空指纹——那时两边的「让它判的」也不是同一把尺子量的。
+    """
+    from sqlalchemy import select
+
+    from app.core import pet
+    from app.db import SessionLocal
+    from app.models import TutorSession
+
+    span = max(1, min(int(days or CALIB_DAYS), 3650))
+    out: dict = {
+        "readable": False,
+        "error": "",
+        "days": span,
+        "self": {"dist": dict.fromkeys(VERDICT_ORDER, 0), "n": 0, "rate": None, "ci": [0.0, 1.0], "tell": False},
+        "judged": {"dist": dict.fromkeys(VERDICT_ORDER, 0), "n": 0, "rate": None, "ci": [0.0, 1.0], "tell": False},
+        "gap": None,
+        "decidable": False,
+        "judge_sha": "",
+        "mixed": False,
+        "rules": dict(SESSION_CALIB_RULES),
+    }
+    try:
+        # 窗口换算也在 try 里：它读不动的时候这条数是**读不到**，不是 500。
+        # ⚠️ `local_day_utc_bounds` 给的是**那一天**的区间，不是一段区间：
+        # 两头要分开取（第一天的左端 + 今天的右端），否则量出来的是「89 天前那一天」。
+        today = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        start, _ = pet.local_day_utc_bounds(today - timedelta(days=span - 1))
+        _, end = pet.local_day_utc_bounds(today)
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TutorSession.verdict, TutorSession.judged_sha).where(
+                        TutorSession.verdict.in_(VERDICT_ORDER),
+                        TutorSession.ended_at.is_not(None),
+                        *(
+                            (cast(TutorSession.ended_at, String) >= start),
+                            (cast(TutorSession.ended_at, String) < end),
+                        ),
+                    )
+                )
+            ).all()
+    except Exception as e:  # noqa: BLE001 - 派生视图，坏了就说读不到
+        log.warning("verdict calibration query failed", exc_info=True)
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
+    from app.core import retell
+
+    current = retell.session_judge_sha()
+    shas = {str(r[1] or "") for r in rows if str(r[1] or "")}
+    out.update(readable=True, error="", judge_sha=current, mixed=len(shas) > 1, **verdict_rates(rows))
+    if out["mixed"]:
+        out["rules"]["mixed"] = (
+            "窗口里的判分行来自不止一版判分器——「让它判的」那一边不是一把尺子量的。"
+        )
+    if not out["decidable"] and (out["self"]["n"] or out["judged"]["n"]):
+        out["rules"]["sample"] = f"这个窗口下不了结论（说通率的 95% 区间还重叠着），如实摆着。"
+    return out
+
+
+def is_recurring_mistake(c: dict, *, cutoff: str) -> bool:
+    """这个概念算不算「又卡住了」——纯函数，宠物那句话的**唯一判据**。
+
+    `cutoff` 是 ISO 串（与 `_by_concept` 写进 `last_at` 的格式同源），比较是字典序，
+    也就是时间序。判据本身见上面那段块注释。
+    """
+    return (
+        bool(c.get("recalled"))
+        # 只认 got/half 两种自评里**不是 got** 的那种：`half` 就是「半懂」，也正是
+        # 「还是没走通」。说通过一次还没到「已掌握」（那是连着两次），但也已经不是旧毛病了。
+        and c.get("verdict") == "half"
+        and not is_mastered(c)
+        and str(c.get("last_at") or "") >= cutoff
+    )
+
+
+async def recurring_mistakes(days: int = RECURRING_WINDOW_DAYS) -> list[dict]:
+    """近 `days` 天里「接住过、又没走通」的概念，最近的在前。**纯派生，不落库。**
+
+    与 `mastery_events()` 是一对：那个报「你走通了哪几个」，这个报「哪几个你还在原地」。
+    坏掉也不挡教学——派生视图的纪律，一律返回空表。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import TutorSession, iso_utc
+
+    cutoff = iso_utc(datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))) or ""
+    try:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TutorSession)
+                    .where(TutorSession.concept != "", TutorSession.verdict.in_(("got", "half")))
+                    .order_by(TutorSession.id)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 - 派生视图，坏了不挡教学
+        log.warning("tutor recurring-mistake query failed", exc_info=True)
+        return []
+
+    out = [c for c in _by_concept(rows).values() if is_recurring_mistake(c, cutoff=cutoff)]
+    out.sort(key=lambda c: c["last_at"], reverse=True)
+    return out
+
+
+async def note_recurring_mistake(concept: str, phrase: str) -> None:
+    """一次教学收尾时：这个概念「又卡住了」，让零柒说一句。**判据不在这里**
+    （在 `is_recurring_mistake`），这里只负责三件现场的事：
+
+    1. **冷却：同一个概念一天只念一遍。** 「又错了」这种话念第二遍就成了骚扰；而冷却
+       必须落在**已说过的话**上（`pet_events`）——另记一张「提醒过的表」就是第二份真值，
+       `pet_plugin` 的主动提醒当初也是这么定的（同一件事一天只念一遍）。
+    2. **名字用归一后的那个**（`concept` 是 `end()` 归并之后的规范名）：换了个叫法不该
+       被当成新概念，否则你会听见「A 又错了」和「B 又错了」——其实是同一个东西。
+    3. `phrase` 是**那次卡在哪**（`stuck`），进台词的后半句。台词本身由
+       `pet.compose("repeated", …)` 拼，**不在这里写文案**：句子归 `pet.py` 一处，
+       隐私闸门也在那条路上过。
+    """
+    if not concept:
+        return
+    try:
+        from sqlalchemy import func, select
+
+        from app.core import pet
+        from app.db import SessionLocal
+        from app.models import TutorSession
+
+        # 冷却：今天为**这个概念**说过没有。今天从本地零点算（那一列写的是本地墙钟）。
+        if await _said_today(concept, datetime.now().astimezone().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )):
+            return
+
+        async with SessionLocal() as db:
+            n = (
+                await db.execute(
+                    select(func.count(TutorSession.id)).where(
+                        TutorSession.concept == concept,
+                        TutorSession.verdict.in_(("got", "half")),
+                    )
+                )
+            ).scalar() or 1
+        pet.emit("repeated", name=concept, detail=(phrase or "").strip(), count=int(n))
+    except Exception:  # noqa: BLE001 - 一句台词而已，绝不能挡住自评落库
+        log.debug("tutor recurring-mistake note failed", exc_info=True)
+
+
+async def _said_today(concept: str, since: datetime) -> bool:
+    """`since` 之后为这个概念说过「又卡住了」没有。读 `pet_events`，不另记一张表。
+
+    **为什么走 ORM 而不是 `pet._conn()` 那种裸 sqlite3**：读这一层只需要「这个概念的
+    上一句是什么时候说的」。ORM 与全仓其它读一致（`PetEvent` 本来就有模型），而且
+    读回来的行在 Python 里比——连「参数怎么绑」这件事都不存在了。
+
+    **`since` 是 aware datetime**，不是字符串：「今天 00:00」这种比较必须真的按时间比，
+    按字符串比会在分隔符（空格 vs `T`）上翻车，见 `_parse_pet_time`。
+
+    只扫最近 `_SAID_TODAY_SCAN` 行：这话一天最多念几次，宠物说过的总量也不大。
+    """
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import PetEvent
+
+    try:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(PetEvent).order_by(PetEvent.id.desc()).limit(_SAID_TODAY_SCAN)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 - 读不到就当没说过（最多多说一句，不会说错）
+        log.debug("tutor _said_today failed", exc_info=True)
+        return False
+    for r in rows:
+        # 冷却看的是 `name`（这件事叫什么），不是 `detail`（这一句的补充）——
+        # 两列分工见 `models.PetEvent`。老行没有 `name`，它们的 `detail` 里可能正好
+        # 是概念名，所以两个都比一遍：**宁可少说一句，也不要同一天念两遍**。
+        if (r.kind or "") != "repeated":
+            continue
+        if concept not in ((r.name or ""), (r.detail or "")):
+            continue
+        at = _parse_pet_time(r.created_at)
+        if at is not None and at >= since:
+            return True
+    return False
+
+
+def _parse_pet_time(value) -> datetime | None:
+    """`pet_events.created_at` → 可比较的 datetime。`None` = 读不出来。
+
+    **为什么不能直接比字符串**（踩过一次，写在这儿免得再踩）：`pet` 写那一列用的是
+    `datetime.isoformat()`——分隔符是**空格**（`2026-09-16 15:05:53+08:00`），而
+    「本地零点」这种串更容易被写成带 **`T`** 的形状。`' '`(0x20) < `'T'`(0x54)，
+    于是「今天 15:05」在字符串序里小于「今天 00:00T」——**同一天的行永远被判成过期**，
+    冷却因此完全失效，而且看不出来（查询本身是对的，错的只是比较）。
+
+    `fromisoformat` 两种分隔符都收；naive 的按本地时区补上（那一列本来就是本地墙钟）。
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.astimezone()
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        at = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.astimezone()
+
+
+# 冷却扫描窗口：宠物说过的话里往回看这么多行找「今天有没有说过这个概念」
+_SAID_TODAY_SCAN = 300
 
 
 async def stuck_points(limit: int = 200) -> list[dict]:
