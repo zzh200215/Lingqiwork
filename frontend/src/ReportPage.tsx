@@ -10,8 +10,11 @@
  *
  *  - **生成面板**：点页头「写一份报告」展开（`newSignal` 推信号进来，同 `PromptLibrary` 的写法）。
  *    体裁 × 读者的定义**唯一真值在后端**，这里只管渲染。
- *  - **报告清单**：页面主体。行 = 体裁徽章 + 标题/路径 + 日期 + 常显动作。
+ *  - **报告清单**：页面主体。行 = 体裁徽章 + 标题 + 字数/日期 + 常显动作
+ *    （2026-09-26 打磨：原来那行完整路径与标题几乎逐字重复，退到 title 提示里，
+ *    字数顶上来——「这份交出去有多重」才是清单上唯一一眼看得见的事实）。
  *  - **阅读视图**：点一行进来（**页内切换，不跳路由**），三栏 = 大纲 / 正文 / 引用。
+ *    整块在 `ReportReader.tsx`（滚动高亮的大纲、右栏的文档事实都在那边）。
  *
  *  ## 「点开」为什么不再跳笔记页
  *
@@ -20,16 +23,18 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { PenLine } from 'lucide-react'
 
 import { api, type DeliverCatalogue, type DeliverTemplate, type MaterialHit, type WorkOutput } from './api'
 import AttachToThread from './AttachToThread'
 import DeliverOutlineBox from './DeliverOutlineBox'
 import DeliverTemplateEditor from './DeliverTemplateEditor'
 import EmptyHint from './EmptyHint'
-import FeedbackButtons from './FeedbackButtons'
 import InjectedLine from './InjectedLine'
-import { Markdown, outlineOf, reportMarkdown, SourceList, type CiteSource } from './markdown'
+import type { CiteSource } from './markdown'
 import { KIND_BADGE } from './OutputCard'
+import ReportReader from './ReportReader'
+import DeliverSteps, { ReportActions, ReportPreview, StepHead } from './ReportFlow'
 import RunPanel, { type RunPhase } from './RunPanel'
 import { streamDeliver, type DeliverReport, type ReportDraft } from './stream'
 import { humanErr } from './workData'
@@ -68,6 +73,11 @@ function stripFrontMatter(md: string): string {
   return nl < 0 ? md : md.slice(nl + 1).replace(/^\n+/, '')
 }
 
+/** 报告清单的**列网格**：渐变列头与每一行共用同一份模板，对齐是结构保证的，
+ *  不是肉眼对出来的（体裁 / 标题 / 字数 / 日期 / 操作）。 */
+const LIST_GRID =
+  'grid grid-cols-[3rem_minmax(0,1fr)_5rem_3rem_auto] items-center gap-3'
+
 export default function ReportPage({
   newSignal,
   outputs,
@@ -93,6 +103,9 @@ export default function ReportPage({
   const [msg, setMsg] = useState('')
   /** 交付流的**阶段**。阶段归阶段、文案归文案：六态交给 `RunPanel`，文案留给 `msg`。 */
   const [phase, setPhase] = useState<RunPhase | 'idle'>('idle')
+  /** 分步可视走到哪一格（取材/写作/完成）。与 `phase` 分开：六态是 RunPanel 的通用
+   *  状态机，这三格是交付流自己的流程形状（方案 §二-2）。 */
+  const [stage, setStage] = useState<'gather' | 'write' | 'done'>('gather')
   /** 失败原因。与 `msg` 分开：`msg` 是**过程中的状态话**，这个才是**出错了**。 */
   const [runErr, setRunErr] = useState('')
   const [pinned, setPinned] = useState<{ spec: string; title: string }[]>([])
@@ -119,6 +132,10 @@ export default function ReportPage({
    *  用 ref 不用 state：它只在**点下去的那一刻**被读一次，而「重试」必须复用上一次那份
    *  ——放进 state 的话重试会读到一个还没提交的值。 */
   const outlineRef = useRef<string[]>([])
+  /** 带要求重写（参考 AI-Report 的逐章「重新生成 + 自定义提示词」，收成整份一份）：
+   *  同题目、同材料、同提纲，只换这次的一句话要求。ref 与 outlineRef 同一个道理——
+   *  重试必须复用上一次的要求；正常生成路径会在点下去时把它清空。 */
+  const extraRef = useRef('')
 
   // ---------- 体裁模板（§8.1 行2） ----------
   /** 开着的编辑器：`{}` = 新建，带 `id` = 改一个已有的，`null` = 收着。
@@ -127,6 +144,8 @@ export default function ReportPage({
 
   // ---------- 清单 / 阅读视图 ----------
   const [filter, setFilter] = useState('')
+  /** 清单的标题/路径搜索。客户端过滤——清单数据本来就在手上，不必为两个字发请求。 */
+  const [query, setQuery] = useState('')
   /** 正在阅读的那一份。**页内切换不跳路由**（方案 §8.1）。 */
   const [reading, setReading] = useState<{ o: WorkOutput; md: string; sources: CiteSource[] } | null>(null)
   const [readErr, setReadErr] = useState('')
@@ -204,6 +223,7 @@ export default function ReportPage({
     setOutlineErr('')
     setMsg('取材中…')
     setPhase('planning')
+    setStage('gather')
     try {
       const r = await streamDeliver(
         t,
@@ -215,18 +235,21 @@ export default function ReportPage({
           if (event === 'gathering') {
             setMsg('在你自己的材料里找…')
             setPhase('planning')
+            setStage('gather')
           } else if (event === 'sources') {
             // 方案 §二-2：**「已找到 N 个来源」**——N 是这一帧的全部信息量。
             // 只说「材料到手」的话，这条状态行在「找到 1 条」和「找到 12 条」时一模一样。
             const n = ((data.sources ?? []) as unknown[]).length
             setMsg(`已找到 ${n} 个来源，开始写…`)
             setPhase('progress')
+            setStage('write')
           } else if (event === 'skills') {
             // S1：命中即注入。只说事实——没命中这一帧根本不发
             setInjected(((data.skills ?? []) as unknown[]).map(String))
           } else if (event === 'writing') {
             setMsg('成文中…')
             setPhase('progress')
+            setStage('write')
           } else if (event === 'draft') {
             // draft 一帧帧来，正文边生成边渲染；`report` 到了才算数。
             // 方案 §二-2 的**「正在写第几节」**：数得出的那一节就是**最后那一节**
@@ -235,18 +258,22 @@ export default function ReportPage({
             const secs = (data.sections ?? []) as ReportDraft['sections']
             setMsg(secs.length ? `正在写第 ${secs.length} 节…` : '')
             setPhase('streaming')
+            setStage('write')
             setDraft({ title: String(data.title ?? ''), sections: secs })
           }
         },
         ctl.signal,
         pinned.map((p) => p.spec),
         // 定稿的提纲。**空数组 = 没走提纲**（短稿一键直出，或长稿里点了「直接写」）。
-        outlineRef.current
+        outlineRef.current,
+        // 带要求重写的那句话（正常生成为空；重试按 ref 复用——与提纲同一口径）
+        extraRef.current
       )
       if (r.ok && r.report) {
         setReport(r.report)
         setMsg('')
         setPhase('done')
+        setStage('done')
       } else {
         setMsg('')
         setRunErr(r.error || '成文失败')
@@ -273,6 +300,13 @@ export default function ReportPage({
     setMsg('')
     setPhase('idle')
   }, [])
+
+  /** 带要求重写：同题目/同材料/同提纲，只把这句话要求交给这一次成文。extraRef 让
+      「重试」复用同一句话（与提纲同一个口径）；正常生成的路径都把它清空。 */
+  const doRewrite = (text: string) => {
+    extraRef.current = text
+    void run()
+  }
 
   // ---------- 体裁模板（§8.1 行2） ----------
 
@@ -371,12 +405,14 @@ export default function ReportPage({
       return
     }
     outlineRef.current = names
+    extraRef.current = ''
     void run()
   }
 
   /** 「直接写」：不要提纲，照体裁默认结构写。 */
   const writeDirect = () => {
     outlineRef.current = []
+    extraRef.current = ''
     void run()
   }
 
@@ -419,6 +455,7 @@ export default function ReportPage({
     setOutline(null)
     setOutlineErr('')
     outlineRef.current = []
+    extraRef.current = ''
     window.scrollTo({ top: 0 })
   }, [])
 
@@ -454,9 +491,15 @@ export default function ReportPage({
   }))
   const shown = useMemo(() => {
     const g = FILTER_GROUPS.find((x) => x.key === filter)
-    if (!g || !g.kinds.length) return outputs
-    return outputs.filter((o) => g.kinds.includes(o.kind))
-  }, [outputs, filter])
+    let rows = outputs
+    if (g && g.kinds.length) rows = rows.filter((o) => g.kinds.includes(o.kind))
+    const q = query.trim().toLowerCase()
+    if (q)
+      rows = rows.filter(
+        (o) => o.title.toLowerCase().includes(q) || o.path.toLowerCase().includes(q)
+      )
+    return rows
+  }, [outputs, filter, query])
 
   /** 这一种体裁走哪一模。**判据来自后端**（`catalogue().genres[].long`），前端不猜。
    *  体裁还没拉到时不摆提纲那套控件——宁可少一个按钮，也不要摆一个按下去不知道会怎样的。 */
@@ -486,110 +529,23 @@ export default function ReportPage({
     URL.revokeObjectURL(url)
   }, [])
 
-  // ---------- 阅读视图（页内切换，不跳路由） ----------
+  // ---------- 阅读视图（页内切换，不跳路由；三栏与滚动高亮在 ReportReader） ----------
   if (reading) {
-    const outline = outlineOf(reading.md)
     return (
-      <section data-report-reader className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => {
-              readSeq.current++ // 作废还在路上的那一次拉取
-              setReading(null)
-              setReadErr('')
-            }}
-            className="shrink-0 rounded-full border border-neutral-300 px-2.5 py-0.5 text-xs text-neutral-600 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-300"
-          >
-            ← 返回清单
-          </button>
-          <span className={`shrink-0 rounded border px-1.5 py-0.5 text-xs ${KIND_BADGE[reading.o.kind]}`}>
-            {reading.o.label}
-          </span>
-          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-800 dark:text-neutral-100">
-            {reading.o.title}
-          </h2>
-          <button onClick={() => void copyText(reading.md)} className={ROW_BTN}>
-            {copied ? '已复制' : '复制全文'}
-          </button>
-          <button
-            onClick={() => exportMd(reading.o.title, reading.o.path, reading.md)}
-            className={ROW_BTN}
-          >
-            导出 md
-          </button>
-          <button onClick={() => rewriteAs(reading.o)} title="拿它当材料，换个体裁重写" className={ROW_BTN}>
-            改写成
-          </button>
-          <Link
-            to={`/notes?path=${encodeURIComponent(reading.o.path)}`}
-            className={ROW_BTN}
-            title="在笔记页里打开这份文件（要改原文时用）"
-          >
-            在 vault 里打开
-          </Link>
-        </div>
-
-        {readErr ? (
-          <p data-report-read-err className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-            {readErr}
-          </p>
-        ) : null}
-
-        <div className="wb-card p-5">
-          <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)_260px]">
-            {/* 左栏：大纲导航。窄屏不占位（方案 §七：右栏无内容时网格轨道不得预留）。 */}
-            {outline.length > 1 ? (
-              <nav className="hidden xl:block">
-                <p className="pb-2 text-xs text-neutral-400">大纲</p>
-                <ul className="space-y-1 border-l border-neutral-200 dark:border-neutral-800">
-                  {outline.map((h, i) => (
-                    <li key={`${h.id}-${i}`}>
-                      <a
-                        href={`#${h.id}`}
-                        className={`block truncate border-l-2 border-transparent pl-2 text-xs text-neutral-500 transition-colors hover:border-teal-400 hover:text-teal-700 dark:text-neutral-400 dark:hover:text-teal-300 ${
-                          h.level === 3 ? 'pl-4' : ''
-                        }`}
-                        title={h.text}
-                      >
-                        {h.text}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </nav>
-            ) : null}
-
-            {/* 中栏：正文。三种情形分开——**读到了**（渲染）/ **读不到**（上面那条错误条
-                已经说了，这里一个字都不补，免得同一件事说两遍）/ **还在读**。
-                最后那种不能和「读不到」混在一起：混了就会出现「错误条 + 正在读正文…」同屏。 */}
-            <div className="min-w-0">
-              {reading.md ? (
-                <Markdown withAnchors>{reading.md}</Markdown>
-              ) : readErr ? null : (
-                <p className="text-sm text-neutral-400">正在读正文…</p>
-              )}
-              {reading.o.path ? (
-                <p className="pt-3 text-xs text-neutral-400">{reading.o.path}</p>
-              ) : null}
-            </div>
-
-            {/* 右栏：引用来源。**清单里那一份不带 sources**（读的是 vault 里的文件本身，
-                正文里是 `[1]` 这种纯文本），所以这里只解释规矩，不硬凑一份来源表。 */}
-            <aside className="hidden xl:block">
-              <p className="pb-2 text-xs text-neutral-400">引用</p>
-              {reading.sources.length ? (
-                <SourceList sources={reading.sources} />
-              ) : (
-                <p className="text-xs leading-relaxed text-neutral-400">
-                  这一份是从 vault 里读出来的原文，没带来源表。
-                  <br />
-                  刚生成完那一屏里，正文的 <code className="text-neutral-500">[n]</code> 点得回原材料。
-                </p>
-              )}
-            </aside>
-          </div>
-        </div>
-      </section>
+      <ReportReader
+        reading={reading}
+        readErr={readErr}
+        copied={copied}
+        onClose={() => {
+          readSeq.current++ // 作废还在路上的那一次拉取
+          setReading(null)
+          setReadErr('')
+        }}
+        onCopy={(md) => void copyText(md)}
+        onExport={exportMd}
+        onRewrite={rewriteAs}
+        onError={onError}
+      />
     )
   }
 
@@ -599,12 +555,44 @@ export default function ReportPage({
       {genOpen && catalogue ? (
         <section
           data-report-panel
-          className="wb-card-hero space-y-3 rounded-lg p-5"
+          /* 深色玻璃（参考 SmartBrief 的面板质感）：半透明深底 + backdrop-blur，
+              两团 teal/emerald 辉光用 background-image 画在同一层——不另起 DOM。
+              底色不是中性灰黑（`neutral-900`），是**带青调的墨色**（`#0b201e`）：
+              辉光、渐变按钮、表头同属一个色族，面板才像长在这一页上的，
+              而不是一块外来的深灰贴在白纸上。
+              面板里的**配置控件**走玻璃芯片（白 5% 底 / 白 15% 边），
+              提纲区 / RunPanel / 成品预览保持白底「纸面」：深色框手、浅色内容，
+              读长文的对比度不受这份炫技影响。 */
+          className="space-y-3 rounded-lg border border-teal-200/15 bg-[#0b201e]/90 p-5 backdrop-blur-xl [background-image:radial-gradient(40rem_12rem_at_10%_-20%,rgba(45,212,191,0.34),transparent_62%),radial-gradient(32rem_14rem_at_98%_120%,rgba(52,211,153,0.26),transparent_58%),radial-gradient(24rem_10rem_at_70%_-30%,rgba(94,234,212,0.12),transparent_60%)]"
         >
+          {/* 面板头：图标 + 标题 + 收起。原来这块只能开不能收——摊开就一直占着首屏，
+              把清单顶下去想收都收不掉。收起归这一层自己管（页头按钮只管推开）。 */}
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2.5 text-sm font-semibold text-white">
+              <span className="wb-chip h-7 w-7 rounded-lg bg-teal-400/20 text-teal-300">
+                <PenLine className="h-4 w-4" />
+              </span>
+              写一份报告
+              <span className="text-xs font-normal text-neutral-400">
+                三步：定体裁 → 想题目 → 出成稿
+              </span>
+            </h2>
+            <button
+              onClick={() => setGenOpen(false)}
+              title="收起面板"
+              className="shrink-0 rounded-full border border-white/20 px-2.5 py-0.5 text-xs text-neutral-300 transition-colors hover:border-white/40 hover:text-white"
+            >
+              收起
+            </button>
+          </div>
+
+          <StepHead n={1} title="体裁与读者" hint="体裁定结构与篇幅，读者定详略与口气" />
+
           {/* 行1：体裁。**自定义模板也在这一排**——它是体裁，不是别的东西；结构只能由
               一处决定，所以这里不摆第二个「模板选择器」（两处选会互相打架）。
               自定义那些用**虚线边框**区分（不靠颜色：颜色在这个仓里都是有语义的）。 */}
           <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-neutral-400">体裁</span>
             {catalogue.genres.map((g) => (
               <button
                 key={g.id}
@@ -616,10 +604,10 @@ export default function ReportPage({
                   clearOutlineFor()
                 }}
                 title={g.custom ? '自定义模板' : undefined}
-                className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
                   genre === g.id
-                    ? KIND_BADGE.deliver
-                    : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
+                    ? 'border-teal-300 bg-teal-500/20 font-medium text-teal-200'
+                    : 'border-white/15 bg-white/5 text-neutral-300 hover:border-teal-400/50 hover:text-teal-200'
                 } ${g.custom ? 'border-dashed' : ''}`}
               >
                 {g.label}
@@ -635,10 +623,10 @@ export default function ReportPage({
               <button
                 key={a.id}
                 onClick={() => setAudience(a.id)}
-                className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
                   audience === a.id
-                    ? 'border-teal-400 text-teal-700 dark:border-teal-600 dark:text-teal-300'
-                    : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
+                    ? 'border-teal-400 bg-teal-500/20 font-medium text-teal-200'
+                    : 'border-white/15 bg-white/5 text-neutral-300 hover:border-teal-400/50 hover:text-teal-200'
                 }`}
               >
                 {a.label}
@@ -649,7 +637,7 @@ export default function ReportPage({
             <button
               data-template-new
               onClick={() => setEditing({})}
-              className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
+              className="rounded-full border border-white/15 px-2 py-0.5 text-xs text-neutral-300 transition-colors hover:border-teal-400/50 hover:text-teal-200"
             >
               ＋ 新建模板
             </button>
@@ -658,7 +646,7 @@ export default function ReportPage({
                 data-template-edit
                 onClick={() => void editCurrentTemplate()}
                 title={`改「${currentCustom.label}」这份模板`}
-                className="rounded-full border border-dashed border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
+                className="rounded-full border border-dashed border-white/15 px-2 py-0.5 text-xs text-neutral-300 transition-colors hover:border-teal-400/50 hover:text-teal-200"
               >
                 编辑这份模板
               </button>
@@ -677,6 +665,8 @@ export default function ReportPage({
             />
           ) : null}
 
+          <StepHead n={2} title="题目与材料" hint="写什么；要重点用哪几份材料，就钉进来" />
+
           {/* 行3：题目 + 生成。
               长稿那颗按钮出的是**提纲**（不是成文），所以它照实叫「出提纲」——按钮说
               「生成」而给出提纲，等于骗一次点击。短稿一键直出，仍叫「生成」。 */}
@@ -685,16 +675,22 @@ export default function ReportPage({
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void (longMode ? makeOutline() : run())
+                if (e.key === 'Enter') {
+                  extraRef.current = ''
+                  void (longMode ? makeOutline() : run())
+                }
               }}
               placeholder="写什么？（例：这周的 RAG 调研）"
-              className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-neutral-400 focus:border-teal-400 dark:border-neutral-700 dark:bg-neutral-900"
+              className="min-w-0 flex-1 rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white outline-none placeholder:text-neutral-500 focus:border-teal-400/60"
             />
             <button
               data-report-go
-              onClick={() => void (longMode ? makeOutline() : run())}
+              onClick={() => {
+                extraRef.current = ''
+                void (longMode ? makeOutline() : run())
+              }}
               disabled={!topic.trim() || busy || outlineBusy}
-              className="shrink-0 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-700 disabled:opacity-40"
+              className="shrink-0 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-400 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-emerald-500/25 transition-all hover:brightness-110 disabled:opacity-40 dark:shadow-none"
             >
               {longMode
                 ? outlineBusy
@@ -712,13 +708,13 @@ export default function ReportPage({
               <span
                 key={p.spec}
                 title={p.spec}
-                className="flex items-center gap-1 rounded-full border border-teal-300 px-2 py-0.5 text-xs text-teal-700 dark:border-teal-600 dark:text-teal-300"
+                className="flex items-center gap-1 rounded-full border border-teal-400/40 bg-teal-500/10 px-2 py-0.5 text-xs text-teal-200"
               >
                 <span className="max-w-[220px] truncate">{p.title}</span>
                 <button
                   onClick={() => setPinned((c) => c.filter((x) => x.spec !== p.spec))}
                   title="取消钉住"
-                  className="text-teal-500 hover:text-rose-500"
+                  className="text-teal-300 hover:text-rose-400"
                 >
                   ✕
                 </button>
@@ -726,7 +722,7 @@ export default function ReportPage({
             ))}
             <button
               onClick={() => setPinOpen((v) => !v)}
-              className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-teal-300 hover:text-teal-600 dark:border-neutral-700 dark:text-neutral-400"
+              className="rounded-full border border-white/15 px-2 py-0.5 text-xs text-neutral-300 transition-colors hover:border-teal-400/50 hover:text-teal-200"
             >
               {pinOpen ? '收起' : '＋ 钉一条材料'}
             </button>
@@ -743,12 +739,12 @@ export default function ReportPage({
                     if (e.key === 'Enter') void searchPin()
                   }}
                   placeholder="在你自己的材料里搜一条…"
-                  className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-xs outline-none placeholder:text-neutral-400 focus:border-teal-400 dark:border-neutral-700 dark:bg-neutral-900"
+                  className="min-w-0 flex-1 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs text-white outline-none placeholder:text-neutral-500 focus:border-teal-400/60"
                 />
                 <button
                   onClick={() => void searchPin()}
                   disabled={pinBusy || !pinQuery.trim()}
-                  className="shrink-0 rounded-lg border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+                  className="shrink-0 rounded-lg border border-white/15 px-2.5 py-1 text-xs text-neutral-300 transition-colors hover:border-teal-400/50 hover:text-teal-200 disabled:opacity-40"
                 >
                   {pinBusy ? '搜…' : '搜'}
                 </button>
@@ -760,7 +756,7 @@ export default function ReportPage({
                       <button
                         onClick={() => addPin(h)}
                         title={h.text}
-                        className="block w-full truncate rounded px-1.5 py-1 text-left text-xs text-neutral-600 transition-colors hover:bg-teal-50 hover:text-teal-700 dark:text-neutral-300 dark:hover:bg-teal-500/10"
+                        className="block w-full truncate rounded px-1.5 py-1 text-left text-xs text-neutral-300 transition-colors hover:bg-white/10 hover:text-teal-200"
                       >
                         {h.title || h.source}
                       </button>
@@ -769,6 +765,12 @@ export default function ReportPage({
                 </ul>
               ) : null}
             </div>
+          ) : null}
+
+          {/* 步骤③的落点：提纲确认区、运行面板、成品。没走到这一步时整个不出现——
+              空摆一个「成稿」格子只会让人问「这里怎么什么都没有」。 */}
+          {outline || phase !== 'idle' ? (
+            <StepHead n={3} title="成稿" hint="提纲点头后才取材成文；过程与成品都落在这里" />
           ) : null}
 
           {/* 行5：提纲确认区（§8.1 长稿模式才有）。逐条可删可改，点头后才去取材成文——
@@ -807,49 +809,26 @@ export default function ReportPage({
               }
               footer={
                 report ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      onClick={() => void save()}
-                      disabled={busy || !!saved}
-                      className="rounded-full border border-teal-300 px-2.5 py-0.5 text-xs text-teal-700 transition-colors hover:bg-teal-100 disabled:opacity-40 dark:border-teal-600 dark:text-teal-300 dark:hover:bg-teal-500/20"
-                    >
-                      {saved ? '已存进 vault' : busy ? '保存中…' : '存进 vault'}
-                    </button>
-                    {report ? (
-                      <>
-                        <button
-                          onClick={() => void copyText(reportMarkdown(report))}
-                          className={ROW_BTN}
-                        >
-                          {copied ? '已复制' : '复制全文'}
-                        </button>
-                        <button
-                          onClick={() => exportMd(report.title, saved, reportMarkdown(report))}
-                          className={ROW_BTN}
-                        >
-                          导出 md
-                        </button>
-                      </>
-                    ) : null}
-                    {saved ? (
-                      <Link
-                        to={`/notes?path=${encodeURIComponent(saved)}`}
-                        className="inline-flex items-center gap-1 rounded-full border border-emerald-300 px-2 py-0.5 text-xs text-emerald-700 transition-colors hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
-                      >
-                        已写好《{report?.title || saved}》· 查看
-                      </Link>
-                    ) : null}
-                    <FeedbackButtons
-                      kind="deliver"
-                      promptSha={report.prompt_sha}
-                      modelId={report.model_id}
-                      artifactRef={saved}
-                      injected={injected}
-                    />
-                  </div>
+                  /* 操作行与「带要求重写」的输入行在 `ReportFlow.tsx`——这一块自己就有
+                      百来行，ReportPage 装不下了；extraRef 留在页面（run 要读它）。 */
+                  <ReportActions
+                    report={report}
+                    saved={saved}
+                    busy={busy}
+                    copied={copied}
+                    onSave={() => void save()}
+                    onCopy={(md) => void copyText(md)}
+                    onExport={exportMd}
+                    onRewrite={doRewrite}
+                    onError={onError}
+                    injected={injected}
+                  />
                 ) : undefined
               }
             >
+              {/* 分步可视（方案 §二-2）：整条流程走到哪了，扫一眼就够；
+                  细节仍在 RunPanel 的状态行里（找到几个来源 / 写到第几节）。 */}
+              <DeliverSteps step={stage} />
               {injected.length ? (
                 <InjectedLine
                   names={injected}
@@ -857,16 +836,9 @@ export default function ReportPage({
                 />
               ) : null}
               {report || draft ? (
-                <div className="rounded-lg border border-teal-200/70 bg-white p-3 dark:border-teal-500/20 dark:bg-neutral-900/60">
-                  <Markdown sources={report?.sources}>{reportMarkdown(report ?? draft!)}</Markdown>
-                  {report ? (
-                    <SourceList
-                      sources={report.sources}
-                      used={report.used}
-                      className="border-teal-200/70 dark:border-teal-500/20"
-                    />
-                  ) : null}
-                </div>
+                /* 成品预览卡（正文 + 引用栏 + 文风扫描）在 `ReportFlow.tsx`——
+                    这张「纸」自己就有几十行，ReportPage 装不下了。 */
+                <ReportPreview report={report} draft={draft} />
               ) : null}
             </RunPanel>
           ) : null}
@@ -905,6 +877,15 @@ export default function ReportPage({
                 {g.label} {g.n}
               </button>
             ))}
+            {/* 标题/路径搜索：清单是本页已到手的数据，过滤在客户端做。
+                压到筛选 chips 的同一行右端——它是「找某一篇」的工具，不配占一整行。 */}
+            <input
+              data-report-search
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜标题或路径…"
+              className="ml-auto w-44 rounded-lg border border-neutral-300 bg-white px-2.5 py-1 text-xs outline-none placeholder:text-neutral-400 focus:border-teal-400 dark:border-neutral-700 dark:bg-neutral-900"
+            />
           </div>
         ) : null}
 
@@ -918,37 +899,83 @@ export default function ReportPage({
           </div>
         ) : shown.length === 0 ? (
           <div className="p-4">
-            <EmptyHint title="这一类还没有" hint="换个筛选看看，或点右上写一份。" />
+            {query.trim() ? (
+              /* 搜出来是空的与「这一类还没有」是两件事：前者给一个就地清掉搜索的出口，
+                  不用让人自己找到那颗 ×（其实输入框里也没有 ×）。 */
+              <EmptyHint
+                title="没有匹配的报告"
+                hint={`没有标题或路径带「${query.trim()}」的。`}
+                action={
+                  <button
+                    onClick={() => setQuery('')}
+                    className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-teal-300 hover:text-teal-600 dark:border-neutral-700 dark:text-neutral-300"
+                  >
+                    清掉搜索
+                  </button>
+                }
+              />
+            ) : (
+              <EmptyHint title="这一类还没有" hint="换个筛选看看，或点右上写一份。" />
+            )}
           </div>
         ) : (
-          <ul className="divide-y divide-neutral-100 dark:divide-neutral-800/70">
-            {shown.map((o) => (
-              <li key={o.path} className="flex items-center gap-3 px-4 py-2.5">
-                <span className={`shrink-0 rounded border px-1.5 py-0.5 text-xs ${KIND_BADGE[o.kind]}`}>
-                  {o.label}
-                </span>
-                <button
-                  onClick={() => void openReport(o)}
-                  title={o.title}
-                  className="min-w-0 flex-1 text-left"
+          <>
+            {/* 渐变列头（参考 SmartBrief 的表格头）：teal 语义色打底、白字小标题。
+                列与行共用 `LIST_GRID` 这一份网格模板——对齐由结构保证，不靠肉眼。 */}
+            <div
+              className={`${LIST_GRID} border-b border-teal-700/40 bg-gradient-to-r from-teal-600 to-emerald-500 px-4 py-2 text-xs font-medium text-white`}
+            >
+              <span className="text-center">体裁</span>
+              <span>标题</span>
+              <span className="text-right">字数</span>
+              <span className="text-right">日期</span>
+              <span className="text-right">操作</span>
+            </div>
+            <ul className="divide-y divide-neutral-100 dark:divide-neutral-800/70">
+              {shown.map((o) => (
+                /* 单行：徽章 | 标题 | 字数 | 日期 | 动作。原来标题下挂一行完整路径，
+                    与标题几乎逐字重复（日期还在路径里又出现了一次）；路径退到 title
+                    提示里，字数顶上来——它才是清单上唯一一眼看得见的新事实。 */
+                <li
+                  key={o.path}
+                  className={`${LIST_GRID} px-4 py-2.5 transition-colors hover:bg-neutral-50/80 dark:hover:bg-neutral-800/30`}
                 >
-                  <span className="block truncate text-sm text-neutral-700 transition-colors hover:text-violet-700 dark:text-neutral-200 dark:hover:text-violet-300">
-                    {o.title}
+                  <span
+                    className={`inline-flex w-12 justify-center rounded border py-0.5 text-xs ${KIND_BADGE[o.kind]}`}
+                  >
+                    {o.label}
                   </span>
-                  <span className="block truncate text-xs text-neutral-400">{o.path}</span>
-                </button>
-                <span className="shrink-0 text-xs text-neutral-400">{o.date.slice(5)}</span>
-                <button onClick={() => rewriteAs(o)} title="拿它当材料，换个体裁重写" className={ROW_BTN}>
-                  改写成
-                </button>
-                <AttachToThread
-                  kind="output"
-                  ref={o.path}
-                  className="shrink-0 opacity-60 transition-opacity hover:opacity-100 focus-within:opacity-100"
-                />
-              </li>
-            ))}
-          </ul>
+                  <button
+                    onClick={() => void openReport(o)}
+                    title={`${o.title} · ${o.path}`}
+                    className="min-w-0 text-left"
+                  >
+                    <span className="block truncate text-sm text-neutral-700 transition-colors hover:text-violet-700 dark:text-neutral-200 dark:hover:text-violet-300">
+                      {o.title}
+                    </span>
+                  </button>
+                  <span className="text-right text-xs tabular-nums text-neutral-400">
+                    {typeof o.chars === 'number' ? `${o.chars.toLocaleString()} 字` : ''}
+                  </span>
+                  <span className="text-right text-xs text-neutral-400">{o.date.slice(5)}</span>
+                  <span className="flex items-center justify-end gap-1.5">
+                    <button
+                      onClick={() => rewriteAs(o)}
+                      title="拿它当材料，换个体裁重写"
+                      className={ROW_BTN}
+                    >
+                      改写成
+                    </button>
+                    <AttachToThread
+                      kind="output"
+                      ref={o.path}
+                      className="shrink-0 opacity-60 transition-opacity hover:opacity-100 focus-within:opacity-100"
+                    />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
     </div>

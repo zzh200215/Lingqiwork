@@ -1348,6 +1348,9 @@ export interface WorkOutput {
   title: string
   date: string
   mtime: number
+  /** 正文字数（后端 `_chars_of`：剥 front-matter 后的非空白字符）。
+   *  `undefined` = 旧响应没带——界面就不摆这一格，不摆 0。 */
+  chars?: number
 }
 
 /** 交付（工作侧成文）：一种体裁或一种读者。定义在后端 `core/deliver.py`，前端不硬编码。 */
@@ -3590,6 +3593,32 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     }),
   /** 交付的事后见证（M5）：到点的一份 + 还有几份在等着（nudge 的第 6 个来源）。 */
   deliverWitness: () => request<DeliverWitness>('/api/deliver/witness'),
+  /** GB/T 9704 公文版式 docx 导出。两种给法二选一：`path` = vault 里已落盘的那份
+   *  （阅读视图用）；`title+sections` = 生成屏上还没存的。`org` = 红头单位名
+   *  （空 = 不加红头——后端不替用户编造机关名）。文件走 blob 下载（同会话导出）。 */
+  exportWorkDocx: async (
+    body: {
+      path?: string
+      title?: string
+      sections?: { heading: string; body: string }[]
+      org?: string
+    },
+    fileName: string,
+  ): Promise<void> => {
+    const res = await fetch('/api/work/docx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error(`export failed: ${res.status}`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName.endsWith('.docx') ? fileName : `${fileName}.docx`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
 
   // ---------- 对话式教学 ----------
   /** repo 非空 = 代码库陪读：会话取材限定在该仓库；mode = socratic | feynman。

@@ -669,6 +669,9 @@ export interface DeliverReport {
   /** 这次是按哪份提纲写的（空 = 没走提纲）。**提纲不进 `prompt_sha`**：它是每一次运行的
    *  输入，不是提示词版本——算进去的话每份定稿都自成一版，满意率再也聚不起来。 */
   outline?: string[]
+  /** 文风扫描（只报告，不改写）：成稿后的 AI 腔/旁白/占位符检查结论。
+   *  `undefined` = 没扫成（旧响应或扫描挂了）——界面不摆这一块，**不摆 0**。 */
+  lint?: { count: number; items: { severity: string; label: string; excerpt: string }[] }
 }
 
 export interface DeliverDone {
@@ -693,12 +696,15 @@ export async function streamDeliver(
   /** 「加进这次产出」：钉进来的材料 spec，排在最前（§4-14） */
   pinned: string[] = [],
   /** §8.1 长稿那一模：用户在提纲确认区**定稿的小节名**。空 = 没走提纲（一键直出）。 */
-  outline: string[] = []
+  outline: string[] = [],
+  /** 带要求重写：一句话的本次运行要求（例：重点写技术方案）。与提纲同一口径——
+   *  它是这一次运行的输入，后端不把它算进 `prompt_sha` 的基准串。 */
+  extra: string = ''
 ): Promise<DeliverDone> {
   const res = await fetch('/api/deliver', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic, genre, audience, pinned, outline }),
+    body: JSON.stringify({ topic, genre, audience, pinned, outline, extra }),
     signal,
   })
   if (!res.ok || !res.body) {

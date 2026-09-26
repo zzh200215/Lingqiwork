@@ -7,12 +7,17 @@
 
 这个路由**只读**，不落库、不写盘。目录不存在就当没有（五个引擎都是拉取式，没过就跑
 过一个，目录就是空的）。
+
+2026-09-26 加了唯一的写动作：`POST /api/work/docx` 把一份报告变成 GB/T 9704 版式的
+docx（构建器在 `core/official_docx.py`）。它**不落盘**——字节直接回流，存哪是浏览器的事。
 """
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 
 from app.config import VAULT_DIR
 from app.core import ingest
@@ -63,6 +68,21 @@ def _title_of(p: Path) -> str:
     return stem[_DATE_LEN + 1 :] if _looks_dated(p.stem) else stem
 
 
+def _chars_of(text: str) -> int:
+    """正文字数：剥掉文件头元数据后数非空白字符。
+
+    交付落盘会把体裁与读者写进 front-matter（`report.save`）——那是元数据，
+    不是用户写的字，不算进去。算的是「这份交出去的东西有多长」，与前端
+    `stripFrontMatter` 同一条规矩（两边各留一份实现是历史账，规矩只此一条）。
+    """
+    if text.startswith("---\n"):
+        end = text.find("\n---", 3)
+        if end >= 0:
+            nl = text.find("\n", end + 1)
+            text = text[nl + 1 :] if nl >= 0 else ""
+    return sum(1 for c in text if not c.isspace())
+
+
 def _row(p: Path, kind: str, label: str) -> dict:
     rel = p.relative_to(VAULT_DIR).as_posix()
     stem = p.stem
@@ -70,13 +90,29 @@ def _row(p: Path, kind: str, label: str) -> dict:
     mtime = int(p.stat().st_mtime)
     if not date:  # 不是日期命名（手放的）——退回改动时间，别在界面上留个空
         date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+    # 标题与字数**一次读盘全拿到**：原来只为标题读 40 行；整读换来的字数
+    # 让清单行能说「这份有多长」，而不用前端再为每一行发一次 `readNote`。
+    text = ""
+    try:
+        text = p.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        pass
+    title = ""
+    for line in text.splitlines()[:40]:  # 标题总在前面；读 40 行还不见就认了
+        s = line.strip()
+        if s.startswith("# "):
+            title = s[2:].strip()
+            break
+    if not title:
+        title = stem[_DATE_LEN + 1 :] if _looks_dated(stem) else stem
     return {
         "kind": kind,
         "label": label,
         "path": rel,
-        "title": _title_of(p),
+        "title": title or p.stem,
         "date": date,
         "mtime": mtime,
+        "chars": _chars_of(text),
     }
 
 
@@ -168,3 +204,55 @@ async def get_audio(path: str):
     if not p.is_file():
         raise HTTPException(404, "音频不存在")
     return FileResponse(p)
+
+
+class DocxIn(BaseModel):
+    """两种给法二选一：`path` = vault 里已落盘的那份；`title+sections` = 生成屏上还没存的。"""
+
+    path: str = ""
+    title: str = ""
+    sections: list[dict] = []
+    org: str = ""
+
+
+@router.post("/docx")
+async def make_docx(body: DocxIn):
+    """GB/T 9704 公文版式 docx。**字节直接回流，不落盘**——存哪是浏览器的事。
+
+    红头（`org`）给了才加：个人工作台不替用户编造机关名。路径模式复用音频端点
+    那条 vault 越界校验——这个端点同样不该变成「读任意文件」的入口。
+    """
+    from app.core import official_docx
+
+    if body.path.strip():
+        rel = body.path.strip()
+        try:
+            p = (VAULT_DIR / rel).resolve()
+            p.relative_to(VAULT_DIR.resolve())
+        except ValueError:
+            raise HTTPException(400, "path escapes the vault") from None
+        if p.suffix.lower() != ".md" or not p.is_file():
+            raise HTTPException(404, "文件不存在")
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError as exc:
+            raise HTTPException(500, f"读不到文件：{exc}") from None
+        title, sections = official_docx.parse_markdown(text)
+    else:
+        title = body.title.strip()
+        sections = [
+            {"heading": str(s.get("heading") or "").strip(), "body": str(s.get("body") or "")}
+            for s in (body.sections or [])
+        ]
+    if not title and not any(s.get("body", "").strip() for s in sections):
+        raise HTTPException(400, "没有可导出的内容——给 path 或 title+sections")
+
+    data = official_docx.build_docx(title=title or "报告", sections=sections, org=body.org)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            # 文件名前端还会自己设一份；这里给 UTF-8 的正式名，直接访问 URL 也能拿到对的名字
+            "Content-Disposition": f"attachment; filename=report.docx; filename*=UTF-8''{quote(title or '报告')}.docx"
+        },
+    )

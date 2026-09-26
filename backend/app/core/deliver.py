@@ -595,6 +595,7 @@ async def run(
     *,
     pinned: list[str] | None = None,
     outline: list[str] | None = None,
+    extra: str = "",
     kb_fn=None,
     memory_fn=None,
     journal_fn=None,
@@ -627,6 +628,12 @@ async def run(
     except ValueError as e:
         yield "error", {"message": str(e)}
         return
+    # 带要求重写（2026-09-26）：一句话的本次运行要求（例：重点写技术方案）。与提纲同一条
+    # 口径——它是**这一次运行的输入**，拼进实际提示词、不进 `base_prompt`，`prompt_sha`
+    # 不动，质量闭环按体裁聚合不被打碎。
+    extra = (extra or "").strip()
+    if extra:
+        prompt = f"{prompt}\n\n用户对这一稿的额外要求（只管这一次）：{extra[:200]}"
 
     from app.core import providers
 
@@ -675,6 +682,29 @@ async def run(
     if rep is None:
         yield "error", {"message": "成文失败——默认模型不可用，或输出无法解析"}
         return
+    # 文风扫描：成稿后过一遍 prose_lint（AI 腔 / 旁白 / 占位符 / 空评价）——
+    # **只报告，不改写**，判定给人（与接地分同一档：界面陈述事实，不评级不拦截）。
+    # 我们的产出本来就是 Markdown，`allow_markdown=True` 按源设计豁免格式类规则。
+    # 挂了不能把一次交付变成失败（与 `skill_match.injection` 同一条纪律）——返回 None，
+    # 界面就不摆这一块（读不到 ≠ 0 处）。
+    lint: dict | None = None
+    try:
+        from app.core import prose_lint
+
+        _scan_text = "\n\n".join(
+            [f"# {rep.title}", *(f"## {s.heading}\n\n{s.body}" for s in rep.sections)]
+        )
+        _findings = prose_lint.scan("report", _scan_text, allow_markdown=True)
+        lint = {
+            "count": len(_findings),
+            "items": [
+                {"severity": f.severity, "label": f.label, "excerpt": f.excerpt}
+                for f in _findings[:8]
+            ],
+        }
+    except Exception:  # noqa: BLE001 - 扫描挂了不能让这次交付报错
+        log.warning("prose lint failed", exc_info=True)
+
     yield "report", {
         "title": rep.title,
         "sections": [{"heading": s.heading, "body": s.body} for s in rep.sections],
@@ -690,4 +720,6 @@ async def run(
         "audience": audience,
         # 这次是按哪份提纲写的（空 = 没用提纲）。界面靠它说清「你确认的那份确实生效了」。
         "outline": [str(x).strip() for x in (outline or []) if str(x or "").strip()],
+        # 文风扫描（只报告不改写）。`None` = 没扫成——界面不摆，不摆 0。
+        "lint": lint,
     }

@@ -24,6 +24,7 @@ vi.mock('./api', () => ({
     searchMaterial: vi.fn(),
     readNote: vi.fn(),
     qualityFeedback: vi.fn(),
+    exportWorkDocx: vi.fn(),
   },
 }))
 vi.mock('./stream', () => ({ streamDeliver: vi.fn() }))
@@ -69,6 +70,7 @@ const OUTPUTS: WorkOutput[] = [
     title: '第 37 周周报',
     date: '2026-09-12',
     mtime: 300,
+    chars: 2314,
   },
   {
     kind: 'research',
@@ -92,6 +94,13 @@ const REPORT = {
     genre: 'weekly',
     audience: 'self',
     outline: [],
+    lint: {
+      count: 2,
+      items: [
+        { severity: 'medium', label: 'paired-summary', excerpt: '不是为了 A 而是 B | 核对前半句是否澄清真实分歧' },
+        { severity: 'low', label: 'term-overuse', excerpt: '赋能 出现 3 次；建议替换为具体作用' },
+      ],
+    },
   },
 }
 
@@ -126,6 +135,7 @@ beforeEach(() => {
     api.deliverOutline,
     api.deliverTemplates,
     api.readNote,
+    api.exportWorkDocx,
   ]) {
     vi.mocked(m).mockReset()
   }
@@ -194,6 +204,43 @@ describe('ReportPage · 生成面板（§8.1）', () => {
     await waitFor(() => expect(phase()).toBe('done'))
     expect(seen).toEqual(['planning', 'planning', 'progress', 'progress', 'streaming'])
     expect(screen.getByText('先说结论')).toBeTruthy()
+    // 分步可视（方案 §二-2）跟着走到头：三格全亮在「完成」上
+    expect(document.querySelector('[data-deliver-steps="done"]')).toBeTruthy()
+    // 文风扫描（只报告不改写）随 report 事件到成品区：计数在折条上，条目摊开可见
+    expect(screen.getByText(/文风扫描 · 2 处建议核对/)).toBeTruthy()
+    fireEvent.click(screen.getByText(/文风扫描/))
+    expect(await screen.findByText(/paired-summary/)).toBeTruthy()
+  })
+
+  it('带要求重写：一句话要求只进这一次调用，正常生成不带它', async () => {
+    vi.mocked(streamDeliver).mockResolvedValue(REPORT)
+    renderReport()
+    await screen.findByText('周报')
+    await start()
+    await waitFor(() => expect(phase()).toBe('done'))
+    expect(vi.mocked(streamDeliver).mock.calls[0][7]).toBe('') // 正常生成为空
+
+    fireEvent.click(screen.getByText('带要求重写'))
+    fireEvent.change(screen.getByPlaceholderText('例：重点写技术方案；增加风险分析'), {
+      target: { value: '重点写技术方案' },
+    })
+    fireEvent.click(screen.getByText('重写'))
+
+    await waitFor(() => expect(vi.mocked(streamDeliver).mock.calls.length).toBe(2))
+    const second = vi.mocked(streamDeliver).mock.calls[1]
+    expect(second[7]).toBe('重点写技术方案') // 要求只进这一次
+    // 同题目、同提纲：重写走的是同一次运行的口径
+    expect(second[0]).toBe('这周的 RAG')
+    expect(second[6]).toEqual(OUTLINE.sections)
+  })
+
+  it('成品字数与约页数：折条旁看得见一份成品的规模', async () => {
+    renderReport()
+    await screen.findByText('周报')
+    await start()
+    await screen.findByText(/文风扫描/)
+    const stats = document.querySelector('[data-report-stats]')
+    expect(stats?.textContent).toMatch(/\d[\d,]* 字 · 约 \d+ 页/)
   })
 
   it('状态行说得比「材料到手」多一点：**已找到 N 个来源**（§二-2）', async () => {
@@ -213,6 +260,8 @@ describe('ReportPage · 生成面板（§8.1）', () => {
     await start()
 
     expect(await screen.findByText('已找到 3 个来源，开始写…')).toBeTruthy()
+    // 分步可视跟着事件走：sources 一到，当前格就是「写作」
+    expect(document.querySelector('[data-deliver-steps="write"]')).toBeTruthy()
     release()
     await waitFor(() => expect(phase()).toBe('done'))
   })
@@ -351,7 +400,9 @@ describe('ReportPage · 生成面板（§8.1）', () => {
         expect.anything(),
         ['notes/loop.md'],
         // 第 7 个参数是定稿的提纲（长稿那条路必带）——加参数时这条会红，是有意的
-        OUTLINE.sections
+        OUTLINE.sections,
+        // 第 8 个参数是带要求重写的那句话：正常生成为空
+        ''
       )
     )
   })
@@ -401,6 +452,20 @@ describe('ReportPage · 提纲确认（§8.1 长稿那一模）', () => {
     // 加一条
     fireEvent.click(screen.getByText('＋ 加一节'))
     expect(sectionInputs().length).toBe(3)
+    // 提纲统计：共几节随编辑实时变（参考 AI-Report 的大纲统计，只取真有的那一项）
+    expect(screen.getByText('共 3 节')).toBeTruthy()
+  })
+
+  it('提纲统计：删一节就少一节，不装作没变', async () => {
+    renderReport()
+    await screen.findByText('周报')
+    fireEvent.change(screen.getByPlaceholderText('写什么？（例：这周的 RAG 调研）'), {
+      target: { value: '这周的 RAG' },
+    })
+    fireEvent.click(screen.getByText('出提纲'))
+    await screen.findByText('就按这个写')
+    fireEvent.click(screen.getAllByTitle('删掉这一节')[0])
+    expect(screen.getByText('共 2 节')).toBeTruthy()
   })
 
   it('「就按这个写」把**定稿的**小节交给成文那一步', async () => {
@@ -428,7 +493,8 @@ describe('ReportPage · 提纲确认（§8.1 长稿那一模）', () => {
         expect.any(Function),
         expect.anything(),
         [],
-        ['本周进展', '下周计划', '风险']
+        ['本周进展', '下周计划', '风险'],
+        ''
       )
     )
   })
@@ -667,11 +733,32 @@ describe('ReportPage · 体裁模板（§8.1 行2）', () => {
 })
 
 describe('ReportPage · 报告清单（§8.1）', () => {
-  it('清单为主体：体裁徽章、标题、路径、日期都在', async () => {
+  it('清单单行化：体裁徽章、标题、字数、日期都在；路径退到 title 提示里（2026-09-26 打磨）', async () => {
     renderReport()
     expect(await screen.findByText('第 37 周周报')).toBeTruthy()
-    expect(screen.getByText('deliver/2026-09-12-weekly.md')).toBeTruthy()
+    // 路径不再作为正文出现（与标题几乎逐字重复），挂在标题按钮的 title 提示上
+    expect(screen.getByTitle('第 37 周周报 · deliver/2026-09-12-weekly.md')).toBeTruthy()
     expect(screen.getByText('asyncio 事件循环')).toBeTruthy()
+    // 字数由后端给（fixture 带了 chars）；没带 chars 的行（asyncio）不摆 0，那一格是空的
+    expect(screen.getByText('2,314 字')).toBeTruthy()
+  })
+
+  it('清单搜索：按标题过滤；搜空了有就地清掉的出口，不与「这一类还没有」混', async () => {
+    renderReport()
+    await screen.findByText('第 37 周周报')
+
+    fireEvent.change(screen.getByPlaceholderText('搜标题或路径…'), {
+      target: { value: 'asyncio' },
+    })
+    expect(screen.queryByText('第 37 周周报')).toBeNull()
+    expect(screen.getByText('asyncio 事件循环')).toBeTruthy()
+
+    fireEvent.change(screen.getByPlaceholderText('搜标题或路径…'), {
+      target: { value: '不存在的词' },
+    })
+    expect(await screen.findByText('没有匹配的报告')).toBeTruthy()
+    fireEvent.click(screen.getByText('清掉搜索'))
+    expect(await screen.findByText('第 37 周周报')).toBeTruthy()
   })
 
   it('筛选按方案的四组给计数：全部 / 研究 / 成文 / 工作流', async () => {
@@ -755,6 +842,28 @@ describe('ReportPage · 阅读视图（§8.1 阅读视图）', () => {
     renderReport()
     fireEvent.click(await screen.findByText('第 37 周周报'))
     expect(await screen.findByText(/读出来是空的/)).toBeTruthy()
+  })
+
+  it('导出 docx：红头单位当场问一次并记住，导出带上 vault 路径', async () => {
+    vi.mocked(api.readNote).mockResolvedValue({ path: 'deliver/x.md', content: MD })
+    vi.mocked(api.exportWorkDocx).mockResolvedValue(undefined)
+    renderReport()
+    fireEvent.click(await screen.findByText('第 37 周周报'))
+
+    fireEvent.click(screen.getByText('导出 docx'))
+    const input = await screen.findByPlaceholderText('红头单位（留空 = 不加红头）')
+    fireEvent.change(input, { target: { value: '某项目组' } })
+    fireEvent.click(screen.getByText('导出'))
+
+    await waitFor(() => expect(api.exportWorkDocx).toHaveBeenCalled())
+    expect(vi.mocked(api.exportWorkDocx).mock.calls[0][0]).toEqual({
+      path: 'deliver/2026-09-12-weekly.md',
+      org: '某项目组',
+    })
+    // 文件名用标题
+    expect(vi.mocked(api.exportWorkDocx).mock.calls[0][1]).toBe('第 37 周周报.docx')
+    // localStorage 记住了红头，下次不再问
+    expect(localStorage.getItem('wb-docx-org')).toBe('某项目组')
   })
 })
 

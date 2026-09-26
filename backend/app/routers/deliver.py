@@ -33,6 +33,9 @@ class DeliverIn(BaseModel):
     pinned: list[str] = Field(default_factory=list)
     # §8.1：提纲确认区定稿的小节名。空 = 没走提纲（一键直出，或用户点了「直接写」）。
     outline: list[str] = Field(default_factory=list)
+    # 带要求重写（2026-09-26）：一句话的本次运行要求。空 = 没有——与提纲同一口径，
+    # 它是**这一次运行的输入**，不进 `prompt_sha` 的基准串。
+    extra: str = ""
 
 
 class OutlineIn(BaseModel):
@@ -136,7 +139,8 @@ async def deliver_run(body: DeliverIn):
     async def gen():
         try:
             async for event, data in core.run(
-                body.genre, topic, body.audience, pinned=body.pinned, outline=body.outline
+                body.genre, topic, body.audience, pinned=body.pinned, outline=body.outline,
+                extra=body.extra,
             ):
                 yield _sse(event, data)
         except Exception as e:  # noqa: BLE001 - mid-stream, so report as an event

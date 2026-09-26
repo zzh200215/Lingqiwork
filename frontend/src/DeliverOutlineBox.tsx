@@ -56,12 +56,19 @@ export default function DeliverOutlineBox({
           // `rounded-lg border bg-white …` 正是它警告的病根——两份迟早会不一样。
           className="wb-card space-y-2 p-3"
         >
-          <p className="text-xs text-neutral-500">
-            提纲——可以改、可以删。确认之后才去取材成文。
-            {outline.title ? (
-              <span className="pl-1 text-neutral-400">拟标题：{outline.title}</span>
-            ) : null}
-          </p>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <p className="text-xs text-neutral-500">
+              提纲——可以改、可以删。确认之后才去取材成文。
+              {outline.title ? (
+                <span className="pl-1 text-neutral-400">拟标题：{outline.title}</span>
+              ) : null}
+            </p>
+            {/* 共几节随编辑实时变——加一节删一节，规模心里有数（参考 AI-Report 的大纲统计，
+                只取我们真有的那一项：节数。预计字数没有真值，不编） */}
+            <span className="shrink-0 text-xs tabular-nums text-neutral-400">
+              共 {outline.sections.length} 节
+            </span>
+          </div>
 
           {staleFor !== topic.trim() ? (
             <p data-report-outline-stale className="text-xs text-amber-600 dark:text-amber-400">
@@ -99,7 +106,7 @@ export default function DeliverOutlineBox({
             <button
               onClick={onConfirm}
               disabled={busy}
-              className="rounded-lg bg-teal-600 px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-teal-700 disabled:opacity-40"
+              className="rounded-lg bg-gradient-to-r from-teal-600 to-emerald-500 px-3.5 py-1.5 text-sm font-medium text-white shadow-sm shadow-teal-300/50 transition-all hover:brightness-110 disabled:opacity-40 dark:shadow-none"
             >
               就按这个写
             </button>

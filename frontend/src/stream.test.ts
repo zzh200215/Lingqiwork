@@ -197,6 +197,7 @@ describe('streamDeliver', () => {
             audience: 'leader',
             pinned: ['notes/a.md'],
             outline: ['本周进展', '风险'],
+            extra: '',
           }),
         })
       )

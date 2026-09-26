@@ -28,6 +28,8 @@ const WORK_MODULE = [
   'WorkPage.tsx',
   // 报告域
   'ReportPage.tsx',
+  'ReportReader.tsx',
+  'ReportFlow.tsx',
   'DeliverOutlineBox.tsx',
   'DeliverTemplateEditor.tsx',
   // 提示词域

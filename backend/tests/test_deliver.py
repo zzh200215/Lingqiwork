@@ -192,6 +192,63 @@ def test_run_without_outline_reports_an_empty_one(wired, monkeypatch):
     assert dict(events)["report"]["outline"] == []
 
 
+def test_extra_requirement_reaches_the_prompt_but_not_the_sha(wired, monkeypatch):
+    """带要求重写：`extra` 拼进**实际提示词**，但不进 `prompt_sha` 的基准串。
+
+    与提纲同一条口径——一句话要求是这一次运行的输入，不是提示词版本；算进 sha
+    的话每次带要求的重写都自成一版，满意率再也聚不起来。
+    """
+    monkeypatch.setattr("app.core.providers.default_model_id", lambda: "test-model")
+    seen: list[list[dict]] = []
+
+    async def kb(query, top_k):
+        return [{"source": "notes/a.md", "title": "A", "text": "内容A"}]
+
+    async def stream(info, model, messages):
+        seen.append(messages)
+        yield '{"title":"R","sections":[{"heading":"H","body":"B"}],"used":[1]}'
+
+    events = _run(
+        "话题",
+        kb_fn=kb,
+        memory_fn=_no_memory,
+        journal_fn=_no_journal,
+        stream_fn=stream,
+        extra="重点写技术方案",
+    )
+    report = dict(events)["report"]
+    assert "重点写技术方案" in seen[0][0]["content"]
+    from app.core import report as report_mod
+
+    assert report["prompt_sha"] == report_mod.prompt_sha(deliver.synth_prompt("weekly", "self"))
+
+
+def test_run_attaches_a_style_scan_to_the_report(wired, monkeypatch):
+    """成文后跑一遍文风扫描（只报告，不改写）：report 事件带 lint 计数与条目。
+
+    扫描器是收编的 `prose_lint`（AI 腔/旁白/占位符）；这里钉两件事：**确实跑了**
+    （正文里有「不是…而是…」就要报 paired-summary），以及结果**挂在 report 事件上**
+    一起到前端——不是另发一条事件。
+    """
+    monkeypatch.setattr("app.core.providers.default_model_id", lambda: "test-model")
+
+    async def kb(query, top_k):
+        return [{"source": "notes/a.md", "title": "A", "text": "内容A"}]
+
+    body = "这项工作不是为了应付检查而是为了推进落地。"
+    payload = '{"title":"R","sections":[{"heading":"H","body":"' + body + '"}],"used":[1]}'
+    events = _run(
+        "话题",
+        kb_fn=kb,
+        memory_fn=_no_memory,
+        journal_fn=_no_journal,
+        stream_fn=_llm(payload),
+    )
+    lint = dict(events)["report"]["lint"]
+    assert lint is not None and lint["count"] >= 1
+    assert any(item["label"] == "paired-summary" for item in lint["items"])
+
+
 def test_make_outline_asks_for_structure_only_and_gathers_nothing(wired, monkeypatch):
     """「点头后才**取材**成文」——提纲这一步一次检索都不做。
 

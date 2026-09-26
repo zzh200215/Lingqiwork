@@ -160,3 +160,73 @@ async def test_workflow_outputs_count_but_handoff_does_not(monkeypatch):
     assert [r["path"] for r in rows] == ["tasks/RAG一句话-2026-08-27-1029.md"]
     assert rows[0]["kind"] == "task" and rows[0]["label"] == "工作流"
     assert rows[0]["title"] == "RAG一句话"  # 标题取自正文，不是退化到文件名
+
+
+# ---------- GB/T 9704 docx 导出 ----------
+
+
+def _document_xml(resp) -> str:
+    """docx 是 zip：document.xml 解包出来断言内容，字节层面搜不到中文。"""
+    import io as _io
+    import zipfile
+
+    zf = zipfile.ZipFile(_io.BytesIO(resp.body))
+    return zf.read("word/document.xml").decode("utf-8")
+
+
+async def test_docx_from_sections_renders_title_org_and_body():
+    resp = await work.make_docx(
+        work.DocxIn(
+            title="第 37 周周报",
+            sections=[{"heading": "一、结论", "body": "先说结论 [1]。\n\n1. 第一条事项"}],
+            org="某项目组",
+        )
+    )
+    assert resp.status_code == 200
+    assert resp.media_type.endswith("wordprocessingml.document")
+    xml = _document_xml(resp)
+    assert "第 37 周周报" in xml
+    assert "某项目组" in xml
+    assert "一、结论" in xml
+    assert "先说结论 [1]。" in xml
+    assert "1. 第一条事项" in xml  # 数字编号是公文条款，原样保留
+
+
+async def test_docx_from_vault_path_parses_front_matter(monkeypatch):
+    vault = _scratch("vault-docx")
+    _write(
+        vault,
+        "deliver/2026-09-12-weekly.md",
+        "---\ngenre: weekly\naudience: leader\n---\n\n# 第 37 周周报\n\n## 一、结论\n\n先说结论。",
+    )
+    monkeypatch.setattr(work, "VAULT_DIR", vault)
+    resp = await work.make_docx(work.DocxIn(path="deliver/2026-09-12-weekly.md"))
+    xml = _document_xml(resp)
+    assert "第 37 周周报" in xml
+    assert "先说结论。" in xml
+    assert "genre:" not in xml  # front-matter 是元数据，不进正文
+
+
+async def test_docx_without_org_has_no_red_header_text(monkeypatch):
+    """红头单位没给就不加——个人工作台不编造机关名。"""
+    resp = await work.make_docx(work.DocxIn(title="周报", sections=[{"heading": "", "body": "正文"}]))
+    assert "FF0000" not in _document_xml(resp)
+
+
+async def test_docx_rejects_path_escaping_the_vault(monkeypatch):
+    monkeypatch.setattr(work, "VAULT_DIR", _scratch("vault-docx-esc"))
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as ei:
+        await work.make_docx(work.DocxIn(path="../../outside.md"))
+    assert ei.value.status_code == 400
+
+
+async def test_docx_rejects_empty_body():
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as ei:
+        await work.make_docx(work.DocxIn())
+    assert ei.value.status_code == 400
