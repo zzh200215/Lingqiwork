@@ -1,4 +1,4 @@
-/** 全部卡片——卡片此前**没有任何清单界面**（`api.listCards` 全前端零引用）：只有生成它们的
+﻿/** 全部卡片——卡片此前**没有任何清单界面**（`api.listCards` 全前端零引用）：只有生成它们的
  *  `CardMaker` 和复习队列。于是「卡片」这一类在「事」上没有落点可挂。
  *
  *  这里补的就是那个落点：能找、能筛、能挂到某件事上。不做批量管理——那是另一件事，
@@ -104,7 +104,7 @@ export default function CardList() {
   useDeepLink('card', open && cards !== null)
 
   return (
-    <section className="rounded-xl border border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
+    <section className="rounded-md border border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
       <button
         onClick={toggle}
         className="flex w-full items-center gap-2 text-left text-xs text-neutral-500 transition-colors hover:text-violet-600 dark:text-neutral-400"
@@ -120,11 +120,11 @@ export default function CardList() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="筛题面 / 答案 / 主题…"
-            className="w-full rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-[11px] outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+            className="w-full rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-xs outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
           />
           {/* 筛着的时候要说出来筛了什么、怎么撤——不然「怎么少了几张卡」是个查不出的问题 */}
           {topics.length > 0 ? (
-            <p data-topic-filter className="pt-1.5 text-[10px] text-sky-600 dark:text-sky-400/90">
+            <p data-topic-filter className="pt-1.5 text-xs text-sky-600 dark:text-sky-400/90">
               只看 {topics.map((t) => `「${t}」`).join(' ')} 的卡
               <button
                 onClick={() => setTopics([])}
@@ -134,9 +134,9 @@ export default function CardList() {
               </button>
             </p>
           ) : null}
-          {busy ? <p className="pt-2 text-[11px] text-neutral-400">读卡片…</p> : null}
+          {busy ? <p className="pt-2 text-xs text-neutral-400">读卡片…</p> : null}
           {!busy && cards !== null && shown.length === 0 ? (
-            <p className="pt-2 text-[11px] text-neutral-400">
+            <p className="pt-2 text-xs text-neutral-400">
               {cards.length === 0 ? '还没有卡片——在笔记页划词或 🎴 出卡。' : '没有匹配的卡片。'}
             </p>
           ) : null}
@@ -148,16 +148,16 @@ export default function CardList() {
                 <li key={c.id} id={`card-${c.id}`} className="py-1.5">
                   <div className="flex items-center gap-2">
                     <span
-                      className="min-w-0 flex-1 truncate text-[11px] text-neutral-700 dark:text-neutral-200"
+                      className="min-w-0 flex-1 truncate text-xs text-neutral-700 dark:text-neutral-200"
                       title={c.back}
                     >
                       {c.front}
                     </span>
                     {c.topic ? (
-                      <span className="shrink-0 text-[10px] text-neutral-400">{c.topic}</span>
+                      <span className="shrink-0 text-xs text-neutral-400">{c.topic}</span>
                     ) : null}
                     {c.suspended ? (
-                      <span className="shrink-0 text-[10px] text-neutral-300 dark:text-neutral-600">
+                      <span className="shrink-0 text-xs text-neutral-300 dark:text-neutral-600">
                         已搁置
                       </span>
                     ) : null}
@@ -165,7 +165,7 @@ export default function CardList() {
                       <Link
                         to={`/notes?path=${encodeURIComponent(src)}`}
                         title={src}
-                        className="shrink-0 text-[10px] text-neutral-400 transition-colors hover:text-violet-600"
+                        className="shrink-0 text-xs text-neutral-400 transition-colors hover:text-violet-600"
                       >
                         出处
                       </Link>
@@ -179,7 +179,7 @@ export default function CardList() {
                     <div className="pt-0.5">
                       {pre ? (
                         pre.candidates.length > 0 ? (
-                          <p data-prereq={c.id} className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                          <p data-prereq={c.id} className="text-xs text-neutral-500 dark:text-neutral-400">
                             可能缺前置：
                             {pre.candidates.map((k) => (
                               <Link
@@ -194,7 +194,7 @@ export default function CardList() {
                             ))}
                           </p>
                         ) : (
-                          <p data-prereq-empty={c.id} className="text-[10px] text-neutral-400">
+                          <p data-prereq-empty={c.id} className="text-xs text-neutral-400">
                             没找到可能的前置——不是每张搁置的卡都缺一段路。
                           </p>
                         )
@@ -204,7 +204,7 @@ export default function CardList() {
                           onClick={() => void loadPrereq(c.id)}
                           disabled={preBusy === c.id}
                           title="翻一翻：这张卡可能缺哪个前置概念"
-                          className="text-[10px] text-neutral-400 underline transition-colors hover:text-violet-600 disabled:opacity-40"
+                          className="text-xs text-neutral-400 underline transition-colors hover:text-violet-600 disabled:opacity-40"
                         >
                           {preBusy === c.id ? '翻…' : '可能缺前置？'}
                         </button>

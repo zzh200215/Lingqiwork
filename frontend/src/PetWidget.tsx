@@ -225,7 +225,7 @@ async function gatherNudges(): Promise<Nudge[]> {
       out.push({
         key: `approve-${t.id}`,
         text: `「${t.name}」跑完一步了，等你点头才继续。`,
-        to: `/work?tab=engine&task=${t.id}`,
+        to: `/work?tab=workflow&task=${t.id}`,
         toLabel: '去放行',
       })
   }
@@ -234,7 +234,7 @@ async function gatherNudges(): Promise<Nudge[]> {
       out.push({
         key: `failed-${t.id}-${t.last_run ?? ''}`,
         text: `「${t.name}」上次跑挂了，失败原因我给你留着。`,
-        to: `/work?tab=engine&task=${t.id}`,
+        to: `/work?tab=workflow&task=${t.id}`,
         toLabel: '去看看',
       })
   }
@@ -314,7 +314,7 @@ function PluginRow({
 }) {
   const row = 'flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300'
   const btn =
-    'rounded-md border border-neutral-300 px-2 py-0.5 text-[11px] transition-colors hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'
+    'rounded-md border border-neutral-300 px-2 py-0.5 text-xs transition-colors hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'
 
   if (p.panel.kind === 'counter') {
     return (
@@ -1124,7 +1124,7 @@ export default function PetWidget() {
       >
         {/* speech bubble above the sprite：主动提醒（带去处）优先，系统气泡让位 */}
         {nudge && !open ? (
-          <div className="pet-bubble pointer-events-auto mb-2 max-w-[280px] rounded-2xl rounded-br-sm border border-violet-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-violet-900/10 dark:border-violet-500/40 dark:bg-neutral-800 dark:text-neutral-100">
+          <div className="pet-bubble pointer-events-auto mb-2 max-w-[280px] rounded-lg rounded-br-sm border border-violet-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-violet-900/10 dark:border-violet-500/40 dark:bg-neutral-800 dark:text-neutral-100">
             <div className="flex items-start gap-2">
               <span className="min-w-0 flex-1">{nudge.text}</span>
               <button
@@ -1141,7 +1141,7 @@ export default function PetWidget() {
                   setNudge(null)
                   navigate(nudge.to)
                 }}
-                className="rounded-full border border-violet-300 px-2.5 py-0.5 text-[11px] text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-500/50 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                className="rounded-full border border-violet-300 px-2.5 py-0.5 text-xs text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-500/50 dark:text-violet-300 dark:hover:bg-violet-500/10"
               >
                 {nudge.toLabel} →
               </button>
@@ -1150,7 +1150,7 @@ export default function PetWidget() {
         ) : bubble && !open ? (
           <button
             onClick={() => setOpen(true)}
-            className="pet-bubble pointer-events-auto mb-2 max-w-[260px] rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+            className="pet-bubble pointer-events-auto mb-2 max-w-[260px] rounded-lg rounded-br-sm border border-neutral-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
           >
             {bubble}
           </button>
@@ -1158,7 +1158,7 @@ export default function PetWidget() {
 
         {/* expanded panel */}
         {open && (
-          <div className="pet-bubble pointer-events-auto mb-2 flex h-[380px] w-[320px] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/20 dark:border-neutral-700 dark:bg-neutral-900">
+          <div className="pet-bubble pointer-events-auto mb-2 flex h-[380px] w-[320px] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/20 dark:border-neutral-700 dark:bg-neutral-900">
             <div className="flex items-center gap-2 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
               <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">零柒</span>
               {growth && (
@@ -1166,7 +1166,7 @@ export default function PetWidget() {
                   to="/growth"
                   onClick={() => setOpen(false)}
                   title="看成长"
-                  className="text-[10px] text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
+                  className="text-xs text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
                 >
                   Lv.{growth.level} {growth.title} · EXP {growth.exp}
                   {growth.next_title && ` · 正在靠近「${growth.next_title}」`}
@@ -1176,7 +1176,7 @@ export default function PetWidget() {
               <button
                 onClick={toggleSpeak}
                 title={speakOn ? '朗读：开（点一下关掉）' : '朗读：关'}
-                className={`text-[10px] transition-colors ${
+                className={`text-xs transition-colors ${
                   speakOn ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
                 } hover:text-violet-500`}
               >
@@ -1185,7 +1185,7 @@ export default function PetWidget() {
               <button
                 onClick={toggleBlip}
                 title={blipOn ? '音效：开（点一下关掉）' : '音效：关'}
-                className={`text-[10px] transition-colors ${
+                className={`text-xs transition-colors ${
                   blipOn ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
                 } hover:text-violet-500`}
               >
@@ -1196,7 +1196,7 @@ export default function PetWidget() {
                 title={
                   pipWin ? '收回置顶小窗' : '弹出置顶小窗：切去别的应用，它也浮在屏幕上'
                 }
-                className={`text-[10px] transition-colors ${
+                className={`text-xs transition-colors ${
                   pipWin ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
                 } hover:text-violet-500`}
               >
@@ -1206,7 +1206,7 @@ export default function PetWidget() {
                 to="/companion"
                 onClick={() => setOpen(false)}
                 title="整页聊天 / 教它 / 成长 / 小屋 / 有声"
-                className="text-[10px] text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
+                className="text-xs text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
               >
                 陪伴页 →
               </Link>
@@ -1231,7 +1231,7 @@ export default function PetWidget() {
             {/* 此刻（P1）：状态机给的姿势与精力。零柒的台词放在前，界面的说法在后——
                 它是**当下**的量，跨天归零，不是「还欠 N」的账。 */}
             {state && (
-              <div className="flex items-center gap-2 border-b border-neutral-100 px-3 py-1.5 text-[10px] text-neutral-400 dark:border-neutral-800 dark:text-neutral-500">
+              <div className="flex items-center gap-2 border-b border-neutral-100 px-3 py-1.5 text-xs text-neutral-400 dark:border-neutral-800 dark:text-neutral-500">
                 <span className="min-w-0 flex-1 truncate" data-pet-mode={state.mode}>
                   {state.line || MODE_LABEL[state.mode]}
                 </span>
@@ -1252,7 +1252,7 @@ export default function PetWidget() {
 
             <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2 text-sm leading-relaxed">
               {growth && growth.parts.length > 0 && (
-                <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-neutral-400 dark:text-neutral-500">
                   {growth.parts.map((p) => (
                     <span key={p.key}>
                       {p.label} +{p.exp}
@@ -1261,7 +1261,7 @@ export default function PetWidget() {
                 </div>
               )}
               {mastery && mastery.events.length > 0 && (
-                <div className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                <div className="text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
                   最近搞懂：
                   {mastery.events.slice(0, 3).map((e) => e.concept).join('、')}
                   {mastery.mastered > 3 ? ` 等 ${mastery.mastered} 个` : ''}
@@ -1275,7 +1275,7 @@ export default function PetWidget() {
                 </div>
               )}
               {room?.carried && (
-                <div className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                <div className="text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
                   它最近叼回来：{room.carried.icon} {room.carried.label}
                   <Link
                     to="/companion?tab=room"
@@ -1294,7 +1294,7 @@ export default function PetWidget() {
               {events.map((e) => (
                 <div key={`e${e.id}`} className="max-w-[92%] rounded-lg rounded-bl-sm bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
                   <div className="whitespace-pre-wrap text-neutral-700 dark:text-neutral-200">{e.text}</div>
-                  <div className="mt-0.5 text-[10px] text-neutral-400 dark:text-neutral-500">{timeLabel(e.created_at)}</div>
+                  <div className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">{timeLabel(e.created_at)}</div>
                 </div>
               ))}
               {chat.map((m, i) =>
@@ -1313,7 +1313,7 @@ export default function PetWidget() {
                         {m.tools.map((r, k) => (
                           <li
                             key={k}
-                            className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
+                            className="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
                           >
                             {receiptLabel(r)}
                           </li>
@@ -1326,7 +1326,7 @@ export default function PetWidget() {
                       </span>
                     ) : null}
                     {!m.text && (
-                      <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                      <span className="text-xs text-neutral-400 dark:text-neutral-500">
                         {toolBusy ?? (
                           <span className="inline-block animate-pulse text-violet-400">▊</span>
                         )}
@@ -1364,7 +1364,7 @@ export default function PetWidget() {
                     key={label}
                     onClick={() => void send(q)}
                     disabled={busy}
-                    className="rounded-full border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50"
+                    className="rounded-full border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50"
                   >
                     {label}
                   </button>
@@ -1457,7 +1457,7 @@ export default function PetWidget() {
         createPortal(
           <div className="flex h-screen flex-col items-center justify-center gap-2 bg-neutral-50 px-3 py-2 dark:bg-neutral-900">
             {bubble ? (
-              <p className="pet-bubble max-w-[200px] rounded-2xl rounded-br-sm border border-neutral-200 bg-white px-3 py-2 text-xs leading-relaxed text-neutral-800 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
+              <p className="pet-bubble max-w-[200px] rounded-lg rounded-br-sm border border-neutral-200 bg-white px-3 py-2 text-xs leading-relaxed text-neutral-800 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
                 {bubble}
               </p>
             ) : null}
@@ -1473,7 +1473,7 @@ export default function PetWidget() {
               />
             </div>
             {state?.line ? (
-              <p className="max-w-[200px] text-center text-[10px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+              <p className="max-w-[200px] text-center text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                 {state.line}
               </p>
             ) : null}
@@ -1482,7 +1482,7 @@ export default function PetWidget() {
                 pipWin.close()
                 setPipWin(null)
               }}
-              className="rounded-full border border-neutral-300 px-2.5 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
+              className="rounded-full border border-neutral-300 px-2.5 py-0.5 text-xs text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
             >
               收回
             </button>

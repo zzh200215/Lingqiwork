@@ -3,7 +3,15 @@
 // 分叉一旦坏了，全部流式功能（聊天/教学/播客/卡片）一起哑，却很难从页面看出来。
 import { describe, expect, it, vi } from 'vitest'
 
-import { sseFrames, streamCardsGenerate, streamChat, streamCompose, streamDecide } from './stream'
+import {
+  sseFrames,
+  streamCardsGenerate,
+  streamChat,
+  streamCollab,
+  streamCompose,
+  streamDecide,
+  streamDeliver,
+} from './stream'
 
 function resOf(chunks: string[]): Response {
   const body = new ReadableStream<Uint8Array>({
@@ -160,6 +168,61 @@ describe('streamDecide', () => {
   })
 })
 
+// streamDeliver 的契约：除了话题与体裁×读者，两个「加进这一次」的输入也必须真的进请求体——
+// 钉材料（§4-14）与**定稿的提纲**（§8.1）。少了任何一个，界面上做的事在服务端就不存在。
+describe('streamDeliver', () => {
+  it('把钉住的材料与定稿的提纲一起发出去', async () => {
+    const frames =
+      'event: gathering\ndata: {}\n\n' +
+      'event: report\ndata: {"title":"T","sections":[],"used":[],"sources":[],"outline":["本周进展","风险"]}\n\n'
+    const fetchMock = vi.fn(async () => resOf([frames]))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const done = await streamDeliver(
+        '这周的 RAG',
+        'weekly',
+        'leader',
+        () => {},
+        undefined,
+        ['notes/a.md'],
+        ['本周进展', '风险']
+      )
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/deliver',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            topic: '这周的 RAG',
+            genre: 'weekly',
+            audience: 'leader',
+            pinned: ['notes/a.md'],
+            outline: ['本周进展', '风险'],
+          }),
+        })
+      )
+      expect(done.ok).toBe(true)
+      expect(done.report?.outline).toEqual(['本周进展', '风险'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('不走提纲时发一个空表——不是不发这个字段', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+      resOf(['event: report\ndata: {"title":"T","sections":[],"used":[],"sources":[]}\n\n'])
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      await streamDeliver('话题', 'email', 'self', () => {})
+      const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
+      expect(body.outline).toEqual([])
+      expect(body.pinned).toEqual([])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
 describe('streamCardsGenerate', () => {
   function stub(payload: string) {
     const fetchMock = vi.fn(
@@ -287,6 +350,28 @@ describe('streamChat 的 quality / saved', () => {
     }
   })
 
+  // P3：引用验证。服务端剥掉了编造的 [来源 N] 之后，带一份干净正文来让界面替换气泡——
+  // 这一帧哑了的话，库里是剥干净的、屏幕上还留着那个假编号（两边不一致比不剥更糟）。
+  it('citations 帧把剥完的正文与被拿掉的编号交给界面', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([
+      'event: citations\ndata: {"text":"结论在这里。","fake":[7],"injected":5,"cited":[1]}\n\n' +
+        'event: done\ndata: {}\n\n',
+    ])))
+    try {
+      const seen: { text?: string; fake?: number[]; injected?: number; uid?: string }[] = []
+      await streamChat(1, 'x', false, {
+        onDelta: () => {},
+        onError: () => {},
+        onDone: () => {},
+        onCitations: (fix, uid) =>
+          seen.push({ text: fix.text, fake: fix.fake, injected: fix.injected, uid }),
+      }, new AbortController().signal)
+      expect(seen).toEqual([{ text: '结论在这里。', fake: [7], injected: 5, uid: undefined }])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('saved 帧把 message_id 交给界面（对比模式带 uid）', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => resOf([
       'event: done\ndata: {}\n\n' +
@@ -315,5 +400,70 @@ describe('streamChat 的 quality / saved', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('协作的逐步账（step 事件）', () => {
+  it('每一步的事实原样交给 onStep（界面照抄，不自己算）', async () => {
+    const fact = {
+      step: 2,
+      title: '读材料 · 检索内核',
+      phase: 'read',
+      agent: '写手',
+      rounds: 2,
+      tools: ['vault_read_file'],
+      seconds: 3.4,
+      rounds_exhausted: false,
+      parallel: true,
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([
+      `event: step\ndata: ${JSON.stringify({ fact })}\n\n`,
+      'event: done\ndata: {}\n\n',
+    ])))
+    const seen: unknown[] = []
+    try {
+      await streamCollab(1, '目标', [1, 2], 'fanout', false, [], {
+        onDelta: () => {},
+        onError: () => {},
+        onDone: () => {},
+        onStep: (f) => seen.push(f),
+      }, new AbortController().signal)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(seen).toEqual([fact])
+  })
+
+  it('没有 onStep 时也不炸（老调用方不用改）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => resOf([
+      'event: step\ndata: {"fact":{"step":1,"title":"x","phase":"work","agent":"a","rounds":1,"tools":[],"seconds":1}}\n\n',
+      'event: done\ndata: {}\n\n',
+    ])))
+    try {
+      await streamCollab(1, '目标', [1, 2], 'pipeline', false, [], {
+        onDelta: () => {},
+        onError: () => {},
+        onDone: () => {},
+      }, new AbortController().signal)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('钉的材料原样进请求体（材料清单的第二个来源，2026-09-22）', async () => {
+    const f = vi.fn(async (_url: string, _init?: RequestInit) => resOf(['event: done\ndata: {}\n\n']))
+    vi.stubGlobal('fetch', f)
+    try {
+      await streamCollab(1, '目标', [1, 2], 'fanout', true, ['notes/a.md', 'clippings/b.md'], {
+        onDelta: () => {},
+        onError: () => {},
+        onDone: () => {},
+      }, new AbortController().signal)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    const body = JSON.parse(String(f.mock.calls[0]?.[1]?.body))
+    expect(body.pinned).toEqual(['notes/a.md', 'clippings/b.md'])
+    expect(body.pattern).toBe('fanout')
   })
 })

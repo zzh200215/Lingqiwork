@@ -1,6 +1,6 @@
 // API types + fetch helpers
 
-import type { ArtifactRef, QualityNote } from './stream'
+import type { ArtifactRef, CollabStep, QualityNote } from './stream'
 
 export interface ProviderConfig {
   id: number
@@ -38,6 +38,20 @@ export interface McpView {
   servers: McpServer[]
   status: Record<string, McpServerStatus>
   active_tools: McpActiveTool[]
+  /**
+   * A3 的两个症状读数（2026-09-22 起**症状驱动**，不再是一个工具数）：
+   * 成本看 `chars` / `biggest`（工具定义那一坨每轮都重发），选择看仪表盘那一格
+   * （`tool_not_allowed` / `tool_not_used`，A0 报告来的）。`review_hint` 只是"到了就复看
+   * 一遍"的提示，**不是及格线**——所以这里没有 `fired` 那种布尔。
+   */
+  tools?: {
+    count: number
+    names: string[]
+    mcp: number
+    chars: number
+    biggest: { name: string; chars: number }[]
+    review_hint: number
+  }
 }
 
 export interface McpProbe {
@@ -196,7 +210,12 @@ export interface AgentPreset {
   system_prompt: string
   model_id: string
   use_rag: boolean
-  tools_enabled: boolean
+  /**
+   * A2：**工具白名单**（原来是个布尔开关 `tools_enabled`）。
+   * 空 = 不限制；`none` = 一个都不给；其余按 fnmatch（`vault_*`、`kb_search`、`server__*`，
+   * 逗号或空格分隔）。语义在后端 `mcp.filter_specs` 一处。
+   */
+  tool_whitelist: string
   enabled: boolean
 }
 
@@ -248,6 +267,10 @@ export interface Message {
   artifacts?: ArtifactRef[] | null
   /** W2a 的两条底线校验结论（从回合账本读，不在界面重算）。 */
   quality?: QualityNote | null
+  /** A2 的**逐步账**（只有协作那条路有）：刷新之后靠它把那一栏重建出来。
+   *  **照抄后端那份事实**——界面不聚合、不自己算总耗时（那会与后端那笔账分叉）。
+   *  `null`/缺省 = 那时候没有这笔账（老行、聊天那条路），**不是空账**。 */
+  steps?: CollabStep[] | null
   model_id?: string | null
   feedback?: 'up' | 'down' | null
   created_at: string
@@ -258,6 +281,77 @@ export interface PromptItem {
   title: string
   content: string
   created_at: string
+  /** 改过的时间（没改过是空串）——列表按它排「最近动过的」 */
+  updated_at: string
+  /** 标签。**存的是逗号分隔的一列**，接口上给数组（全角逗号也认） */
+  tags: string[]
+  category: string
+  favorite: boolean
+  /** 0 = 还没评；1–5 */
+  rating: number
+  /** 从哪来的（自己写的 / 一个 URL）——「网上看到的好东西」要记出处 */
+  source: string
+  note: string
+  /** 用过几次。**从使用记录聚合出来的**，不是自己存的一个计数 */
+  used_count: number
+  version_count: number
+  /** 最近一次填过的变量值——复制时预填，下次不必重填 */
+  last_vars: Record<string, string>
+  /** 最近一次用是什么时候（空串 = 没用过）。「最近使用」按它排，不是按次数。 */
+  last_used_at: string
+}
+
+/** 一条历史版本：`content` 是**改之前**那一版的样子。 */
+export interface PromptVersionItem {
+  id: number
+  title: string
+  content: string
+  at: string
+  sha: string
+}
+
+/** 一次使用记录。`sha` 说这一次用的是**哪一版**正文；`vars` 是那次填进去的值。 */
+export interface PromptUsageItem {
+  id: number
+  at: string
+  sha: string
+  vars: Record<string, string>
+}
+
+/** 四种视图（对齐 AI Gist：卡片 / 网格 / 表格 / 文件夹）。 */
+export type PromptView = 'card' | 'grid' | 'table' | 'category'
+
+/** 列表排序。**默认「最近动过的排前面」**——库是拿来用的，不是拿来归档的。 */
+export type PromptSort = 'updated' | 'used' | 'rating' | 'title'
+
+export interface PromptFacets {
+  /** 分类是**一等对象**（参照 AI Gist）：有名字、有颜色、有计数。 */
+  categories: PromptCategoryItem[]
+  /** 标签带计数——界面上的「翻译 (1)」是从库里数出来的，不是另养的配置。 */
+  tags: PromptTagItem[]
+  total: number
+  uncategorized: number
+}
+
+/** 分类：成员关系在 `prompts.category`（唯一真值），颜色与顺序在这里。 */
+export interface PromptCategoryItem {
+  id: number
+  name: string
+  /** `#rrggbb`；空串 = 没挑过色，界面按名字派一个稳定的默认色 */
+  color: string
+  position: number
+  count: number
+}
+
+export interface PromptTagItem {
+  name: string
+  count: number
+}
+
+/** AI 三条里「提取变量」的答复：`via` 说这一次是谁提的（模型提不动就退回本地正则）。 */
+export interface PromptVarsResult {
+  vars: string[]
+  via: 'model' | 'local'
 }
 
 // ---------- 提示词登记表 + 对照台（Q1）----------
@@ -372,11 +466,16 @@ export interface PromptCheckReport {
   model_id: string
   total: number
   passed: number
-  rate: number
-  /** Wilson 区间 [lo, hi] */
-  ci: [number, number]
+  /** **`null` = 这一趟被停了**（半趟的 k/n 会被读成「变差了」，所以不给比率）。 */
+  rate: number | null
+  /** Wilson 区间 [lo, hi]。`null` 同上——区间是给一个**完整**样本算的。 */
+  ci: [number, number] | null
   /** 这个 n 下区间的宽度够不够下结论 */
   tell: boolean
+  /** `true` = 这一趟是被「停止」打断的：没落库、没区间，`total` 是跑完的条数 */
+  stopped?: boolean
+  /** 计划跑多少条（`stopped` 时用来写「停在第 2/7 条」） */
+  planned?: number
   assertions: { total: number; failed: number }
   seconds: number
   calls: number
@@ -466,6 +565,10 @@ export interface DashboardStats {
     ok: number
     error: number
     rate: number | null
+    /** **按任务分解**（方案 §8.3：工作流清单每行要自己的 30 天成功率）。
+     *  键是 `task_id` 的字符串形式；**30 天内没跑过的任务不出现**——别摆一个 0%，
+     *  那会把「没跑过」说成「全挂了」。 */
+    by_task?: Record<string, { runs: number; ok: number; rate: number | null }>
   }
   tasks: {
     id: number
@@ -658,6 +761,12 @@ export interface SkillCandidateResult {
   instructions: string
   /** 一句话：为什么能 / 不能出能力（`ok=false` 时是没读成的原因） */
   reason: string
+  /** **这次压根没问成**（网络/后端失败），不是「问过了，判定为不行」。
+   *
+   *  界面按 `usable` 分派文案，而失败态下它也是 false —— 没有这个标记，
+   *  一次请求失败会被讲成「这份材料没出能力」，那是把两件事说成一件。
+   *  只有前端造的失败结果会带它；后端正常返回时不带。 */
+  failed?: boolean
   /** 材料里明显重叠的已知技能（只用来提醒「这个可能已经有了」） */
   existing: string[]
   source: string
@@ -770,8 +879,12 @@ export interface SkillEvalReport {
   }[]
   total: number
   with_passed: number
-  rate: number
-  ci: [number, number]
+  /** **`null` = 这一趟被停了**（理由同 `PromptCheckReport.rate`） */
+  rate: number | null
+  ci: [number, number] | null
+  /** `true` = 被「停止」打断：没写基线、没区间 */
+  stopped?: boolean
+  planned?: number
   tell: boolean
   deltas: { helped: number; hurt: number; same: number }
   follows_method: number | null
@@ -787,11 +900,25 @@ export interface TaskTool {
   description: string
 }
 
+/** 运行日志的一项。**两种形状同一个数组**（顺序就是发生的顺序，而步骤条要的正是顺序）：
+ *  - 工具调用：`{tool, args, ok, result, ms}`；
+ *  - 一步工序：`{step, ok, ms, note?, ref?}`（引擎跑的那几步，**没有 `tool` 键**）。
+ *
+ *  为什么不分两个数组：两边都没有时间戳，插不回正确的位置。读的人按 `tool` / `step`
+ *  各自过滤，互不干扰（`skill_inject` 那项是注入痕迹，不是一步工序）。 */
 export interface TaskRunLogEntry {
-  tool: string
-  args: Record<string, unknown>
-  ok: boolean
-  result: string
+  tool?: string
+  args?: Record<string, unknown>
+  ok?: boolean
+  result?: string
+  /** 一步工序的名字（引擎相位：取材 / 成文 / 落盘） */
+  step?: string
+  /** 这一步花了多久（毫秒）。工具调用与引擎相位都有。 */
+  ms?: number
+  /** 一句话说明：找到几条材料、写了几节、为什么失败 */
+  note?: string
+  /** 这一步落了什么（vault 相对路径） */
+  ref?: string
 }
 
 export interface TaskRunItem {
@@ -1188,6 +1315,10 @@ export interface ArenaResult {
   text?: string
   error?: string
   seconds: number
+  /** 这一次调用吃进去/吐出来的 token。**`null` = 上游没报**（有的 provider 不回用量），
+   *  界面上那一格就不摆——`0` 与「没报」是两件事。 */
+  tokens_in?: number | null
+  tokens_out?: number | null
 }
 
 /** 今日页「今天下一步」建议. */
@@ -1225,11 +1356,35 @@ export interface DeliverOption {
   label: string
 }
 
+/** 体裁：比读者多一个「长稿」判据——它决定界面走哪一模（先出提纲 / 一键直出）。
+ *  **判据在后端**：哪个体裁算长稿是体裁的属性，不是界面的属性。 */
+export interface DeliverGenre extends DeliverOption {
+  long: boolean
+  /** 你自己写的模板（能编辑/删除）。内置那五条是代码，改不了。 */
+  custom: boolean
+}
+
+/** 自定义体裁模板（§8.1 行2）：**带结构指令**——编辑要用。
+ *  `/deliver/genres` 那份列表不带 `prompt`（chips 用不上），这一份才带。 */
+export interface DeliverTemplate {
+  id: string
+  label: string
+  prompt: string
+  long: boolean
+}
+
 export interface DeliverCatalogue {
-  genres: DeliverOption[]
+  genres: DeliverGenre[]
   audiences: DeliverOption[]
   default_genre: string
   default_audience: string
+}
+
+/** 提纲（§8.1 长稿那一模）：**只有小节名，没有正文**——正文等提纲定下来再写。 */
+export interface DeliverOutline {
+  title: string
+  sections: string[]
+  model_id?: string
 }
 
 /** 会议闭环（§4-13）的一场：`vault/meetings/<日期>-<名>/` 一个文件夹。
@@ -1273,6 +1428,8 @@ export interface ThreadItemRow {
   exists: boolean
   step: string
   href: string
+  /** 挂上来的时刻。详情的时间线按它倒序（方案 §8.4）。 */
+  created_at: string | null
 }
 
 export interface ThreadRow {
@@ -1280,6 +1437,15 @@ export interface ThreadRow {
   name: string
   note: string
   archived: boolean
+  /** 状态机（方案 §8.4）：`open` 进行中 / `done` 完成。**你设的，所以它存着**。 */
+  status: 'open' | 'done'
+  /** 「N 天没动静」——**算出来的，不是存的**。`done` 时恒为 false
+   *  （完成了的事没动静是因为结束了，不是因为停了）。 */
+  stalled: boolean
+  /** 距上次动静几天（后端算好给的，界面不自己减日期——时区在那一处管）。 */
+  idle_days: number
+  /** 截止日 `YYYY-MM-DD`；null = 没设。**不编一个默认期限出来**。 */
+  deadline: string | null
   created_at: string | null
   updated_at: string | null
   counts: Partial<Record<ThreadKind, number>>
@@ -1661,6 +1827,11 @@ export interface TurnTrace {
   claim_checked: boolean
   claim_truthful: boolean
   retried: number
+  /** P3：这一轮注入了几条材料、模型真引用了几条。**没有「使用率」这个字段** ——
+   *  比率在聚合那一处算，逐条读的时候要的是两个原始计数（没检索的回合注入就是 0，
+   *  拿它当分母是错的）。 */
+  sources_injected: number
+  sources_cited: number
   seconds: number
   error: string
   /** 这一轮命中的毛病（就是筛选项那几个 key），由后端算 */
@@ -1735,8 +1906,21 @@ export interface TurnSummary {
   truncated: boolean
   /** 每一类毛病的回合数，键就是 `filters` 里的 key */
   counts: Record<string, number>
+  /** P3：材料用掉了几条。**两个计数 + 一个有材料却没引用的回合数，没有比率** ——
+   *  分母是 `turns_with_material`（注入过材料的回合），不是 `turns`：没检索的回合
+   *  （闲聊跳过 / RAG 关）注入本来就是 0，算进来就是把「没检索」读成「检索了没人用」。 */
+  sources: {
+    /** 窗口内**注入过材料**的回合数（这一块自己的分母） */
+    turns_with_material: number
+    /** 这些回合一共注入了几条材料 */
+    injected: number
+    /** 这些回合的正文真引用到了几条 */
+    cited: number
+    /** 其中有几轮**一条都没引用**——检索质量下滑最早的那个信号 */
+    uncited_turns: number
+  }
   filters: TurnFilter[]
-  rules: { window: string; counts: string; no_rate: string; truncated: string }
+  rules: { window: string; counts: string; no_rate: string; sources: string; truncated: string }
 }
 
 /** 提示词评测（R1 补齐 · PLAN5 §2-2 点名的九条之一）：登记了多少条、量过几条、几条站得住。
@@ -1760,6 +1944,45 @@ export interface PromptEvalBoard {
   rules: { registered: string; measured: string; decidable: string; stale: string }
   /** 已知偏差：基线是某一个模型跑出来的，换模型不适用 */
   bias: string
+}
+
+/** A0 任务级基线（跑分落下来的报告，只读投影）——计量局那一格。 */
+export interface AgentEvalBoard {
+  readable: boolean
+  error?: string
+  /** 报告落在哪（人看得出来它读的是哪一份） */
+  path?: string
+  /** 什么时候跑的、跑的是哪一版金标（`tasks_sha`）——**这一格读的是当时的成绩** */
+  at?: string
+  tasks_sha?: string
+  prompt_sha?: string
+  model_id?: string
+  seconds?: number
+  tasks?: number
+  done?: number
+  done_rate?: number
+  clean?: number
+  clean_rate?: number
+  /** 谎报 / 编造路径 / 伪引用那三条（长文没落盘单列，不算底线） */
+  floor_failures?: number
+  tool_not_allowed?: number
+  tool_not_used?: number
+  over_budget?: number
+  errors?: number
+  trace_missing?: number
+  rounds?: { median: number; p90: number; max: number; mean: number }
+  counts?: Record<string, number>
+  by_tag?: Record<string, { tasks: number; done: number }>
+  /** A1/A2 的委托读数：几个回合委托了、几次、子代理共几轮、以及「该委托而没委托」 */
+  delegated_turns?: number
+  delegate_calls?: number
+  delegate_rounds?: number
+  delegate_expected?: number
+  delegate_missed?: number
+  /** 报告里没有金标指纹 → 这一格比不了（`--compare` 会报「不可比」） */
+  sha_missing?: boolean
+  /** 口径原文（后端来，逐行照抄——界面不自己编） */
+  rules?: Record<string, string>
 }
 
 /** 零柒说过的一句话（`pet_events` 的一行）。挂件的气泡与今天页的「最近说的」共用它。 */
@@ -2410,12 +2633,92 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   /** 技能闭环的两条（PLAN3 §6）：试用期漏斗 + 注入命中率。只进仪表盘。 */
   skillLoop: () => request<SkillLoop>('/api/dashboard/skill-loop'),
 
-  listPrompts: () => request<PromptItem[]>('/api/prompts'),
-  createPrompt: (p: { title: string; content: string }) =>
+  listPrompts: (opts?: { q?: string; category?: string; favorite?: boolean }) => {
+    const p = new URLSearchParams()
+    if (opts?.q) p.set('q', opts.q)
+    if (opts?.category) p.set('category', opts.category)
+    if (opts?.favorite) p.set('favorite', 'true')
+    const qs = p.toString()
+    return request<PromptItem[]>(`/api/prompts${qs ? `?${qs}` : ''}`)
+  },
+  createPrompt: (p: Partial<PromptItem> & { title: string; content: string }) =>
     request<PromptItem>('/api/prompts', { method: 'POST', body: JSON.stringify(p) }),
   updatePrompt: (id: number, p: Partial<PromptItem>) =>
     request<PromptItem>(`/api/prompts/${id}`, { method: 'PUT', body: JSON.stringify(p) }),
   deletePrompt: (id: number) => request<{ ok: boolean }>(`/api/prompts/${id}`, { method: 'DELETE' }),
+  /** 分类与标签清单——**从库里算出来**，不另养一份配置 */
+  promptFacets: () => request<PromptFacets>('/api/prompts/facets'),
+  /** 记一次使用（复制走 / 填完变量发出去时调）。`vars` 是这次填的值，下次复用不必重填。 */
+  usePrompt: (id: number, vars: Record<string, string> = {}) =>
+    request<{ ok: boolean; used_count: number }>(`/api/prompts/${id}/use`, {
+      method: 'POST',
+      body: JSON.stringify({ vars }),
+    }),
+  promptVersions: (id: number) => request<PromptVersionItem[]>(`/api/prompts/${id}/versions`),
+  restorePromptVersion: (id: number, versionId: number) =>
+    request<PromptItem>(`/api/prompts/${id}/versions/${versionId}/restore`, { method: 'POST' }),
+  /** 使用历史。**记了就要能看**——只记不读的那份账换不来任何判断。 */
+  promptUsages: (id: number, limit = 50) =>
+    request<PromptUsageItem[]>(`/api/prompts/${id}/usages?limit=${limit}`),
+  /** 分类表 + 各自几条。改名会**连条目一起搬**；删分类只把条目退回「未分类」。 */
+  promptCategories: () => request<PromptCategoryItem[]>('/api/prompts/categories'),
+  createPromptCategory: (name: string, color = '') =>
+    request<PromptCategoryItem>('/api/prompts/categories', {
+      method: 'POST',
+      body: JSON.stringify({ name, color }),
+    }),
+  updatePromptCategory: (
+    id: number,
+    patch: { name?: string; color?: string; position?: number }
+  ) =>
+    request<PromptCategoryItem>(`/api/prompts/categories/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  deletePromptCategory: (id: number) =>
+    request<{ ok: boolean; uncategorized: number }>(`/api/prompts/categories/${id}`, {
+      method: 'DELETE',
+    }),
+  /** 导出成文件。**「拿去其他项目」全靠它。** */
+  exportPrompts: async (format: 'json' | 'csv'): Promise<void> => {
+    const res = await fetch(`/api/prompts/export?format=${format}`)
+    if (!res.ok) throw new Error(`export failed: ${res.status}`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `prompts.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+  importPrompts: (prompts: Array<Partial<PromptItem> & { title: string; content: string }>) =>
+    request<{ added: string[]; skipped: string[] }>('/api/prompts/import', {
+      method: 'POST',
+      body: JSON.stringify({ prompts }),
+    }),
+
+  // AI 三条（只产出文本，**不落库**——写不写进库是你的决定）
+  //
+  // 三个都收 `signal`：页面上那颗「不等了」据此真的断开请求。**它不是「停止」**——
+  // 一次性 POST 断开之后服务端照样跑完那次模型调用。
+  promptAiGenerate: (idea: string, signal?: AbortSignal) =>
+    request<{ title: string; content: string }>('/api/prompts/ai/generate', {
+      method: 'POST',
+      body: JSON.stringify({ idea }),
+      ...(signal ? { signal } : {}),
+    }),
+  promptAiRefine: (content: string, instruction: string, signal?: AbortSignal) =>
+    request<{ content: string }>('/api/prompts/ai/refine', {
+      method: 'POST',
+      body: JSON.stringify({ content, instruction }),
+      ...(signal ? { signal } : {}),
+    }),
+  promptAiVars: (content: string, signal?: AbortSignal) =>
+    request<PromptVarsResult>('/api/prompts/ai/vars', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+      ...(signal ? { signal } : {}),
+    }),
 
   // ---------- 提示词登记表 + 对照台（Q1）----------
   //
@@ -2433,6 +2736,14 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** 请正在跑的那次对照停下。**合作式**：每条用例之间生效，所以当前那条会跑完才停
+   *  ——界面上因此写「正在停…（这一条跑完就停）」，不写「已停止」。
+   *  `stopped: false` = 没有在跑的（如实说，不假装停成功）。 */
+  cancelPromptCheck: (key: string) =>
+    request<{ stopped: boolean }>(
+      `/api/prompts/registry/${encodeURIComponent(key)}/check/cancel`,
+      { method: 'POST' }
+    ),
   /** 喂一条用例进金标集（**写的是 `backend/evals/prompts/*.json`**，不是提示词）。 */
   addPromptCase: (
     key: string,
@@ -2476,10 +2787,13 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   /** 能力候选（环一）：读一份材料，看它有没有一套值得反复用的工序；有就落一份
    *  SKILL.md 草稿。`ok=false` 是**正常结论**（读不出来 / 没有工序 / 没配模型），
    *  不是错误——所以这个接口不抛 5xx，理由一律走 `reason` 那一句人话。 */
-  makeCandidate: (source_path: string, text: string, overwrite = false) =>
+  makeCandidate: (source_path: string, text: string, overwrite = false, signal?: AbortSignal) =>
     request<SkillCandidateResult>('/api/skills/candidate', {
       method: 'POST',
       body: JSON.stringify({ source_path, text, overwrite }),
+      // 传进来就带上：页面上那颗「不等了」据此真的断开这次请求。
+      // **注意它只是「不等了」**——一次性 POST 断开之后服务端照样跑完那份调用。
+      ...(signal ? { signal } : {}),
     }),
   /** S2：读**一次运行**（连带它那条链的最近几步）→ 判断这段工作里有没有一套工序。
    *
@@ -2521,6 +2835,12 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     request<SkillEvalReport>(`/api/skills/${encodeURIComponent(name)}/run`, {
       method: 'POST',
       body: JSON.stringify({ model_id }),
+    }),
+  /** 请正在跑的那次「量一遍」停下（合作式：每条用例之间生效）。
+   *  `stopped: false` = 没有在跑的。 */
+  cancelSkillEval: (name: string) =>
+    request<{ stopped: boolean }>(`/api/skills/${encodeURIComponent(name)}/run/cancel`, {
+      method: 'POST',
     }),
 
   globalSearch: async (q: string): Promise<SearchHit[]> => {
@@ -2705,6 +3025,7 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
    *  与上面两条同一条红线：**只进仪表盘**，不设目标、不排名、不进零柒嘴里。
    *  这一格尤其不能变成排行榜——载荷里没有任何一条提示词的名字或分数。 */
   promptEvalBoard: () => request<PromptEvalBoard>('/api/dashboard/prompt-eval'),
+  agentEvalBoard: () => request<AgentEvalBoard>('/api/dashboard/agent-eval'),
 
   /** 在真模型上跑一遍 golden set（每个用例至少一次模型调用，可能要几分钟） */
   engineEvalRun: (engine?: string) =>
@@ -2804,6 +3125,13 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     ),
   listTaskTools: () => request<TaskTool[]>('/api/tasks/tools'),
   listTaskRuns: (id: number) => request<TaskRunItem[]>(`/api/tasks/${id}/runs`),
+  /** **一批任务各自的最近一次运行**——工作页顶那块「最近几次运行」要的就是这个。
+   *
+   *  原来它是 `t.slice(0, 8).map(t => listTaskRuns(t.id))`：**8 个并发请求换 8 条数据**，
+   *  而且每次切回那一档都重来一遍。返回按 task_id 分组（JSON 的键是字符串）；
+   *  **没跑过的任务不出现**在结果里——那不叫「跑了但没记录」，叫「没跑过」。 */
+  recentTaskRuns: (ids: number[]) =>
+    request<Record<string, TaskRunItem>>(`/api/tasks/recent-runs?ids=${ids.join(',')}`),
   /** Q4 调度台：确定性编排的看板（状态全部由后端从 tasks/task_runs 算出来） */
   dispatch: (limit = 20) => request<DispatchBoard>(`/api/dispatch?limit=${limit}`),
   parseTask: (text: string) =>
@@ -3015,11 +3343,36 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   /** 体检报告：/api/health/report */
   healthReport: () => request<HealthReport>('/api/health/report'),
 
-  /** 模型竞技场：同一段 prompt 打到所有已启用 provider */
-  arenaRun: (prompt: string) =>
+  /** 模型竞技场：同一段 prompt 打到几家 provider。
+   *
+   *  `models` 空 = 所有已启用的（原行为）；给了就只打这几家——
+   *  提示词页的「对打」是**选 2–4 个比一比**，不必每次把全家桶叫起来。 */
+  /** 对打：**两段输入**（§8.2 区2「同一输入并排比」）——`system` 是提示词（怎么答），
+   *  `prompt` 是这一问（答什么）。`system` 不传 = 老行为（整段当 user 消息）。 */
+  arenaRun: (prompt: string, models?: string[], system?: string, signal?: AbortSignal) =>
     request<{ results: ArenaResult[] }>('/api/arena', {
       method: 'POST',
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({
+        prompt,
+        ...(models && models.length ? { models } : {}),
+        ...(system ? { system } : {}),
+      }),
+      // 「不等了」据此真的断开这次请求。**它不是「停止」**：服务端那一趟并行调用
+      // 会照旧跑完（最多 90 秒/家），钱照花——所以按钮上不写「停止」。
+      ...(signal ? { signal } : {}),
+    }),
+  /** 把这次对打落成 `vault/prompts/duels/` 里一篇 md 并进索引。
+   *  **一份对照记录，不是一条断言**——为什么不进评测区的金标集，见后端 `arena.save_record`。 */
+  arenaSave: (payload: {
+    title?: string
+    system: string
+    prompt: string
+    model_id?: string
+    results: ArenaResult[]
+  }) =>
+    request<{ filename: string; chunks: number }>('/api/arena/save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 
   // ---------- 第0周：使用基线 + 今日建议 ----------
@@ -3122,8 +3475,21 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   threadDetail: (id: number) => request<ThreadDetail>(`/api/threads/${id}`),
   createThread: (name: string, note = '') =>
     request<ThreadRow>('/api/threads', { method: 'POST', body: JSON.stringify({ name, note }) }),
-  updateThread: (id: number, patch: { name?: string; note?: string; archived?: boolean }) =>
-    request<ThreadRow>(`/api/threads/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
+  /** 局部更新。`status`/`deadline` 是方案 §8.4 的状态机与截止日。
+   *
+   *  **`deadline` 传空串 = 清掉；不传 = 不改它**（后端 `None` 就是「这次不动」，
+   *  所以「清掉」另给一个 `clear_deadline`——两者不能都用 undefined 表达）。 */
+  updateThread: (
+    id: number,
+    patch: {
+      name?: string
+      note?: string
+      archived?: boolean
+      status?: 'open' | 'done'
+      deadline?: string
+      clear_deadline?: boolean
+    }
+  ) => request<ThreadRow>(`/api/threads/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
   deleteThread: (id: number) =>
     request<{ ok: boolean }>(`/api/threads/${id}`, { method: 'DELETE' }),
   attachThreadItem: (id: number, kind: ThreadKind, ref: string) =>
@@ -3136,10 +3502,23 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       `/api/threads/${id}/items?kind=${kind}&ref=${encodeURIComponent(ref)}`,
       { method: 'DELETE' }
     ),
-  /** 还没挂到任何事的条目——允许长期存在，不催 */
+  /** 收件箱的候选：还没挂到任何事、**也没被忽略过**的条目 */
   unclassified: (limit = 60) =>
     request<{ items: ThreadCandidate[]; total: number }>(
       `/api/threads/unclassified?limit=${limit}`
+    ),
+  /** 从收件箱里划掉一条（§8.4）。幂等。**东西一件都不动**——只是不再出现在收件箱里。
+   *  收件箱的目标是清空，而候选是派生的：没有这一档它永远清不空。 */
+  ignoreInboxItem: (kind: ThreadKind, ref: string) =>
+    request<{ ok: boolean; ignored: boolean }>('/api/threads/inbox/ignore', {
+      method: 'POST',
+      body: JSON.stringify({ kind, ref }),
+    }),
+  /** 撤销忽略——它回到收件箱里。 */
+  unignoreInboxItem: (kind: ThreadKind, ref: string) =>
+    request<{ ok: boolean }>(
+      `/api/threads/inbox/ignore?kind=${kind}&ref=${encodeURIComponent(ref)}`,
+      { method: 'DELETE' }
     ),
   /** 这个条目该挂到哪件事上（按它自己的标签派生，不用你打字） */
   suggestThreads: (kind: ThreadKind, ref: string) =>
@@ -3147,15 +3526,53 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       `/api/threads/suggest?kind=${kind}&ref=${encodeURIComponent(ref)}`
     ),
   /** 就这件事写一份交付——**这一路的模型用量记在这件事头上**（§4-16） */
-  deliverIntoThread: (id: number, genre: string, audience: string) =>
+  /** 就这件事写一份交付。**这一路的账记在这件事头上**（§4-16）。
+   *
+   *  `signal` 传进来就带上——而且这一条的取消**是真停**：客户端断开 → Starlette 取消
+   *  这个请求 → 取消沿 await 链传到 `llm.stream_chat`，那里 `finally` 显式关上游流。
+   *  所以界面上写的是「停止」，不是「不等了」。 */
+  deliverIntoThread: (id: number, genre: string, audience: string, signal?: AbortSignal) =>
     request<{ filename: string; title: string; chunks: number }>(`/api/threads/${id}/deliver`, {
       method: 'POST',
       body: JSON.stringify({ genre, audience }),
+      ...(signal ? { signal } : {}),
     }),
 
   // ---------- 工作：交付（把材料改写成能交出去的体裁） ----------
-  /** 体裁 × 读者的定义（唯一真值在后端） */
+  /** 体裁 × 读者的定义（唯一真值在后端，含「长稿」判据） */
   deliverGenres: () => request<DeliverCatalogue>('/api/deliver/genres'),
+  /** 先出提纲（§8.1 双模的长稿那一模）：**不取材**，只拿话题与体裁×读者问一次结构。
+   *  确认之后才带着 `outline` 调 `/api/deliver` 取材成文——取材与成文才是贵的那两段。 */
+  deliverOutline: (payload: { topic: string; genre: string; audience: string }) =>
+    request<DeliverOutline>('/api/deliver/outline', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  // 自定义体裁模板（§8.1 行2）。**它是体裁，不是别的东西**——所以列表那一份并进
+  // `/deliver/genres`，这一份只给编辑用（带结构指令）。
+  /** 你自己写的体裁模板（含结构指令）。 */
+  deliverTemplates: () => request<DeliverTemplate[]>('/api/deliver/templates'),
+  deliverTemplateCreate: (payload: { label: string; prompt: string; long: boolean }) =>
+    request<DeliverTemplate>('/api/deliver/templates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  /** 改模板。只改传进来的字段（`undefined` = 不动）。**id 不会变**：`prompt_sha` 按它分版本，
+   *  改名不该让质量闭环的历史断裂。 */
+  deliverTemplateUpdate: (
+    id: string,
+    payload: { label?: string; prompt?: string; long?: boolean }
+  ) =>
+    request<DeliverTemplate>(`/api/deliver/templates/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  /** 删模板。**已经写出去的成品一份都不动**（它们在 vault 里，文件头写的是界面名）。 */
+  deliverTemplateDelete: (id: string) =>
+    request<{ deleted: string }>(`/api/deliver/templates/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   /** 把上一次的交付落成 vault/deliver/ 里的一篇 md 并进索引。
    *  `genre` / `audience` 会写进文件头（M5）——「这份是给谁写的」存下来才留得住，
    *  交付的事后见证（`deliverWitness`）就是读它。 */

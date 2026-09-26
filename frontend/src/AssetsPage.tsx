@@ -129,7 +129,7 @@ export default function AssetsPage() {
           <h2 className="pb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">家底</h2>
           <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
             <StatTile
-              icon={<NotebookPen className="h-3.5 w-3.5" />}
+              icon={<NotebookPen className="h-4 w-4" />}
               accent="bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"
               label="vault 笔记"
               value={house.vault_files}
@@ -137,36 +137,36 @@ export default function AssetsPage() {
               sub="全部 .md，都在索引里"
             />
             <StatTile
-              icon={<Package className="h-3.5 w-3.5" />}
+              icon={<Package className="h-4 w-4" />}
               accent="bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"
               label="产出物"
               value={outputs?.length ?? null}
-              href="/work?tab=output"
-              sub="研究 / 交付 / 复盘…"
+              href="/work?tab=report"
+              sub="研究 / 报告 / 复盘…"
             />
             <StatTile
-              icon={<Zap className="h-3.5 w-3.5" />}
+              icon={<Zap className="h-4 w-4" />}
               accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300"
               label="技能"
               value={skills?.length ?? null}
               sub={skills?.length ? '跑过对照的才算数' : '还没有'}
             />
             <StatTile
-              icon={<FlaskConical className="h-3.5 w-3.5" />}
+              icon={<FlaskConical className="h-4 w-4" />}
               accent="bg-amber-100 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300"
               label="登记的提示词"
               value={prompts?.registered ?? null}
               sub={prompts ? `${prompts.measured} 条量过` : undefined}
             />
             <StatTile
-              icon={<Brain className="h-3.5 w-3.5" />}
+              icon={<Brain className="h-4 w-4" />}
               accent="bg-pink-100 text-pink-600 dark:bg-pink-400/15 dark:text-pink-300"
               label="长期记忆"
               value={house.memories}
               sub="零柒记下的事"
             />
             <StatTile
-              icon={<CalendarCheck className="h-3.5 w-3.5" />}
+              icon={<CalendarCheck className="h-4 w-4" />}
               accent="bg-neutral-200/70 text-neutral-500 dark:bg-neutral-700/50 dark:text-neutral-300"
               label="这周打开过"
               value={house.open_days_7d === null ? null : `${house.open_days_7d} 天`}
@@ -182,7 +182,7 @@ export default function AssetsPage() {
             <h2 className="pb-1 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
               产出物类型
             </h2>
-            <p className="pb-2 text-[11px] text-neutral-400">共 {outputs!.length} 件 · 按体裁分</p>
+            <p className="pb-2 text-xs text-neutral-400">共 {outputs!.length} 件 · 按体裁分</p>
             <EChart
               height={200}
               ariaLabel="产出物类型分布"
@@ -206,7 +206,7 @@ export default function AssetsPage() {
             <h2 className="pb-1 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
               近 14 天的产出节奏
             </h2>
-            <p className="pb-2 text-[11px] text-neutral-400">每天落进 vault 的成品数（按产出里的日期）</p>
+            <p className="pb-2 text-xs text-neutral-400">每天落进 vault 的成品数（按产出里的日期）</p>
             <EChart
               height={200}
               ariaLabel="近 14 天产出节奏"
@@ -238,7 +238,7 @@ export default function AssetsPage() {
           <div className="flex items-baseline justify-between pb-2">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">产出物</h2>
             {(outputs?.length ?? 0) > 0 ? (
-              <Link to="/work?tab=output" className="text-xs text-violet-500 hover:underline">
+              <Link to="/work?tab=report" className="text-xs text-violet-500 hover:underline">
                 全部 {outputs!.length} 件 → 工作页
               </Link>
             ) : null}
@@ -270,7 +270,7 @@ export default function AssetsPage() {
                     label={o.label}
                     title={o.title}
                     href={`/notes?path=${encodeURIComponent(o.path)}`}
-                    actions={<span className="text-[11px] text-neutral-400">{o.date.slice(5)}</span>}
+                    actions={<span className="text-xs text-neutral-400">{o.date.slice(5)}</span>}
                   />
                 </li>
               ))}
@@ -299,7 +299,7 @@ export default function AssetsPage() {
                       <span className="min-w-0 flex-1 truncate" title={n.path}>
                         {n.path}
                       </span>
-                      <span className="shrink-0 text-[10px] text-neutral-400">{ago(n.mtime)}</span>
+                      <span className="shrink-0 text-xs text-neutral-400">{ago(n.mtime)}</span>
                     </Link>
                   </li>
                 ))}
@@ -318,7 +318,7 @@ export default function AssetsPage() {
                     <p className="truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
                       {s.name}
                     </p>
-                    <p className="pt-0.5 line-clamp-2 text-[11px] leading-relaxed text-neutral-400">
+                    <p className="pt-0.5 line-clamp-2 text-xs leading-relaxed text-neutral-400">
                       {s.description || `${s.chars} 字`}
                     </p>
                   </li>

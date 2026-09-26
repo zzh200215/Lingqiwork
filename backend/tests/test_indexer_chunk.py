@@ -115,20 +115,29 @@ def test_a_file_that_is_only_symbols_yields_nothing():
 
 
 def test_a_short_tail_is_absorbed_into_the_previous_chunk():
-    """碎尾巴属于上一节（真库里 16% 的块短于 200 字符，大多是这种）。"""
-    chunks = chunk_text("甲" * 790 + "\n\n" + "乙" * 100)
+    """碎尾巴属于上一节（真库里 16% 的块短于 200 字符，大多是这种）。
+
+    长度**按常量推**，不写死字符数：切法一调（P1a 的压块就是调它），写死的 790
+    要么被切碎、要么超出合并预算，测试就变成在测别的行为了。
+    """
+    head = min(CHUNK_SIZE - 1, CHUNK_SOFT_MAX - 101)  # 再长一点就装不下这条 100 字符的尾巴
+    chunks = chunk_text("甲" * head + "\n\n" + "乙" * 100)
     assert len(chunks) == 1
     assert chunks[0].endswith("乙" * 100)
 
 
 def test_a_middle_fragment_is_absorbed_into_the_previous_chunk():
-    chunks = chunk_text("甲" * 790 + "\n\n" + "乙" * 60 + "\n\n" + "丙" * 790)
-    assert [len(c) for c in chunks] == [851, 790]
+    head = min(CHUNK_SIZE - 1, CHUNK_SOFT_MAX - 61)
+    chunks = chunk_text("甲" * head + "\n\n" + "乙" * 60 + "\n\n" + "丙" * 790)
+    # 碎块（60 字符 < MIN_CHUNK）并进了上一块，而不是自己占一个名额
+    assert any("甲" in c and "乙" * 60 in c for c in chunks)
+    assert not any(c.strip() == "乙" * 60 for c in chunks)
+    assert all(len(c) <= CHUNK_SOFT_MAX for c in chunks)
 
 
 def test_a_short_section_that_opens_with_a_heading_is_kept_separate():
     """短但**以标题开头**的块不并——那是真的一节，并进上一节就把章节边界切错了。"""
-    chunks = chunk_text("甲" * 790 + "\n\n## 小节二\n\n" + "乙" * 60)
+    chunks = chunk_text("甲" * (CHUNK_SIZE - 1) + "\n\n## 小节二\n\n" + "乙" * 60)
     assert len(chunks) == 2
     assert chunks[1].startswith("## 小节二")
 
@@ -175,7 +184,7 @@ def test_stats_counts_chunks_made_by_an_older_chunker(monkeypatch):
 
 
 def test_stats_counts_blocks_from_another_embedding_model(monkeypatch):
-    """换模型后旧向量的相似度没有意义，必须能看见。缺 `embed` 的块按当前模型认
+    """换模型后旧向量的相似度没有意义，必须能看见。缺 `embed` 的块按当前戳认
     ——这个索引从头到尾只被 bge-small-zh-v1.5 建过，是事实不是放水。"""
     from app.core import embedder, indexer
 
@@ -184,7 +193,7 @@ def test_stats_counts_blocks_from_another_embedding_model(monkeypatch):
         "get_collection",
         lambda: _FakeCol(
             [
-                {"source": "a.md", "embed": embedder.MODEL_NAME, "hash": "x"},
+                {"source": "a.md", "embed": embedder.VECTOR_TAG, "hash": "x"},
                 {"source": "a.md", "embed": "BAAI/bge-large-zh-v1.5"},
                 {"source": "b.md"},  # 改动前写入：两个戳都没有
             ]
@@ -194,6 +203,21 @@ def test_stats_counts_blocks_from_another_embedding_model(monkeypatch):
     assert s["stale_embed"] == 1
     assert s["embed_model"] == embedder.MODEL_NAME
     assert s["unhashed"] == 2  # 第二条缺 hash，第三条两个都缺
+
+
+def test_stats_sees_a_change_of_embedding_method_not_just_the_model(monkeypatch):
+    """**模型没换、做法换了**也得被看见：超窗块从「静默截断」改成「窗口池化」之后，
+    同一段文本算出来的向量不再相等。只按模型名比对的话，这批块会假装自己是新向量。"""
+    from app.core import embedder, indexer
+
+    assert embedder.MODEL_NAME in embedder.VECTOR_TAG  # 戳里仍带着模型名
+
+    monkeypatch.setattr(
+        indexer,
+        "get_collection",
+        lambda: _FakeCol([{"source": "a.md", "embed": embedder.MODEL_NAME, "hash": "x"}]),
+    )
+    assert indexer.stats()["stale_embed"] == 1
 
 
 def test_drifted_reports_sources_whose_bytes_changed(monkeypatch):

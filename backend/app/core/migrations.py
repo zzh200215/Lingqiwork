@@ -352,6 +352,285 @@ async def _m014_thread_kind_session(conn) -> None:
         log.info("迁移 v14：thread_items 里有 %s 条挂接从 tutor 改名为 session", r.rowcount)
 
 
+async def _m015_turn_citations(conn) -> None:
+    """v15：回合账本加 `sources_injected` / `sources_cited`（P3 · 接地闭环）。
+
+    **为什么要开正式列，而不接着挤 `quality_json`。** P2 把检索质量门的结论挂在
+    `quality_json` 里，当时的理由写在 `chat.py`：`turn_trace._write` 是**逐字段映射列**的，
+    往 draft 里塞新键会被静默丢掉，而 `quality_json` 本来就在落库——那是零迁移的做法，
+    也明确写了「P3 给它开正式列时再搬」。这两个数就是那一次要搬的东西：它们是**要聚合的
+    两个计数**（「注入 5 条引用 0 条」是检索质量下滑最早的信号），而挂在 JSON 里的数
+    只能一行行读出来自己数，聚合查询写不出来。
+    （质量门那三个数**不搬**：它只在排查某一轮时才有用，逐条读正是它该有的用法。）
+
+    **不存比率，只存计数**：没检索的回合（闲聊跳过、RAG 关）注入就是 0 —— 把它算进分母
+    等于拿「没检索」当「检索了没人用」。分母交给聚合的人选。
+
+    **老行补 0 是诚实的**，不是拿 0 充数：这个功能上线之前，那些回合确实一条材料都没注入
+    （`chat.py` 那时候也没发过 `[来源 N]` 的编号表）。而「读不到」与「是 0」在这里不是
+    一回事——真要区分，看同一行的 `quality["channel"]`（skip = 没检索）。
+    """
+    if await _add_column(
+        conn,
+        "turn_traces",
+        "sources_injected",
+        "ALTER TABLE turn_traces ADD COLUMN sources_injected INTEGER DEFAULT 0",
+    ):
+        log.info("迁移 v15：turn_traces 补上 sources_injected（这一轮注入了几条材料）")
+    if await _add_column(
+        conn,
+        "turn_traces",
+        "sources_cited",
+        "ALTER TABLE turn_traces ADD COLUMN sources_cited INTEGER DEFAULT 0",
+    ):
+        log.info("迁移 v15：turn_traces 补上 sources_cited（模型真引用了几条）")
+
+
+async def _m016_turn_sub_traces(conn) -> None:
+    """v16：回合账本加 `sub_traces_json`（A1 · 子代理委托）。
+
+    **为什么是一列 JSON、而不是一张表**：子代理的账只在排查「这一轮为什么这么贵」时
+    **逐条读**，不参与聚合——要聚合的两个数（注入几条、引用几条）P3 已经开了正式列，
+    而委托次数要聚合时再说。一列 JSON 让「父这一轮花了多少、其中子代理花了多少」在同一行
+    里看得见，不必 join。
+
+    **它必须是列，不能塞进 `quality_json`**：`turn_trace._write` 是逐字段映射列的，
+    往草稿里塞新键会被**静默丢掉**（这个坑 P2 那轮记过）。A1 的验收要「sub_trace 抽查」，
+    丢掉就等于没记。
+
+    老行补 `[]`：这个功能上线之前没有委托这件事，空数组是事实（不是「读不到」）。
+    """
+    if await _add_column(
+        conn,
+        "turn_traces",
+        "sub_traces_json",
+        "ALTER TABLE turn_traces ADD COLUMN sub_traces_json TEXT DEFAULT '[]'",
+    ):
+        log.info("迁移 v16：turn_traces 补上 sub_traces_json（这一轮委托出去的子代理）")
+
+
+async def _m017_agent_tool_whitelist(conn) -> None:
+    """v17：`agents.tools_enabled`（布尔）→ `agents.tool_whitelist`（文本白名单）。
+
+    **A2 的字段语义升级**：原来这一栏只回答「这个 agent 用不用工具」；现在它回答
+    「这个 agent **能用哪些**工具」——`vault_*`、`kb_search`、`server__*` 这种 fnmatch
+    通配，空 = 不限制（全给），保留字 `none` = 一个都不给。语义与 `tasks.tool_whitelist`
+    统一在 `mcp.filter_specs` 一处。
+
+    **为什么是重建表**：SQLite 没有 `ALTER TABLE ... ALTER COLUMN`，布尔改成文本只能
+    建新表→拷数据→删旧表→改名。`agents` 表没有主键引用、也没有外键指出去（全库只有
+    两处 FK，都在 conversations/tutor_sessions 上），所以重建是安全的。
+
+    **新表的 DDL 从模型里长出来**（`Table.to_metadata`），不是手写一遍：手写的 DDL 与
+    `create_all` 迟早会分叉（NOT NULL / 默认值 / 唯一约束），而「迁移过的库」与「新建的库」
+    结构不一致是那种**没人会发现**的坏账。同名列也在这一处对齐（见 `models.Agent`）。
+
+    **旧值怎么映射**（错了就是静默改掉用户已经配好的行为）：
+    `1/true`（用工具）→ `''`（不限制，与旧行为一致）；`0/false`（不用工具）→ `'none'`
+    （一个都不给，与旧行为一致）。
+
+    新库走 `create_all` 时列已经是文本，这里是空操作。
+    """
+    from sqlalchemy import MetaData, text
+
+    cols = (await conn.execute(text("PRAGMA table_info(agents)"))).mappings().all()
+    if not cols:
+        return  # 表都没有：那是 create_all 的事
+    names = {c["name"] for c in cols}
+    if "tool_whitelist" in names:
+        return  # 新库 / 已经迁过
+    if "tools_enabled" not in names:
+        log.warning("迁移 v17：agents 表既没有 tools_enabled 也没有 tool_whitelist，跳过")
+        return
+
+    from app.models import Base
+
+    fresh = MetaData()
+    new = Base.metadata.tables["agents"].to_metadata(fresh, name="agents_new")
+    await conn.run_sync(new.create)
+    await conn.execute(
+        text(
+            "INSERT INTO agents_new"
+            " (id, name, avatar, system_prompt, model_id, use_rag, tool_whitelist, enabled, created_at)"
+            " SELECT id, name, avatar, system_prompt, model_id, use_rag,"
+            " CASE WHEN tools_enabled THEN '' ELSE 'none' END, enabled, created_at"
+            " FROM agents"
+        )
+    )
+    await conn.execute(text("DROP TABLE agents"))
+    await conn.execute(text("ALTER TABLE agents_new RENAME TO agents"))
+    log.info("迁移 v17：agents.tools_enabled → tool_whitelist（布尔升成白名单，false → 'none'）")
+
+
+async def _m018_message_steps(conn) -> None:
+    """A2 的逐步账进会话（2026-09-23）：`messages.steps_json`。
+
+    加列而不是新表：它和 `sources_json` / `artifacts_json` 是同一类东西——**那一条消息的
+    附属事实**，读的时候跟着消息一起出来（`_dump` 一处）。新表要多一次 join、多一处
+    生命周期要管，换不来任何东西。
+
+    老行是 NULL：界面照旧不渲染那一栏（**不是空账，是没有**）。
+    """
+    from sqlalchemy import text
+
+    cols = (await conn.execute(text("PRAGMA table_info(messages)"))).mappings().all()
+    if not cols:
+        return  # 表都没有：那是 create_all 的事
+    if "steps_json" in {c["name"] for c in cols}:
+        return  # 新库 / 已经迁过
+    await conn.execute(text("ALTER TABLE messages ADD COLUMN steps_json TEXT"))
+    log.info("迁移 v18：messages 加 steps_json（协作的逐步账，刷新之后不再丢）")
+
+
+async def _m019_prompt_library(conn) -> None:
+    """「提示词」模块（2026-09-24）：`prompts` 扩成一个库，另加版本与使用两张表。
+
+    **为什么扩列而不是新建表**：`prompts` 就是「我攒的提示词」那一份真值，已经有 id
+    与既有的 `/` 唤起在用它。标签/分类/收藏/评分是**同一条记录的属性**，另起一张表只会
+    让每次读列表都要 join 一次，换不来任何东西。
+
+    加列一律走 `_add_column`（新库 `create_all` 已建好，不先查会撞 `duplicate column name`）；
+    两张新表从模型长出来（`create(checkfirst=True)`），**不手写 DDL**——手写的和 `create_all`
+    迟早分叉，而「迁移过的库」与「新建的库」不一致没人会发现（`docs/testing.md` §6.6）。
+    """
+    added: list[str] = []
+    for col, ddl in (
+        ("updated_at", "ALTER TABLE prompts ADD COLUMN updated_at DATETIME"),
+        ("tags", "ALTER TABLE prompts ADD COLUMN tags VARCHAR(200) DEFAULT ''"),
+        ("category", "ALTER TABLE prompts ADD COLUMN category VARCHAR(50) DEFAULT ''"),
+        ("favorite", "ALTER TABLE prompts ADD COLUMN favorite BOOLEAN DEFAULT 0"),
+        ("rating", "ALTER TABLE prompts ADD COLUMN rating INTEGER DEFAULT 0"),
+        ("source", "ALTER TABLE prompts ADD COLUMN source VARCHAR(300) DEFAULT ''"),
+        ("note", "ALTER TABLE prompts ADD COLUMN note VARCHAR(500) DEFAULT ''"),
+    ):
+        if await _add_column(conn, "prompts", col, ddl):
+            added.append(col)
+
+    from app.models import PromptUsage, PromptVersion
+
+    for table in (PromptVersion.__table__, PromptUsage.__table__):
+        await conn.run_sync(lambda sync_conn, t=table: t.create(sync_conn, checkfirst=True))
+
+    log.info("迁移 v19：prompts 扩成库（补 %s）+ prompt_versions / prompt_usages 就位", added or "无")
+
+
+async def _m020_prompt_categories(conn) -> None:
+    """提示词分类成为一等对象（2026-09-24，参照 AI Gist 的「分类管理」）：`prompt_categories`。
+
+    **只加一张表，不动 `prompts`**：成员关系仍旧只有 `prompts.category` 一处真值，
+    这张表只补「颜色」与「排序」这两样 `prompts` 上不该有的东西（它们属于分类，不属于条目）。
+
+    表从模型长出来（`create(checkfirst=True)`），**不手写 DDL**——手写的和 `create_all`
+    迟早分叉，而「迁移过的库」与「新建的库」不一致没人会发现（`docs/testing.md` §6.6）。
+    """
+    from app.models import PromptCategory
+
+    await conn.run_sync(lambda sync_conn: PromptCategory.__table__.create(sync_conn, checkfirst=True))
+    log.info("迁移 v20：prompt_categories 就位（分类有名字、颜色、顺序了）")
+
+
+async def _m021_thread_status_deadline(conn) -> None:
+    """v21：`threads` 加状态与截止日（方案 §8.4 事项页）。
+
+    **只存两个字段**：`status`（`open`/`done`，你自己设的）与 `deadline`（`YYYY-MM-DD`）。
+
+    **「停滞」刻意不存**：那是「N 天没动静」，一个**算得出来**的事实——
+    存进来的话它会在没人碰的某一天悄悄过期（库里写着 open、其实早停了），
+    而界面还得靠第二次判断去纠正。算的话永远和 `updated_at` 一致。
+
+    老行补 `'open'`：这个功能上线之前，每一件事都还没被判定过——「进行中」是事实，
+    不是「读不到」（那条「读不到 ≠ 零」的另一面：这里确实读得到，就是默认态）。
+    """
+    added: list[str] = []
+    for col, ddl in (
+        ("status", "ALTER TABLE threads ADD COLUMN status VARCHAR(12) DEFAULT 'open'"),
+        ("deadline", "ALTER TABLE threads ADD COLUMN deadline DATE"),
+    ):
+        if await _add_column(conn, "threads", col, ddl):
+            added.append(col)
+    log.info("迁移 v21：threads 补上 %s（状态与截止日）", added or "无")
+
+
+async def _m022_deliver_templates(conn) -> None:
+    """v22：自定义体裁模板（方案 §8.1 行2）。
+
+    **只加一张表**：内置体裁仍旧是 `core/deliver.py` 里那张 `GENRES` 常量表——它是代码，
+    随版本走、可 review、不该被搬进库里（搬进去之后「这五条是谁改的」就没人答得上来）。
+    这张表装的是**你自己写的**那些。
+
+    表从模型长出来（`create(checkfirst=True)`），**不手写 DDL**——手写的和 `create_all`
+    迟早分叉，而「迁移过的库」与「新建的库」不一致没人会发现（`docs/testing.md` §6.6）。
+    """
+    from app.models import DeliverTemplate
+
+    await conn.run_sync(
+        lambda sync_conn: DeliverTemplate.__table__.create(sync_conn, checkfirst=True)
+    )
+    log.info("迁移 v22：deliver_templates 就位（体裁可以是自己写的了）")
+
+
+async def _m023_thread_ignores(conn) -> None:
+    """v23：收件箱的「忽略」（方案 §8.4 行175）。
+
+    **只加一张表**：`thread_items`（挂上了什么）与这张（不想挂什么）是两件事，混在一张表里
+    就得靠一个 `ignored` 布尔去区分，而那两个状态的字段集完全不同（一个要 thread_id，
+    另一个不该有）。分开之后 `unclassified()` 的条件是「不在 A 里、也不在 B 里」，一眼能读。
+
+    表从模型长出来（`create(checkfirst=True)`），**不手写 DDL**——手写的和 `create_all`
+    迟早分叉，而「迁移过的库」与「新建的库」不一致没人会发现（`docs/testing.md` §6.6）。
+    """
+    from app.models import ThreadIgnore
+
+    await conn.run_sync(lambda sync_conn: ThreadIgnore.__table__.create(sync_conn, checkfirst=True))
+    log.info("迁移 v23：thread_ignores 就位（收件箱可以清空了）")
+
+
+async def _m024_run_timestamps_to_utc(conn) -> None:
+    """v24：`task_runs.finished_at` 与 `tasks.last_run` 搬回 UTC。
+
+    **这三列原来不是一个时钟**：`task_runs.started_at` 走模型默认的 `utcnow()`（UTC），
+    而 `finished_at` 走 `datetime.now().astimezone()`、`last_run` 走 `started.astimezone()`
+    ——两个都是**本地墙上时间**。后果在界面上看得见：`elapsed()` 拿两个时钟相减，
+    **每一次运行的耗时都多八小时**（实测一次 50 秒的运行显示成「480 分 50 秒」），
+    而且同一屏上任务行说「上次 13:58」、它自己的运行记录说「05:58」。
+
+    代码那三处已经改了（`core/tasks._finish_run` / `run_task`、`routers/tasks` 的序列化
+    走 `iso_utc`），这里把**已经写进去的行**搬到同一个时钟上。
+
+    两条边界：
+
+    - **`started_at` 一个字都不动**——它本来就对。顺手「统一」它会把对的改错。
+    - **本机就是 UTC 时直接返回**：那些行本来就是 UTC，减 0 秒没意义，
+      而且这条迁移在那种机器上应该是彻底的空操作。
+
+    偏移取**当下**的（不是每行各自的历史偏移）：这个仓库存的是「墙上时间」，
+    没有留下每行当时是哪个偏移的信息，所以跨过夏令时切换的那些行只能差一小时——
+    比现在整整齐齐差八小时好得多，而这件事本身也值得写在这儿而不是藏着。
+    """
+    from datetime import datetime
+
+    from sqlalchemy import text
+
+    off = datetime.now().astimezone().utcoffset()
+    secs = int(off.total_seconds()) if off else 0
+    if secs == 0:
+        log.info("迁移 v24：本机就是 UTC，两个时间列本来就是对的（空操作）")
+        return
+
+    moved = 0
+    for table, col in (("task_runs", "finished_at"), ("tasks", "last_run")):
+        # `strftime('%f')` 而不是 `datetime()`：后者会把微秒整段丢掉
+        res = await conn.execute(
+            text(
+                f"UPDATE {table} SET {col} = strftime('%Y-%m-%d %H:%M:%f', {col}, :mod) "
+                f"WHERE {col} IS NOT NULL"
+            ),
+            {"mod": f"-{secs} seconds"},
+        )
+        moved += res.rowcount or 0
+    log.info("迁移 v24：%s 行时间戳搬回 UTC（本地偏移 %s 秒）", moved, secs)
+
+
 # 有序。**只增不改**：已经发出去的版本号不许改内容（谁跑过就永远跑过了）。
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline：补齐历史列（改动前那张写死的列表）", _m001_baseline),
@@ -368,7 +647,39 @@ MIGRATIONS: list[Migration] = [
     Migration(12, "§6：让「回指采纳」可算（cards.prereq_seen_at + tutor_sessions.prereq_card_id）", _m012_prereq_adoption),
     Migration(13, "S1：质量闭环加 injected（这份产出吃着技能生成的没有，三态）", _m013_feedback_injected),
     Migration(14, "R3：挂接的 kind 从 tutor 改名为 session（一场会话，不是一个功能）", _m014_thread_kind_session),
+    Migration(15, "P3：回合账本加 sources_injected / sources_cited（注入了几条、真引用了几条）", _m015_turn_citations),
+    Migration(16, "A1：回合账本加 sub_traces_json（这一轮委托出去的子代理）", _m016_turn_sub_traces),
+    Migration(17, "A2：agents.tools_enabled 升成 tool_whitelist（布尔 → 白名单）", _m017_agent_tool_whitelist),
+    Migration(18, "A2：messages 加 steps_json（协作的逐步账，刷新之后不再丢）", _m018_message_steps),
+    Migration(19, "提示词模块：prompts 扩成库 + 版本与使用两张表", _m019_prompt_library),
+    Migration(20, "提示词模块：分类成为一等对象（prompt_categories，带颜色与顺序）", _m020_prompt_categories),
+    Migration(21, "事项页：threads 加状态与截止日（§8.4）", _m021_thread_status_deadline),
+    Migration(22, "报告页：自定义体裁模板（§8.1 行2）", _m022_deliver_templates),
+    Migration(23, "事项页：收件箱的「忽略」（§8.4 行175）", _m023_thread_ignores),
+    Migration(24, "运行时间戳统一到 UTC（耗时曾多八小时）", _m024_run_timestamps_to_utc),
 ]
+
+
+async def _m021_thread_status_deadline(conn) -> None:
+    """v21：`threads` 加状态与截止日（方案 §8.4 事项页）。
+
+    **只存两个字段**：`status`（`open`/`done`，你自己设的）与 `deadline`（`YYYY-MM-DD`）。
+
+    **「停滞」刻意不存**：那是「N 天没动静」，一个**算得出来**的事实——
+    存进来的话它会在没人碰的某一天悄悄过期（库里写着 open、其实早停了），
+    而界面还得靠第二次判断去纠正。算的话永远和 `updated_at` 一致。
+
+    老行补 `'open'`：这个功能上线之前，每一件事都还没被判定过——「进行中」是事实，
+    不是「读不到」（`docs` 里那条「读不到 ≠ 零」的另一面：这里确实读得到，就是默认态）。
+    """
+    added: list[str] = []
+    for col, ddl in (
+        ("status", "ALTER TABLE threads ADD COLUMN status VARCHAR(12) DEFAULT 'open'"),
+        ("deadline", "ALTER TABLE threads ADD COLUMN deadline DATE"),
+    ):
+        if await _add_column(conn, "threads", col, ddl):
+            added.append(col)
+    log.info("迁移 v21：threads 补上 %s（状态与截止日）", added or "无")
 
 
 def _version_of(m: Migration) -> int:

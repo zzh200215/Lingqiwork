@@ -54,12 +54,20 @@ _FINGERPRINTS = [
     ("app.core.pet_context", "FACTS_HEAD", "a985a67f61ca"),
     ("app.core.pet_context", "LINES_HEAD", "b2135e9bf9eb"),
     ("app.core.pet_context", "HISTORY_NOTE", "f7b8669d3f05"),
+    # A4（Agent升级.md §2）：主聊天注入的「手头那件事」那一段的抬头。同 Z1——运行时
+    # 追加的也算一等提示词；它点名了 `vault_read_file`，所以改它之前先想清楚那把工具还在不在。
+    ("app.core.thread_context", "THREAD_HEAD", "b64234bf98ab"),
+    # 提示词模块（2026-09-24）：AI 生成 / 调优 / 提取变量。它们同样在驱动模型行为，
+    # 所以按同一条纪律登记——**不是**「用户自己那条提示词」，那是数据不是源码。
+    ("app.core.prompt_ai", "GENERATE_SYSTEM", "a1d7bdcc6179"),
+    ("app.core.prompt_ai", "REFINE_SYSTEM", "f83523f84eb1"),
+    ("app.core.prompt_ai", "EXTRACT_VARS_SYSTEM", "bb455d7c1402"),
 ]
 
 
 def test_inventory_count():
     items = inventory()
-    assert len(items) == 40
+    assert len(items) == 44
     assert len(items) == len(_FINGERPRINTS)
 
 
@@ -111,13 +119,15 @@ def test_inline_notes_registered():
 
 def test_summary_shape():
     s = summary()
-    assert s["count"] == 40
+    assert s["count"] == 44
     assert s["inline"] == 8
     assert s["missing"] == []
+    assert s["by_module"]["app.core.prompt_ai"] == 3  # 提示词模块：生成 / 调优 / 提取变量
     assert s["by_module"]["app.core.retell"] == 2  # M1：卡片判分 + 会话判分
     assert s["by_module"]["app.core.interview"] == 2  # M3：声部 + 报告
     assert s["by_module"]["app.core.pet_tone"] == 1  # P2：语气微调那条规矩
     assert s["by_module"]["app.core.pet_context"] == 3  # Z1：今天的事实 + 它说过的话 + 连着聊那句
+    assert s["by_module"]["app.core.thread_context"] == 1  # A4：手头那件事那段
     assert s["by_module"]["app.routers.chat"] == 1
     assert s["by_module"]["app.routers.pet"] == 1
     assert s["by_module"]["app.core.tutor"] == 5

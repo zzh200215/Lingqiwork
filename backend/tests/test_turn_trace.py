@@ -115,6 +115,52 @@ async def test_a_lie_is_recorded_as_a_lie():
     assert row["claim_checked"] is True and row["claim_truthful"] is False
 
 
+# ---------- P3：引用那两个计数 ----------
+
+
+async def test_the_citation_counts_land_in_their_own_columns():
+    """P3 把「注入几条 / 引用几条」搬进了正式列（v15）—— 挂在 `quality_json` 里读得出来、
+    **聚合不出来**，而这两个数就是要聚合的（连续多轮「注入 5 条引用 0 条」是检索质量下滑
+    最早的信号）。"""
+    await _reset()
+    draft = tt.begin(conversation_id=1, model_id="m")
+    draft["sources_injected"] = 5
+    draft["sources_cited"] = 2
+    row = await tt.finish(draft)
+    assert row["sources_injected"] == 5 and row["sources_cited"] == 2
+
+    from sqlalchemy import select as _select
+
+    from app.db import SessionLocal
+
+    async with SessionLocal() as db:
+        got = (
+            await db.execute(_select(TurnTrace.sources_injected, TurnTrace.sources_cited))
+        ).first()
+    assert (got[0], got[1]) == (5, 2), "只写进 JSON 是不够的：这两列要能被聚合查询读到"
+
+
+async def test_the_citation_counts_default_to_zero_not_null():
+    """没跑 RAG 的那一轮注入就是 0（它确实一条材料都没注入）。**不编 NULL**：
+    真库那一列有 DEFAULT 0，模型读回来是 int。"""
+    await _reset()
+    row = await tt.finish(tt.begin(conversation_id=1, model_id="m"))
+    assert row["sources_injected"] == 0 and row["sources_cited"] == 0
+
+
+def test_fake_citation_reads_the_verdict_the_online_check_wrote():
+    """毛病这一栏**只读 `quality["citations"]["stripped"]`** —— 判据在 `core/citations.py`，
+    界面与账本都不自己再识别一遍（那会是第二份实现，分叉的那天这个数就没人敢信）。"""
+    row = _row()
+    row["quality"] = {"citations": {"injected": 5, "stripped": [7]}}
+    assert tt._matches(row, "fake_citation") is True
+    # 验过、但一个都没剥 → 这一栏不亮（「查了没问题」不是「没查」）
+    row["quality"] = {"citations": {"injected": 5, "stripped": []}}
+    assert tt._matches(row, "fake_citation") is False
+    # 老行（P3 之前）没有这一项 → 不亮，也不许当成异常
+    assert tt._matches(_row(), "fake_citation") is False
+
+
 async def test_finishing_without_a_draft_is_a_no_op():
     await _reset()
     assert await tt.finish(None) is None
@@ -412,6 +458,60 @@ async def test_summary_has_a_key_for_every_filter():
     out = await tt.summary()
     assert [f["key"] for f in out["filters"]] == [f["key"] for f in tt.FILTERS]
     assert set(out["counts"]) == {f["key"] for f in tt.FILTERS}
+
+
+# ---------- P3：材料那几个读数 ----------
+
+
+async def _citation_turns() -> None:
+    """四条各一种材料形态：用了材料的、一点没引用的、没检索的、注入了但全引用不存在的。"""
+    await _reset()
+    used = tt.begin(conversation_id=11, model_id="m")
+    used["sources_injected"] = 5
+    used["sources_cited"] = 2
+    await tt.finish(used)
+
+    ignored = tt.begin(conversation_id=12, model_id="m")
+    ignored["sources_injected"] = 4
+    ignored["sources_cited"] = 0
+    await tt.finish(ignored)
+
+    # 没检索的那一轮（闲聊跳过 / RAG 关）：注入 0 —— **不许进材料那几个数的分母**
+    skipped = tt.begin(conversation_id=13, model_id="m")
+    skipped["quality"] = {"channel": {"channel": "skip", "level": "rule"}}
+    await tt.finish(skipped)
+
+
+async def test_summary_counts_material_usage_without_a_rate():
+    """P3：材料用掉了几条 —— **两个计数 + 一个「有材料却没引用」的回合数，一个比率都没有**。
+
+    分母是**注入过材料的回合**（2 条），不是窗口里的回合总数（3 条）：没检索的那一轮注入
+    本来就是 0，把它算进来就是把「没检索」读成「检索了没人用」（`_SUMMARY_RULES["sources"]`）。
+    """
+    await _citation_turns()
+    out = await tt.summary()
+    assert out["turns"] == 3
+    src = out["sources"]
+    assert src == {"turns_with_material": 2, "injected": 9, "cited": 2, "uncited_turns": 1}
+
+
+async def test_summary_says_so_when_it_cannot_read_the_material_counts(monkeypatch):
+    """读不到时材料那一块**也要有形状**（界面照 `readable` 摆「读不出来」，不摆一排 0）。"""
+    await _citation_turns()
+
+    async def boom(_since, _cap):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(tt, "_summary_rows", boom)
+    out = await tt.summary()
+    assert out["readable"] is False
+    assert out["sources"] == {
+        "turns_with_material": 0,
+        "injected": 0,
+        "cited": 0,
+        "uncited_turns": 0,
+    }
+    assert out["rules"]["sources"], "口径要跟着读数一起给出去，界面照抄"
 
 
 async def test_summary_leaves_out_what_is_outside_the_window():

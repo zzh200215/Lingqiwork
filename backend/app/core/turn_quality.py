@@ -41,6 +41,15 @@ _LANDED_MARKERS = (
 )
 _MARKER_WINDOW = 14  # 路径往前看这么多字找那个字眼
 
+# **判据与路径必须在同一句里**（2026-09-20 加，A0 第一轮基线抓到的误报）。
+# 实测原文：「**已存入产出**。周报**基于** notes/本周进展.md 的四条记录整理…」——
+# 产出真的存了（回执在 `deliver/`），它只是顺口提了一句**材料来源**，而「往前 14 字」的
+# 窗口把上一句的「已存入产出」捞了进来，于是报了一个不存在的路径。
+# 一句话里的落盘字眼管不到下一句的主语，所以跨句不算。
+# **换行不算断句**（只认真正的句末标点）：模型常把回执写成
+# 「已存入产出：\nrecap/x.md」——那仍然是同一个回执，不能因为换行就漏掉。
+_SENTENCE_BREAK = "。！？；!?;"
+
 
 def _norm(path: str) -> str:
     return (path or "").strip().replace("\\", "/").lstrip("./").lower()
@@ -66,10 +75,12 @@ def invented_path_in_reply(reply: str, artifacts: list | None) -> str:
     这是「编造路径」那条缺陷的确定性版本：模型说「存到 X 了」，而这一轮真正落盘的产出里
     没有 X —— 用户点开就是 404。只报第一个（一条就够触发拦截；全列出来只会把日志淹掉）。
 
-    **两条收窄，都是被真数据逼出来的**：
+    **三条收窄，都是被真数据逼出来的**：
     - 只认「目录/文件名.md」形状（中文斜杠、裸文件名不算）；
     - 路径必须贴着「已存入 / 存到 / 落盘到 / 产出在」这类字眼（`_LANDED_MARKERS`）——
-      否则「照着 notes/本周进展.md 写的」这种**材料来源**会被当成编造的回执（W2b 那一轮实测到了）。
+      否则「照着 notes/本周进展.md 写的」这种**材料来源**会被当成编造的回执（W2b 那一轮实测到了）；
+    - 那个字眼必须在**同一句**里（`_SENTENCE_BREAK`，2026-09-20 加）——
+      「已存入产出。周报基于 notes/本周进展.md 整理」这一句，落盘字眼管不到下一句的主语（A0 第一轮基线实测到了）。
     """
     text = reply or ""
     known = {_norm(a.get("path")) for a in (artifacts or []) if isinstance(a, dict)}
@@ -79,20 +90,39 @@ def invented_path_in_reply(reply: str, artifacts: list | None) -> str:
         if not p or p in known:
             continue
         window = text[max(0, m.start() - _MARKER_WINDOW) : m.start()]
+        if any(ch in window for ch in _SENTENCE_BREAK):
+            continue  # 跨句了：那是上一句在说别的事，不是在报这一处落点
         if any(marker in window for marker in _LANDED_MARKERS):
             return m.group(0)
     return ""
 
 
-def findings(reply: str, artifacts: list | None) -> list[dict]:
+def findings(
+    reply: str,
+    artifacts: list | None,
+    *,
+    tool_names: list | None = None,
+    ask: str = "",
+) -> list[dict]:
     """这一轮的两条底线 → findings（空 = 没问题）。Pure。
 
     刻意**不**在这里判「聪明不聪明」（文体、长度、有没有问对问题）—— 这里只拦那两条
     「用户会被骗」的：说了没做、指了个不存在的东西。
+
+    `tool_names` / `ask` 是给「嘴上删了」那一条用的（§4.1 ① 的另一半）：要看**这一轮真的
+    调没调** `memory_delete`、以及**你这一轮有没有让它删**。老调用方不传就当不知道——
+    那一条不判（读不到就别说人家撒谎），其余判据一个字不变。
     """
     out: list[dict] = []
     if claimed_a_save_without_one(reply, artifacts):
         out.append({"code": "claims_a_save_without_one", "detail": "回复里说存了，但这一轮没有任何回执"})
+    if claims_a_delete_without_one(reply, tool_names, ask):
+        out.append(
+            {
+                "code": "claims_a_delete_without_one",
+                "detail": "回复里说删了/忘了，但这一轮一次 memory_delete 都没调",
+            }
+        )
     if long_body_without_a_receipt(reply, artifacts):
         out.append(
             {
@@ -203,6 +233,119 @@ def asked_to_save(ask: str) -> bool:
     """用户这一句里有没有**明说要落盘**。Pure。"""
     text = (ask or "").strip().lower()
     return any(h.lower() in text for h in SAVE_HINTS)
+
+
+# 用户明确说要**忘掉 / 删掉记忆**的说法（§4.1 ① 的落地，2026-09-22）。与 `SAVE_HINTS` 同族的
+# **窄词表**，但代价的方向相反：落盘那条认错了只是多存一份，这条认错了是**替你删掉一条你还要的
+# 记忆**——所以判据只认两种句子：
+#
+#   ① **「忘」这个动作**（忘掉 / 忘记 / 别再记着 / 不用记住…）——忘只可能指向记忆，
+#      不存在"忘掉一个文件"这种说法；
+#   ② **「删 / 清除」+ 句子里同时有「记忆」这个对象**——`删掉这个文件` **不**放行
+#      （放行了的话，模型可能顺手把一条提到这个文件的记忆删掉）。
+#
+# **认不出就是不放行**（fail closed）：模型少一只手，好过它替你删。漏认的补救成本也很低——
+# 你换个说法（「忘掉那条记忆」）它就拿到了。
+FORGET_WORDS: tuple[str, ...] = (
+    "忘掉",
+    "忘记",
+    "别再记",
+    "别记着",
+    "不用记着",
+    "不用记住",
+    "别再记住",
+    "不用再记",
+    "不要再记",
+    "不需要记",
+)
+DELETE_WORDS: tuple[str, ...] = ("删", "清除", "清掉", "抹掉", "去掉", "移除")
+MEMORY_WORDS: tuple[str, ...] = ("记忆", "memory", "remember")
+
+
+def asked_to_forget(ask: str) -> bool:
+    """用户这一句里有没有**明说要忘掉 / 删掉记忆**。Pure，坏输入不抛。**认不出就是不放行。**
+
+    这是 `memory_delete` 那一类破坏性工具的**口头授权**判据（`mcp.DESTRUCTIVE_TOOLS`）：
+    chat 与零柒组装工具时问它，**问不过就不把那只手给它**。之所以不做确认弹窗，是因为
+    那条挂账当初被挂起来的原因就是"加确认框反而打断流"——而"不给它这只手"零打断、可单测、
+    且天然 fail-closed（形态照 W2b 那条先例：结构化那一轮只是不给 `save_artifact`）。
+    """
+    text = (ask or "").strip().lower()
+    if not text:
+        return False
+    if any(w in text for w in FORGET_WORDS):
+        return True
+    return any(w in text for w in DELETE_WORDS) and any(w in text for w in MEMORY_WORDS)
+
+
+# 「已经删掉 / 已经忘掉」这类**过去式**的口吻。与 `_LANDED_MARKERS` 同族的窄词表：
+# 只认"我把它做完了"的口气，不认"要不要删 / 我删不了 / 建议删"（那是另一回事，见 `_DELETE_HEDGES`）。
+_DELETED_MARKERS: tuple[str, ...] = (
+    "已删除",
+    "已经删除",
+    "删除了",
+    "已删掉",
+    "已经删掉",
+    "删掉了",
+    "已清空",
+    "清空了",
+    "已移除",
+    "移除了",
+    "已忘掉",
+    "已经忘掉",
+    "忘掉了",
+    "已忘记",
+    "已经忘记",
+    "忘记了",
+    "已不再记得",
+    "不再记得",
+)
+# 出现这些就当**没说**：征询（要不要删）、否定（还没删 / 没有删除）、做不到（删不了 / 无法删除）。
+# 它们与"已经做完了"是两件事——把这两种混在一起，判据就会去怪一个**说实话**的回合。
+_DELETE_HEDGES: tuple[str, ...] = (
+    "没删",
+    "没有删",
+    "还没",
+    "尚未",
+    "无法",
+    "不能",
+    "没法",
+    "删不了",
+    "要不要",
+    "需要我",
+    "可以删",
+    "建议删",
+    "是否",
+)
+
+
+def claims_a_delete_without_one(
+    reply: str, tool_names: list | None = None, ask: str = ""
+) -> bool:
+    """嘴上删了、其实一次 `memory_delete` 都没调。Pure。
+
+    **这条是 §4.1 ① 补上的另一半。** 那一条把"真删"堵住了（没授权就不给那只手），
+    但工具不在手里时模型**仍可能回一句「已经帮你删掉了」**——对用户来说，「说了没做」
+    比「做不到」坏得多（`claims_a_save_without_one` 是同一条道理，只是那一条管落盘）。
+
+    **三条收窄，都是为了让它在真该响的时候才响**：
+    1. **只在你这一轮明说要删/忘的时候判**（`asked_to_forget`）——同一个「删掉了」在别处
+       完全可能是实话：「我把第三段冗余删掉了」说的是它正在写的那篇稿子，不是你的记忆；
+    2. 认的是**过去式口吻**，而且那句话里不能带征询/否定（`_DELETE_HEDGES`）；
+    3. 这一轮**真的没调** `memory_delete`（按工具账数，与 W4 数 saves 是同一处口径）。
+
+    `tool_names is None`（读不到工具账）时**不判**：读不到就别说人家撒谎。
+    """
+    if tool_names is None or not asked_to_forget(ask):
+        return False
+    if any(str(n) == "memory_delete" for n in tool_names):
+        return False
+    for sentence in re.split(f"[{re.escape(_SENTENCE_BREAK)}]", reply or ""):
+        if any(m in sentence for m in _DELETED_MARKERS) and not any(
+            h in sentence for h in _DELETE_HEDGES
+        ):
+            return True
+    return False
 
 
 def retry_instruction(bad: list[dict], ask: str = "", delivery: bool = False) -> str:

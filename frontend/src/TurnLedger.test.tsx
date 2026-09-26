@@ -41,6 +41,9 @@ function trace(patch: Partial<TurnTrace> = {}): TurnTrace {
     claim_checked: true,
     claim_truthful: true,
     retried: 0,
+    // P3：默认「这一轮没注入材料」——那一格照规矩**不摆**（摆 0 会被读成「检索了没人用」）
+    sources_injected: 0,
+    sources_cited: 0,
     seconds: 4.2,
     error: '',
     flags: [],
@@ -90,6 +93,26 @@ describe('TurnLedger · 一行事实', () => {
     )
     expect(container.querySelector('[data-turn-flag="lie"]')?.textContent).toBe('声称存了没存')
     expect(container.querySelector('[data-turn-flag="slow"]')?.textContent).toBe('慢')
+  })
+
+  // P3：注入了几条 / 真引用了几条。**只在注入 > 0 时摆** —— 没检索的那一轮摆「材料 0」
+  // 会被读成「检索了但一条没用」，而它多半只是闲聊跳过了检索。
+  it('有材料的回合摊出「注入 / 引用」两个计数', () => {
+    const { container } = render(
+      <ul>
+        <TurnRow t={trace({ sources_injected: 5, sources_cited: 2 })} now={Date.now()} labels={{}} />
+      </ul>
+    )
+    expect(container.querySelector('[data-turn-sources]')?.getAttribute('data-turn-sources')).toBe('5/2')
+  })
+
+  it('没注入材料的回合不摆那一格（不拿 0 充数）', () => {
+    const { container } = render(
+      <ul>
+        <TurnRow t={trace({ sources_injected: 0, sources_cited: 0 })} now={Date.now()} labels={{}} />
+      </ul>
+    )
+    expect(container.querySelector('[data-turn-sources]')).toBeNull()
   })
 
   // W3：这一轮被判成交付型还是闲聊，判在哪一级。**判定在后端**，界面只显示。

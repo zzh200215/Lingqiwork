@@ -1,4 +1,4 @@
-import {
+﻿import {
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -219,7 +219,7 @@ export default function HabitStrip({
           }}
           className="ml-auto text-xs text-neutral-400 transition-colors hover:text-violet-600 dark:hover:text-violet-300"
         >
-          ＋ 添加 <kbd className="text-[10px]">A</kbd>
+          ＋ 添加 <kbd className="text-xs">A</kbd>
         </button>
       </div>
 
@@ -254,7 +254,7 @@ export default function HabitStrip({
                 h.scheduled ? 'hover:bg-neutral-50 dark:hover:bg-neutral-800/50' : 'opacity-40'
               }`}
             >
-              <span className="w-4 shrink-0 text-center text-[10px] text-neutral-400">
+              <span className="w-4 shrink-0 text-center text-xs text-neutral-400">
                 {h.scheduled && n >= 1 && n <= 9 ? n : ''}
               </span>
               <button
@@ -267,7 +267,7 @@ export default function HabitStrip({
                       ? `每按一次 +1${h.unit}，满了再按清零`
                       : '打勾 / 取消'
                 }
-                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[11px] transition-colors ${
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs transition-colors ${
                   h.done
                     ? 'border-emerald-500 bg-emerald-500 text-white'
                     : 'border-neutral-300 text-transparent hover:border-emerald-400 dark:border-neutral-600'
@@ -283,7 +283,7 @@ export default function HabitStrip({
                   {h.unit}
                 </span>
               )}
-              {h.auto && <span className="shrink-0 text-[10px] text-neutral-400">⟳ 自动</span>}
+              {h.auto && <span className="shrink-0 text-xs text-neutral-400">⟳ 自动</span>}
               {h.streak > 0 && (
                 <span className="shrink-0 text-xs text-amber-600 dark:text-amber-400">
                   🔥{h.streak}
@@ -294,7 +294,7 @@ export default function HabitStrip({
               </span>
               <button
                 onClick={() => startEdit(h)}
-                className="shrink-0 text-[10px] text-neutral-300 opacity-0 transition-opacity hover:text-violet-600 group-hover:opacity-100 dark:text-neutral-600 dark:hover:text-violet-300"
+                className="shrink-0 text-xs text-neutral-300 opacity-0 transition-opacity hover:text-violet-600 group-hover:opacity-100 dark:text-neutral-600 dark:hover:text-violet-300"
               >
                 编辑
               </button>
@@ -304,7 +304,7 @@ export default function HabitStrip({
       </div>
 
       {editing !== null && (
-        <div className="mt-3 space-y-2 rounded-xl border border-violet-200 p-3 dark:border-violet-500/40">
+        <div className="mt-3 space-y-2 rounded-md border border-violet-200 p-3 dark:border-violet-500/40">
           <div className="flex gap-2">
             <input
               value={form.icon}
@@ -370,7 +370,7 @@ export default function HabitStrip({
                       .join(''),
                   }))
                 }
-                className={`h-6 w-6 rounded text-[11px] transition-colors ${
+                className={`h-6 w-6 rounded text-xs transition-colors ${
                   form.weekdays[i] === '1'
                     ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300'
                     : 'text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800'

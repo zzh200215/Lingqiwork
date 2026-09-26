@@ -52,14 +52,15 @@ async def today_next():
 
 @router.get("/summary")
 async def today_summary() -> dict:
-    """五档概览：失败任务 / 未消化 / 到期卡 / 卡点 / 进行中产出。
+    """概览档位：失败任务 / 未消化 / 到期卡 / 到期事项 / 卡点 / 进行中产出。
 
     best-effort：每一档各自 try/except，坏一个不挡其余（照 health.report 的形状）。
     和 `/next` 完全两回事——那条是**一句会主动开口的建议**，由封存词表守着；这里只是计数
-    与落点，所以「到期卡」「卡点」这些词只活在事实组装里，不在 `next_suggestion` 的文案里。
+    与落点，所以「到期卡」「到期事项」「卡点」这些词只活在事实组装里，不在
+    `next_suggestion` 的文案里。
 
-    事实（degrees of honesty）：失败任务/到期卡/卡点有真实数据源；未消化与进行中产出
-    **没有状态字段**，用现成近似——躺着的录音 + 没开教的学习点，在跑的引擎 + 在跑的运行。
+    事实（degrees of honesty）：失败任务/到期卡/到期事项/卡点有真实数据源；未消化与进行中
+    产出**没有状态字段**，用现成近似——躺着的录音 + 没开教的学习点，在跑的引擎 + 在跑的运行。
     """
     facts: dict = {}
 
@@ -96,7 +97,7 @@ async def today_summary() -> dict:
         facts["tasks_failing_href"] = (
             f"/work?task={failing_ids[0]}"
             if len(failing_ids) == 1
-            else "/work?tab=engine"
+            else "/work?tab=workflow"
             if failing_ids
             else "/settings"
         )
@@ -118,7 +119,7 @@ async def today_summary() -> dict:
         log.warning("summary: untouched count failed", exc_info=True)
     if inbox + points:
         facts["untouched"] = inbox + points
-        facts["untouched_href"] = "/work?tab=engine" if inbox else "/tutor"
+        facts["untouched_href"] = "/work?tab=workflow" if inbox else "/tutor"
 
     # 3) 到期卡
     try:
@@ -127,6 +128,25 @@ async def today_summary() -> dict:
         facts["due_cards"] = (await cards.stats())["due_now"]
     except Exception:  # noqa: BLE001
         log.warning("summary: card stats failed", exc_info=True)
+
+    # 3b) 到期事项（§五-5）：截止日到了还没完成的「一件事」。
+    #     与「到期卡」分开两档——卡片是知识该重看了，事情是**你自己设的期限到了**；
+    #     合成一档之后「3 件到期」说不清是哪种，点了也不知道该去哪。
+    try:
+        from app.core import threads as threads_core
+
+        due_rows = await threads_core.due()
+        if due_rows:
+            facts["due_threads"] = len(due_rows)
+            # 只有一件事时直接深链到它（`ThreadsPage` 认 `?thread=`）；
+            # 多过一件就落列表——指到其中一件会让另外几件看不见。
+            facts["due_threads_href"] = (
+                f"/work?tab=thread&thread={due_rows[0]['id']}"
+                if len(due_rows) == 1
+                else "/work?tab=thread"
+            )
+    except Exception:  # noqa: BLE001
+        log.warning("summary: due thread read failed", exc_info=True)
 
     # 4) 卡点 = 停在人工卡点、等人点头的那几步
     try:
@@ -147,7 +167,9 @@ async def today_summary() -> dict:
         n = sum(c for _, c in rows)
         if n:
             facts["awaiting"] = n
-            facts["awaiting_href"] = f"/work?task={rows[0][0]}" if n == 1 else "/work?tab=engine"
+            facts["awaiting_href"] = (
+                f"/work?task={rows[0][0]}" if n == 1 else "/work?tab=workflow"
+            )
     except Exception:  # noqa: BLE001
         log.warning("summary: gate count failed", exc_info=True)
 

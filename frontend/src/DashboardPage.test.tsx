@@ -11,8 +11,9 @@ import { MemoryRouter } from 'react-router-dom'
 // 只渲染卡片、不渲染整页：把 api 换成空的，模块引进来但一次都不会调
 vi.mock('./api', () => ({ api: {} }))
 
-import { NorthStarCard, CalibrationCard, GapRateCard, ProcessCard, SkillLoopCard, GroundedCard, TurnSummaryCard, PromptEvalCard } from './DashboardPage'
+import { NorthStarCard, CalibrationCard, GapRateCard, ProcessCard, SkillLoopCard, GroundedCard, TurnSummaryCard, SourceUsageCard, PromptEvalCard, AgentEvalCard } from './DashboardPage'
 import type {
+  AgentEvalBoard,
   CardCalibration,
   CardGapRate,
   EngineEvalLatest,
@@ -768,6 +769,8 @@ function turnSummary(patch: Partial<TurnSummary> = {}): TurnSummary {
     total: 14,
     truncated: false,
     counts,
+    // P3：材料那几个数。默认「有材料、也用了一些、其中一轮一条没引」
+    sources: { turns_with_material: 6, injected: 28, cited: 11, uncited_turns: 1 },
     filters: [
       { key: 'lie', label: '声称存了没存', hint: '校验过的回合里，说了已存入但这一轮没落盘' },
       { key: 'no_save', label: '长正文没落盘', hint: '正文很长、却没有任何产出回执' },
@@ -778,6 +781,7 @@ function turnSummary(patch: Partial<TurnSummary> = {}): TurnSummary {
       window: '窗口 = 最近 N 天（默认 30 天）里落过账的聊天回合',
       counts: '每一格是「窗口内命中这一类毛病的回合数」，判据与逐条清单、与筛选项同一份实现',
       no_rate: '这里没有成功率：这个模块是诊断工具，不是考核仪表（不设目标、不排名、不催）',
+      sources: '材料那几个数只数注入过材料的回合（注入 > 0）：没检索的回合注入本来就是 0',
       truncated: '库很大时只数最近 2000 轮（内存在此打住）——超了会标出来，不静默截断',
     },
     ...patch,
@@ -858,6 +862,60 @@ describe('回合读数（R1）', () => {
   })
 })
 
+describe('材料使用率（P3）', () => {
+  it('摆四个计数：注入过材料的回合 / 一共注入 / 被引用 / 一条都没引用的', () => {
+    const { container } = render(<SourceUsageCard t={turnSummary()} />)
+    const n = (k: string) =>
+      container.querySelector(`[data-source-count="${k}"]`)?.textContent ?? ''
+    expect(n('turns')).toContain('6')
+    expect(n('injected')).toContain('28')
+    expect(n('cited')).toContain('11')
+    expect(container.querySelector('[data-source-uncited]')?.textContent).toBe('1')
+    // 标题行是「引用 / 注入」两个原始计数
+    expect(container.querySelector('[data-source-usage-headline]')?.textContent).toBe('11/28')
+  })
+
+  it('**没有使用率**：一列数有了分母就会被当成 KPI 追', () => {
+    const { container } = render(<SourceUsageCard t={turnSummary()} />)
+    const body = container.querySelector('[data-source-usage-body]')?.textContent ?? ''
+    expect(body).not.toContain('%')
+    expect(body).not.toMatch(/使用率是|占比|命中率|得分|目标|还差/)
+  })
+
+  it('口径照抄后端那一句（分母为什么是「注入过材料的回合」）', () => {
+    const { container } = render(<SourceUsageCard t={turnSummary()} />)
+    expect(container.querySelector('[data-source-usage-rule]')?.textContent).toContain(
+      '没检索的回合'
+    )
+  })
+
+  it('一轮都没注入过材料时说清是空，不摆一排 0', () => {
+    const none = turnSummary({
+      sources: { turns_with_material: 0, injected: 0, cited: 0, uncited_turns: 0 },
+    })
+    const { container } = render(<SourceUsageCard t={none} />)
+    expect(container.querySelector('[data-source-usage-empty]')).toBeTruthy()
+    expect(container.textContent).toContain('没有一轮注入过材料')
+  })
+
+  it('读不到就说读不到——不拿一排 0 充数', () => {
+    const broken = turnSummary({
+      readable: false,
+      error: 'OperationalError: db down',
+      sources: { turns_with_material: 0, injected: 0, cited: 0, uncited_turns: 0 },
+    })
+    const { container } = render(<SourceUsageCard t={broken} />)
+    expect(container.querySelector('[data-source-usage-error]')?.textContent).toContain('db down')
+    expect(container.querySelector('[data-source-usage-headline]')?.textContent).toBe('—')
+  })
+
+  it('还没读到就整块不渲染', () => {
+    const { container } = render(<SourceUsageCard t={null} />)
+    expect(container.querySelector('[data-metric="data-source-usage"]')).toBeNull()
+    expect(container.textContent).toBe('')
+  })
+})
+
 function promptBoard(patch: Partial<PromptEvalBoard> = {}): PromptEvalBoard {
   return {
     readable: true,
@@ -928,5 +986,74 @@ describe('提示词评测（R1 补齐）', () => {
     // 真属性是 `data-metric="data-prompt-eval"`
     expect(container.querySelector('[data-metric="data-prompt-eval"]')).toBeNull()
     expect(container.textContent).toBe('')
+  })
+})
+
+function agentBoard(patch: Partial<AgentEvalBoard> = {}): AgentEvalBoard {
+  return {
+    readable: true,
+    at: '2026-09-20 23:10:00',
+    model_id: 'sensenova/sensenova-6.8-flash-lite',
+    tasks: 19,
+    tasks_sha: '7432ac9669fd',
+    done: 19,
+    done_rate: 1,
+    clean: 12,
+    floor_failures: 0,
+    tool_not_allowed: 1,
+    tool_not_used: 0,
+    over_budget: 3,
+    rounds: { median: 3, p90: 5, max: 7, mean: 3.68 },
+    delegate_expected: 3,
+    delegate_missed: 3,
+    rules: { when: '这是**跑分当时**那一版金标的成绩', done: '完成率**不含轮数**' },
+    ...patch,
+  }
+}
+
+describe('任务级基线（A0 进计量局）', () => {
+  it('摆出办成率与那几个数', () => {
+    const { container } = render(<AgentEvalCard p={agentBoard()} />)
+    expect(container.querySelector('[data-agent-eval-headline]')?.textContent).toBe('100%')
+    const n = (k: string) => container.querySelector(`[data-agent-eval-${k}]`)?.textContent
+    expect(n('done')).toBe('19/19')
+    expect(n('clean')).toBe('12/19')
+    expect(n('floor')).toBe('0')
+    expect(n('delegate')).toBe('3/3')
+  })
+
+  it('**这一格读的是「跑分当时」的成绩**：时间、模型、金标指纹都得印在卡上', () => {
+    const { container } = render(<AgentEvalCard p={agentBoard()} />)
+    const stamp = container.querySelector('[data-agent-eval-stamp]')?.textContent ?? ''
+    expect(stamp).toContain('2026-09-20 23:10:00')
+    expect(stamp).toContain('sensenova/sensenova-6.8-flash-lite')
+    expect(stamp).toContain('7432ac9669fd') // 没有它，读的人不知道这是哪一版金标的数
+    expect(stamp).toContain('不可比')
+  })
+
+  it('报告里没有指纹时说清楚「这一格比不了」', () => {
+    const { container } = render(<AgentEvalCard p={agentBoard({ tasks_sha: undefined, sha_missing: true })} />)
+    expect(container.querySelector('[data-agent-eval-stamp]')?.textContent).toContain('比不了')
+  })
+
+  it('读不到就说读不到——不拿一排 0 充数', () => {
+    const broken = agentBoard({ readable: false, error: '还没有跑过任务级基线', done_rate: undefined })
+    const { container } = render(<AgentEvalCard p={broken} />)
+    expect(container.querySelector('[data-agent-eval-error]')?.textContent).toContain('还没有跑过')
+    expect(container.querySelector('[data-agent-eval-headline]')?.textContent).toBe('—')
+    expect(container.querySelector('[data-agent-eval-row]')).toBeNull()
+  })
+
+  it('还没读到就整块不渲染', () => {
+    const { container } = render(<AgentEvalCard p={null} />)
+    expect(container.querySelector('[data-metric="data-agent-eval"]')).toBeNull()
+    expect(container.textContent).toBe('')
+  })
+
+  it('口径原文来自后端（界面不自己编一句说法）', () => {
+    const { container } = render(<AgentEvalCard p={agentBoard()} />)
+    const rule = container.querySelector('[data-agent-eval-rule]')?.textContent ?? ''
+    expect(rule).toContain('跑分当时')
+    expect(rule).toContain('不含轮数')
   })
 })

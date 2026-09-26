@@ -15,7 +15,7 @@
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -28,6 +28,10 @@ log = logging.getLogger(__name__)
 
 KINDS = ("material", "note", "card", "session", "output", "task", "decision")
 
+# 状态机（方案 §8.4）：只有「你设的」两个态。**「停滞」不在这里**——它是算出来的
+# （见 `STALLED_DAYS` 与 `_out`），因为「N 天没动静」会自己过期，存它就得有人负责刷新。
+THREAD_STATUS = ("open", "done")
+
 # 五步 → 哪些 kind 落进这一步。PLAN 写的第五步是「再用」；手里真有数据的第五类是**判断**，
 # 所以这里叫「判断」——"再用"（检索命中一键挂进来）是 §4-14 的事，加一个桶即可，表不用动。
 STEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -38,6 +42,20 @@ STEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("judge", "判断", ("decision",)),
 )
 _STEP_OF = {k: key for key, _label, kinds in STEPS for k in kinds}
+
+# kind → 给人看的一小格。与 `STEPS` 的五个**步**标签是两回事：那边是"到哪了"（详情页
+# 的进度条），这边是"挂着的是什么"（下面 `summary_line` 那一行）。**这张表只有一份**：
+# A4 注入段的引用行（`thread_context._ref_line`）也从这里拿——同一个 kind 在两处
+# 不许说两个名字。
+KIND_LABELS = {
+    "material": "材料",
+    "note": "笔记",
+    "output": "成品",
+    "card": "卡片",
+    "session": "教学",
+    "task": "任务",
+    "decision": "判断",
+}
 
 # vault 里哪几个目录算哪一类。`notes/` 要按命名再分：带日期前缀的是**成文**（产出），
 # 不带的是用户自己的笔记——`routers/work.py` 也是这么分的。
@@ -53,6 +71,10 @@ _VAULT_DIRS = (
 )
 _CATALOG_CAP = 200  # 每类最多列这么多——九百多个仓库分块全列出来只是噪音
 _DATE_LEN = 10
+
+# 「停滞」的阈值（方案 §8.4：N 天没动静自动标）。**是算出来的，不是存的**——
+# 「N 天没动静」是事实，存进库里会在没人碰的某一天悄悄过期。
+STALLED_DAYS = 14
 
 # 「成品」在哪几个目录（M2 的自动挂接用）。**不含 `tasks/`**：那是工作流的运行留痕，
 # 与 `pet.is_output_path()` 收口过的那个口径是同一件事——同一个词在两处必须指同一批文件。
@@ -255,6 +277,9 @@ async def _resolve(rows: list[ThreadItem]) -> list[dict]:
                 "exists": exists,
                 "step": _STEP_OF.get(r.kind, "in"),
                 "href": _href(r.kind, r.ref) if exists else "",
+                # 挂上来的时刻。**详情改时间线要靠它**（方案 §8.4：产出/运行/卡点/材料
+                # 同一条线，时间倒序）——没有它就只能按 id 排，那是插入顺序不是时间。
+                "created_at": _iso(r.created_at),
             }
         )
     return out
@@ -284,16 +309,36 @@ def _href(kind: str, ref: str) -> str:
 
 
 def _out(t: Thread, counts: dict[str, int]) -> dict:
+    """一件事的一行。
+
+    **`status` 是存的、`stalled` 是算的**（方案 §8.4 的状态机）：
+    - `status`：`open`（进行中）/ `done`（完成）——**你设的**，所以它得存；
+    - `stalled`：`open` 且 N 天没动静——**算的**。存它会过期，算它永远和 `updated_at` 一致。
+      完成了的事不谈停滞（`done` 时恒为 False）。
+    """
+    idle_days = max(0, (datetime.now(timezone.utc) - _aware(t.updated_at)).days)
+    status = t.status or "open"
     return {
         "id": t.id,
         "name": t.name,
         "note": t.note or "",
         "archived": bool(t.archived),
+        "status": status,
+        "stalled": status == "open" and idle_days >= STALLED_DAYS,
+        "idle_days": idle_days,
+        "deadline": t.deadline.isoformat() if t.deadline else None,
         "created_at": _iso(t.created_at),
         "updated_at": _iso(t.updated_at),
         "counts": counts,
         "total": sum(counts.values()),
     }
+
+
+def _aware(dt: datetime | None) -> datetime:
+    """SQLite 取回来的可能是不带 tz 的——按 UTC 补上，别拿它去减一个带 tz 的 now()。"""
+    if dt is None:
+        return datetime.now(timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _counts(rows) -> dict[str, int]:
@@ -388,8 +433,17 @@ async def attach_output(thread_id: int, filename: str) -> dict:
 
 
 async def update(
-    thread_id: int, *, name: str | None = None, note: str | None = None, archived: bool | None = None
+    thread_id: int,
+    *,
+    name: str | None = None,
+    note: str | None = None,
+    archived: bool | None = None,
+    status: str | None = None,
+    deadline: str | None = None,
+    clear_deadline: bool = False,
 ) -> dict:
+    """局部更新。`deadline` 传空串 = **没设**（`clear_deadline` 是给「清掉已有截止日」用的，
+    因为 `None` 在这条路上表示「这次不改它」——两者不能都用 None 表达）。"""
     async with SessionLocal() as db:
         row = await db.get(Thread, thread_id)
         if row is None:
@@ -403,6 +457,22 @@ async def update(
             row.note = note.strip()[:2000]
         if archived is not None:
             row.archived = bool(archived)
+        if status is not None:
+            s = status.strip()
+            if s not in THREAD_STATUS:
+                raise ValueError(f"状态只能是 {' / '.join(THREAD_STATUS)}")
+            row.status = s
+        if clear_deadline:
+            row.deadline = None
+        elif deadline is not None:
+            d = deadline.strip()
+            if d:
+                try:
+                    row.deadline = date.fromisoformat(d)
+                except ValueError as e:
+                    raise ValueError("截止日要写成 YYYY-MM-DD") from e
+            else:
+                row.deadline = None
         row.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(row)
@@ -441,6 +511,47 @@ async def list_threads(include_archived: bool = False) -> dict:
         "threads": [_out(t, per.get(t.id, {})) for t in rows],
         "steps": steps_out(),
     }
+
+
+async def due(today: date | None = None, limit: int = 20) -> list[dict]:
+    """**到期的「一件事」**——截止日 ≤ 今天，且还没完成。给今日页那一档用（§五-5）。
+
+    三条判据都是有意的：
+
+    - **过期的也算**，不分「今天到期」与「已经过期」。昨天该交的东西今天更该看见，
+      它也不是「昨天的债」——是「还没交」。分成两档只会让人以为过期那批消失了。
+    - **`done` 的不算**：截止日是**做这件事的期限**，做完了它就不再是期限了。
+      留着它，概览会永远挂着一个你早就交掉的东西。
+    - **归档的不算**：归档就是「别烦我了」，与「完成了」是两回事，但对这一档的效果一样。
+
+    没设截止日的当然不算——`None` 不是「很久以前」，是**没设**（`models.Thread.deadline`
+    那条注释）：把它排进来等于替所有人编一个期限。
+    """
+    ref = today or datetime.now(timezone.utc).date()
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(Thread)
+                .where(
+                    Thread.archived.is_(False),
+                    Thread.deadline.is_not(None),
+                    Thread.deadline <= ref,
+                    Thread.status != "done",
+                )
+                .order_by(Thread.deadline, Thread.id)
+                .limit(max(1, limit))
+            )
+        ).scalars().all()
+    return [
+        {
+            "id": t.id,
+            "name": t.name,
+            "deadline": t.deadline.isoformat() if t.deadline else "",
+            # 正数 = 过期几天；0 = 就是今天。给界面写那句「已经过了 N 天」用。
+            "overdue_days": max(0, (ref - t.deadline).days) if t.deadline else 0,
+        }
+        for t in rows
+    ]
 
 
 async def _cost(thread_id: int) -> dict:
@@ -492,7 +603,12 @@ async def deliver_into(thread_id: int, genre: str, audience: str) -> dict:
 
     # 这件事挂着的材料 / 笔记 / 成品，就是这次产出的材料——「这件事用过哪些材料」的直接复用
     pinned = [r.ref for r in rows if r.kind in ("material", "note", "output")]
-    prompt = deliver_engine.synth_prompt(genre, audience)  # 未知体裁/读者 → ValueError
+    # 体裁可能是内置的，也可能是你自己写的模板（§8.1 行2）——两条都走同一个查法。
+    # 未知体裁/读者 → ValueError（路由转 400）
+    spec = await deliver_engine.genre_spec(genre)
+    if spec is None:
+        raise ValueError(f"unknown genre '{genre}'")
+    prompt = deliver_engine.synth_prompt(genre, audience, custom=spec)
     gathered = await compose.gather_inward(name)
     sources = deliver_engine.merge_pinned(deliver_engine.pinned_sources(pinned), gathered)
     if not sources:
@@ -617,13 +733,118 @@ async def suggest_for_item(kind: str, ref: str) -> dict:
 
 
 async def unclassified(limit: int = 60) -> dict:
-    """还没挂到任何事的条目。**允许长期存在**——这不是待办清单，不计数、不催。"""
+    """还没挂到任何事、**也没被忽略过**的条目。`total` 是这一份候选的总数。
+
+    两条排除各自对应一次人的动作：挂上了（`ThreadItem`）、划掉了（`ThreadIgnore`）。
+    剩下的才是「待归类」。**一次读两张表**——分两次读会在两次之间产生一个「刚挂上的又冒出来」
+    的窗口，而收件箱正好是点一下就刷新的地方，那个窗口会被看见。
+    """
+    from app.models import ThreadIgnore
+
     async with SessionLocal() as db:
         attached = {
             (r.kind, r.ref) for r in (await db.execute(select(ThreadItem))).scalars().all()
         }
-    items = [c for c in await _catalog() if (c["kind"], c["ref"]) not in attached]
+        ignored = {
+            (r.kind, r.ref) for r in (await db.execute(select(ThreadIgnore))).scalars().all()
+        }
+    skip = attached | ignored
+    items = [c for c in await _catalog() if (c["kind"], c["ref"]) not in skip]
     return {"items": items[:limit], "total": len(items)}
+
+
+async def ignore(kind: str, ref: str) -> dict:
+    """从收件箱里划掉一条（方案 §8.4）。**幂等**：连点两次不报错，也不长出第二行。
+
+    为什么这一档非有不可——见 `models.ThreadIgnore` 的注释：收件箱的目标是清空，
+    而候选是派生的，没有「忽略」它永远清不空。
+
+    **只是不再出现在收件箱里**：东西一件都不动，`?thread=` 深链、详情时间线、
+    别处的「挂到…」全都照旧。所以误点一下的代价是「它不在收件箱了」，
+    而不是「我丢了一条材料」。
+    """
+    kind = (kind or "").strip()
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind '{kind}'")
+    ref = _clean_ref(ref)
+    if not ref:
+        raise ValueError("ref 不能为空")
+
+    from app.models import ThreadIgnore
+
+    async with SessionLocal() as db:
+        existing = (
+            await db.execute(
+                select(ThreadIgnore).where(ThreadIgnore.kind == kind, ThreadIgnore.ref == ref)
+            )
+        ).scalars().first()
+        if existing is None:
+            db.add(ThreadIgnore(kind=kind, ref=ref))
+            await db.commit()
+    return {"ok": True, "ignored": existing is None}
+
+
+async def unignore(kind: str, ref: str) -> dict:
+    """撤销忽略。删掉那一行，它就回到收件箱里。找不到也算成功（幂等）。"""
+    from sqlalchemy import delete as sa_delete
+
+    from app.models import ThreadIgnore
+
+    async with SessionLocal() as db:
+        await db.execute(
+            sa_delete(ThreadIgnore).where(
+                ThreadIgnore.kind == (kind or "").strip(),
+                ThreadIgnore.ref == _clean_ref(ref),
+            )
+        )
+        await db.commit()
+    return {"ok": True}
+
+
+def _stage_label(n_by_kind: dict) -> str:
+    """挂着的条目里**最靠后的那一步**——五步的顺序就是「到哪了」。Pure。
+
+    没有能归类的条目就返回空串（调用方把前缀整段省掉，别印一个空的「走到「」」）。
+    """
+    label = ""
+    for _key, step_label, kinds in STEPS:
+        if any(k in n_by_kind for k in kinds):
+            label = step_label
+    return label
+
+
+def summary_line(counts: dict) -> str:
+    """这件事**走到哪一步、挂着什么** → 一行字（`recent()` 与它的两个消费方共用）。Pure。
+
+    **这一行的两个版本，以及为什么最后长成这样**（2026-09-22，两笔）：
+
+    1. 原来印的是五步标签的计数（`进来 1 · 搞懂 2 · 交付 1`）。A4 真机跑出来一个误读：
+       模型把「交付 1」读成"`deliver/` 目录里有一份"，跑去数了一遍目录，回来说「交付区是空的」。
+    2. 于是先把那一行换成**按 kind 说、带量词**（`挂着 2 份：笔记 1 · 成品 1`）。这一版治住了
+       那个名词误读，但**把「到哪一步」拿走了**——付费抽查里同一句话，模型答不上「进展到哪一步」
+       （它手里确实没有这个信息），于是**照样去盘上找**。产品对「进展」的定义本来就是那五步
+       （`STEPS`，模块开头那句「『这件事我到哪了』才答得出来」），把答案收走再怪它去找，是说不过去的。
+    3. 现在这一版**两样都给**：`走到「交付」· 成品 1 · 笔记 1`——步名回来说清到哪了，kind 计数
+       说清挂着什么。**步名上不再带数字**：被误读的从来是那个数字（`交付 1`），而「走到「交付」」
+       是阶段名。总数额子「挂着 N 份」被这一步替掉，所以**预算没涨**（实测真实形状 158 → 159 字）。
+
+    `today.next_suggestion` 与 A4 注入段读的都是这一行，所以改这里就是同时改那两处
+    （它们本来就是同一份真值，见 `thread_context` 的模块开头）。对照臂见
+    `smoke_agent.py --no-stage`（把这一行压回第 2 版，用来量这一步到底值不值）。
+    """
+    n_by_kind: dict[str, int] = {}
+    for k in KINDS:
+        try:
+            n = int((counts or {}).get(k) or 0)
+        except (TypeError, ValueError):  # 坏输入不抛：一行摘要不值得让 /today 500
+            n = 0
+        if n > 0:
+            n_by_kind[k] = n
+    if not n_by_kind:
+        return ""
+    stage = _stage_label(n_by_kind)
+    body = " · ".join(f"{KIND_LABELS.get(k, k)} {n}" for k, n in n_by_kind.items())
+    return f"走到「{stage}」· {body}" if stage else body
 
 
 async def recent(limit: int = 1) -> list[dict]:
@@ -635,10 +856,30 @@ async def recent(limit: int = 1) -> list[dict]:
     rows = [t for t in (await list_threads())["threads"] if t["total"] > 0]
     out: list[dict] = []
     for t in rows[: max(1, limit)]:
-        parts = []
-        for _key, label, kinds in STEPS:
-            n = sum(t["counts"].get(k, 0) for k in kinds)
-            if n:
-                parts.append(f"{label} {n}")
-        out.append({"id": t["id"], "name": t["name"], "summary": " · ".join(parts)})
+        out.append({"id": t["id"], "name": t["name"], "summary": summary_line(t["counts"])})
     return out
+
+
+async def brief(limit: int = 1) -> dict | None:
+    """最近一件事 + **它的引用清单**（A4 的注入用）。没有这样的事就是 `None`。
+
+    「最近一件事」的定义**只认 `recent()`**（最近动过、没归档、而且真挂了东西），名字与
+    摘要计数都从它那儿来——`today.next_suggestion` 读的是同一份真值，注入段不另立一套口径。
+    这里只多补一样东西：那条事上挂着的条目（过 `_resolve`，与详情页同一把解析）。
+
+    单开一个函数而不是复用 `detail()`：详情页要算「这些可能也属于这件事」（要扫全量目录）
+    与成本，注入一段 system 不该付那个钱。
+    """
+    rows = await recent(limit=limit)
+    if not rows:
+        return None
+    top = rows[0]
+    async with SessionLocal() as db:
+        items = (
+            await db.execute(
+                select(ThreadItem)
+                .where(ThreadItem.thread_id == top["id"])
+                .order_by(ThreadItem.id.desc())
+            )
+        ).scalars().all()
+    return {**top, "items": await _resolve(items)}

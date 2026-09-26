@@ -1,0 +1,63 @@
+{"query": "GA 的 mykey.py API 密钥怎么配置", "expected_source": "repos/hello-generic-agent/docs/part1/chapter1/index.md", "tag": "lexical", "note": "安装与环境章"}
+{"query": "tmwd_cdp_bridge 浏览器插件怎么安装和验证", "expected_source": "repos/hello-generic-agent/docs/part1/chapter2/index.md", "tag": "lexical", "note": "浏览器能力章"}
+{"query": "OCR、视觉、飞书 CLI、Everything CLI 四大扩展能力在哪一章解锁", "expected_source": "repos/hello-generic-agent/docs/part1/chapter3/index.md", "tag": "lexical", "note": "基础使用章"}
+{"query": "GA 的 L1 到 L4 四层记忆架构怎么管理", "expected_source": "repos/hello-generic-agent/docs/part1/chapter4/index.md", "tag": "lexical", "note": "记忆与 Skill 章"}
+{"query": "怎么把 GA 接入微信、飞书、钉钉的 Bot", "expected_source": "repos/hello-generic-agent/docs/part1/chapter5/index.md", "tag": "lexical", "note": "聊天平台章"}
+{"query": "反射模式和 Plan 模式怎么用", "expected_source": "repos/hello-generic-agent/docs/part1/chapter6/index.md", "tag": "lexical", "note": "进阶功能章"}
+{"query": "上下文信息密度最大化这个第一性原理讲的是什么", "expected_source": "repos/hello-generic-agent/docs/part2/chapter7/index.md", "tag": "lexical", "note": "原理篇起点"}
+{"query": "GA 的模型无关设计是什么意思", "expected_source": "repos/hello-generic-agent/docs/part2/chapter8/index.md", "tag": "lexical", "note": "系统全貌章"}
+{"query": "最小原子工具集为什么只留 9 个工具", "expected_source": "repos/hello-generic-agent/docs/part2/chapter9/index.md", "tag": "lexical", "note": "工具集章"}
+{"query": "分层记忆架构怎么做到只注入索引、按需加载详情", "expected_source": "repos/hello-generic-agent/docs/part2/chapter10/index.md", "tag": "lexical", "note": "分层记忆章"}
+{"query": "无幻觉上下文长度是什么概念", "expected_source": "repos/hello-generic-agent/docs/part2/chapter11/index.md", "tag": "lexical", "note": "截断与压缩章"}
+{"query": "B 站收藏夹怎么按语义自动分类到主题文件夹", "expected_source": "repos/hello-generic-agent/docs/part3/chapter18/index.md", "tag": "lexical", "note": "收藏夹分类章"}
+{"query": "FastAPI 有哪些核心功能特性", "expected_source": "clippings/fastapi.tiangolo.com-1d9476.md", "tag": "lexical", "note": "官网剪藏"}
+{"query": "帮我看看现在最火的那条内容讲了啥，再代我拟几句话准备回复", "expected_source": "repos/hello-generic-agent/docs/part3/chapter15/index.md", "tag": "paraphrase", "note": "围观热榜+候选评论；避开热榜/评论/帖子"}
+{"query": "把我发布到网上的内容和互动数据汇总起来，看看我算什么风格的人", "expected_source": "repos/hello-generic-agent/docs/part3/chapter16/index.md", "tag": "paraphrase", "note": "社交画像；避开画像/性格分析"}
+{"query": "把网站上的付费课程整套弄到本地，路上离线看", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/index.md", "tag": "paraphrase", "note": "登录态视频离线；避开下载/番剧/飞机"}
+{"query": "机器上的视频转码器缺功能，字幕渲染那步跑不动怎么绕过去", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/ffmpeg_local_pipeline.md", "tag": "paraphrase", "note": "避开 ffmpeg/PIL/cv2/libx264"}
+{"query": "网页提交时那个每次都会变的校验值，怎么搞清楚它的生成规则", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/js-reverse/index.md", "tag": "paraphrase", "note": "避开签名参数/加密/逆向"}
+{"query": "拿到一份被搞乱到没法读的脚本，按什么顺序一步步还原", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/js-reverse/references/ast-deobfuscation.md", "tag": "paraphrase", "note": "避开 AST/去混淆；cases/case-ast-deobfuscation.md 是干扰项"}
+{"query": "页面用假的全局对象骗自动化脚本，怎么识破并绕过", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/js-reverse/references/cases/case-window-honeypot.md", "tag": "paraphrase", "note": "避开蜜罐/honeypot"}
+{"query": "抓回来的数据缺了一块，下一步是扩大范围再试还是直接停", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/js-reverse/references/fallbacks.md", "tag": "paraphrase", "note": "避开 Hook/回退"}
+{"query": "逆向的活儿干完之后，交付物里必须写清楚哪几样东西", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/js-reverse/references/output-contract.md", "tag": "paraphrase", "note": "避开输出契约"}
+{"query": "为什么每多给助手一件工具，还没开始干活成本就先涨了", "expected_source": "repos/hello-generic-agent/docs/part2/chapter9/index.md", "tag": "paraphrase", "note": "工具定义=每轮固定成本"}
+{"query": "聊天历史越滚越长，怎么既不撑爆预算又不开始胡编", "expected_source": "repos/hello-generic-agent/docs/part2/chapter11/index.md", "tag": "paraphrase", "note": "截断与压缩；30k 预算"}
+{"query": "笔记按网状互相引用，比按目录层级分类好在哪", "expected_source": "sub/读书摘录.md", "tag": "paraphrase", "note": "卡片笔记法；避开 Zettelkasten/原子化"}
+{"query": "这个工作台的笔记正文和检索向量分别存在哪", "expected_source": "项目笔记.md", "tag": "paraphrase", "note": "SQLite+ChromaDB+bge 512 维"}
+{"query": "让它每天早上自己跑完活儿给我一份报告，不用我盯着", "expected_source": "repos/hello-generic-agent/docs/part1/chapter6/index.md", "tag": "paraphrase", "note": "自主行动/定时任务"}
+{"query": "两条候选评论都过了审，最后由谁动手发出去", "expected_source": "repos/hello-generic-agent/docs/part3/chapter15/sop/login_read_comment.md", "tag": "competing", "note": "验收④发送由用户自行决定；干扰：human_in_loop.md、chapter15/index.md"}
+{"query": "分段下下来的视频拼成一个文件，怎么让手机打开不用等", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/bili_bangumi_download.md", "tag": "competing", "note": "+faststart 手机端秒开；干扰：ffmpeg_local_pipeline.md、chapter17/index.md"}
+{"query": "一份中间数据既要出速读版文档，又要出深色档案风网页", "expected_source": "repos/hello-generic-agent/docs/part3/chapter16/sop/dossier_dual_render.md", "tag": "competing", "note": "同源双渲染；干扰：social_persona_self.md"}
+{"query": "接一个自动化逆向任务，开工前要把哪些目标信息填进单子", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/js-reverse/references/task-input-template.md", "tag": "competing", "note": "输入模板；干扰：tool-catalog.md、task-artifacts.md"}
+{"query": "对外发送前必须二次询问的规矩记在哪张速查卡", "expected_source": "repos/hello-generic-agent/docs/part3/chapter15/sop/human_in_loop.md", "tag": "competing", "note": "ask_user 双确认；干扰：login_read_comment.md"}
+{"query": "材料不够但必须交结论，决定先不动笔的那篇笔记", "expected_source": "notes/2026-09-17-这次项目的结论汇报-材料不足-先不动笔.md", "tag": "competing", "note": "干扰：给领导的项目结论汇报-材料暂缺.md"}
+{"query": "RAG 的一句话定义", "expected_source": "tasks/RAG一句话-2026-08-27-1029.md", "tag": "competing", "note": "干扰：notes/测试笔记.md"}
+{"query": "Kubernetes 里 Pod 被驱逐之后怎么排查", "expected_source": "", "tag": "no_answer", "note": "负样本·明显域外：整份语料零命中 k8s/Kubernetes，grep 数过"}
+{"query": "Kafka 消费者组重平衡太频繁怎么调", "expected_source": "", "tag": "no_answer", "note": "负样本·明显域外：零命中 Kafka"}
+{"query": "SwiftUI 里怎么做可拖拽排序的列表", "expected_source": "", "tag": "no_answer", "note": "负样本·明显域外：零命中 SwiftUI"}
+{"query": "Rust 的 tokio 怎么写一个定时任务", "expected_source": "", "tag": "no_answer", "note": "负样本·明显域外：零命中 tokio；Rust 只在两条无关笔记里被顺带提过（Qdrant 的 Rust 核心 / HN 的 Rust KV 库）"}
+{"query": "红烧肉怎么炖才软烂不柴", "expected_source": "", "tag": "no_answer", "note": "负样本·明显域外：零命中，用来兜住「门对完全无关问题会不会乱开」"}
+{"query": "Go 语言的 goroutine 泄漏怎么定位", "expected_source": "", "tag": "no_answer", "note": "负样本·明显域外：零命中 goroutine/Golang"}
+{"query": "GA 有没有多租户隔离的设计", "expected_source": "", "tag": "no_answer", "note": "负样本·贴着语料但没写：零命中租户/tenant，但 GA 架构章节会被检索到——这一档才是门真正要判的"}
+{"query": "这个工作台的语音识别支持哪些离线模型", "expected_source": "", "tag": "no_answer", "note": "负样本·贴着语料但没写：零命中语音识别；whisper 命中的是 GA 前端的 TTS 情感选项，不是 ASR"}
+{"query": "GA 的镜像怎么构建和发布", "expected_source": "", "tag": "no_answer", "note": "负样本·贴着语料但没写：零命中镜像/Dockerfile；Docker 只在 FastAPI 剪藏的一个英文标题里"}
+{"query": "工作台的 HTTPS 证书怎么配", "expected_source": "", "tag": "no_answer", "note": "负样本·贴着语料但没写：零命中证书，但 FastAPI 剪藏会被检索到"}
+{"query": "上下文被塞满了会怎样", "expected_source": "repos/hello-generic-agent/docs/part2/chapter11/index.md", "tag": "competing", "note": "压缩的正主是第 11 章（上下文截断与压缩）。**实测 top1 是第 7 章**（第一性原理）——两个相近章节挑错，正是竞争档要的样子"}
+{"query": "同一份结果要出 markdown 和 html 两种，怎么做", "expected_source": "repos/hello-generic-agent/docs/part3/chapter16/sop/dossier_dual_render.md", "tag": "competing", "note": "「同源双渲染」那张速查卡写了做法（中间态 JSON → 两种渲染）。**实测 top1 是父章节 chapter16**：正文在卡片里、章节只提一句"}
+{"query": "配音和配图分别该调哪个脚本", "expected_source": "repos/hello-generic-agent/docs/part3/chapter16/sop/frontend-design/references_minimax/minimax-cli-reference.md", "tag": "competing", "note": "MiniMax 的 CLI 参考列了各脚本（图/音/乐/视频）与环境变量。**实测 top1 是一份无关的模板文件**——这条失败是真难看"}
+{"query": "论坛那种站点怎么把用户帖子批量导出来", "expected_source": "repos/hello-generic-agent/docs/part3/chapter16/sop/discourse_shot.md", "tag": "competing", "note": "`discourse_shot` 那张卡就是「Discourse 论坛用户 dump」。**实测 top1 是第 18 章**（B 站收藏夹语义分类，与论坛无关）"}
+{"query": "第一次装完怎么确认真的能用了", "expected_source": "repos/hello-generic-agent/docs/part1/chapter1/index.md", "tag": "paraphrase", "note": "第 1 章里有「验证安装」（`python --version`）与「跑起来对话一次」那几步。**实测 top1 是第 15 章**"}
+{"query": "发给同事之前把 demo 里的账号名换掉", "expected_source": "repos/hello-generic-agent/docs/part3/chapter16/assets/anonymize.sh", "tag": "competing", "note": "`anonymize.sh` 的注释写明用途（把 demo 里的 handle 替换成虚拟的再发布）。**实测 top1 是第 17 章**"}
+{"query": "四层记忆的 L1 到 L4 分别管什么、怎么管", "expected_source": "repos/hello-generic-agent/docs/part1/chapter4/index.md", "tag": "competing", "note": "四层架构 L1–L4 是第 4 章的学习目标原话；第 10 章讲的是「为什么分层」。实测 rank 3（top1 是第 10 章）"}
+{"query": "它怎么从我用过的活里学会下次怎么做", "expected_source": "repos/hello-generic-agent/docs/part2/chapter12/index.md", "tag": "paraphrase", "note": "第 12 章是自我进化（经验沉淀成可复用的东西）。实测 rank 5——**擦边命中**，正是门该不该放行的边界样本"}
+{"query": "对外发东西之前必须先问过我，这条规矩写在哪", "expected_source": "repos/hello-generic-agent/docs/part3/chapter15/sop/human_in_loop.md", "tag": "competing", "note": "`human_in_loop` 卡的第一句就是「任何对外发出去或不可撤销的动作都必须先问」。实测 rank 2（top1 是另一张卡）"}
+{"query": "想把一个前端页面的设计稿做成有质感的成品，有没有现成的指导", "expected_source": "repos/hello-generic-agent/docs/part3/chapter16/sop/frontend-design/index.md", "tag": "competing", "note": "frontend-design 那张卡的 description 就是「做有质感的前端界面」。实测 rank 4"}
+{"query": "每轮工具返回的东西越来越长，最后会撑爆什么", "expected_source": "repos/hello-generic-agent/docs/part2/chapter11/index.md", "tag": "competing", "note": "第 11 章讲单次任务内的上下文预算。实测 rank 3"}
+{"query": "它会不会自己长出新能力来", "expected_source": "repos/hello-generic-agent/docs/part2/chapter13/index.md", "tag": "competing", "note": "第 13 章是涌现能力。实测 rank 2"}
+{"query": "怎么把 B 站收藏夹里的番剧整季下下来", "expected_source": "repos/hello-generic-agent/docs/part3/chapter17/sop/bili_bangumi_download.md", "tag": "competing", "note": "番剧下载那张卡是这道工序的正主。实测 rank 4（top1 是 README）"}
+{"query": "九个工具里哪个负责跑命令", "expected_source": "repos/hello-generic-agent/docs/part2/chapter9/index.md", "tag": "competing", "note": "九个原子工具在第 9 章逐个讲。实测 rank 3（top1 是第 1 章——**跨章误排**）"}
+{"query": "怎么把抓到的公开内容发出去之前先脱敏", "expected_source": "repos/hello-generic-agent/docs/part3/chapter16/assets/anonymize.sh", "tag": "competing", "note": "与上面那条失败样本**同一个需求、换了个说法**：这一版 rank 4 命中，那一版不中——两条一起留着才看得出尺度在哪"}
+{"query": "GA 的订阅多少钱一个月", "expected_source": "", "tag": "no_answer", "note": "全库没有定价信息（索引里 95 个源逐一看过）"}
+{"query": "GA 支持 Claude 的哪个模型版本", "expected_source": "", "tag": "no_answer", "note": "有安装/密钥/工具，但没有「支持哪些模型版本」这一栏"}
+{"query": "它的开源许可证是 MIT 还是 Apache", "expected_source": "", "tag": "no_answer", "note": "索引里那份 LICENSE.txt 是 frontend-design 素材库的，不是 GA 的许可证说明"}
+{"query": "GA 的 GitHub star 有多少", "expected_source": "", "tag": "no_answer", "note": "库里没有仓库热度数据"}

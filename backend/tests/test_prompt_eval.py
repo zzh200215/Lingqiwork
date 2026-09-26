@@ -732,3 +732,80 @@ def test_http_board_endpoint(monkeypatch):
     assert body["readable"] is True
     assert body["measured"] >= 1
     assert "registered" in body["rules"]
+
+
+# --- 取消：半趟跑分不许污染质量闭环（2026-09-26）-------------------------------
+
+
+def test_cancel_stops_between_cases_and_writes_no_run():
+    """跑到一半被停：**留下跑完的那几条、但不落记录、也不给区间**。
+
+    为什么不落记录：这个数的全部意义是「这一版内容在**一整套**用例上怎么样」。跑了一半的
+    k/n 会被读成「变差了」，而它只是被打断了——那正是质量闭环最怕的污染。
+    为什么不给区间：Wilson 区间是给一个**完整**样本算的；半趟给的区间是编的。
+    """
+    from sqlalchemy import delete, func, select
+
+    from app.core import inflight
+    from app.db import SessionLocal
+    from app.models import PromptEvalRun
+
+    token = "prompt-eval:FEYNMAN_PROMPT"
+    inflight._running.clear()
+    inflight._cancels.clear()
+    assert inflight.try_acquire(token) is True
+
+    calls: list[str] = []
+
+    async def gen(_model_id: str, messages: list[dict]) -> str:
+        calls.append(messages[-1]["content"][:20])
+        # **第一条正跑着的时候，用户点了「停止」**
+        inflight.request_cancel(token)
+        return "1. 先讲调度\n2. 再讲 await"
+
+    async def count_runs() -> int:
+        async with SessionLocal() as db:
+            await db.execute(delete(PromptEvalRun).where(PromptEvalRun.key == "FEYNMAN_PROMPT"))
+            await db.commit()
+            n = (await db.execute(
+                select(func.count()).select_from(PromptEvalRun).where(PromptEvalRun.key == "FEYNMAN_PROMPT")
+            )).scalar_one()
+            return int(n)
+
+    try:
+        asyncio.run(count_runs())  # 先清干净，好数「这次有没有写」
+        rep = asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="fake/model", generate=gen, cancel_key=token))
+        after = asyncio.run(count_runs())
+    finally:
+        inflight.release(token)
+
+    assert rep["stopped"] is True
+    assert len(calls) == 1, "应该在第一条之后停下，不该把整套跑完"
+    assert rep["total"] == 1 and rep["planned"] > 1
+    assert rep["rate"] is None and rep["ci"] is None, "半趟不该给比率与区间"
+    assert rep["tell"] is False
+    assert after == 0, "半趟跑分落库了——那会污染质量闭环"
+
+
+def test_without_a_cancel_key_nothing_polls():
+    """不传 `cancel_key` = 不看取消标记（内部调用方走的就是这条）。
+
+    一次纯函数式的跑分不该因为进程里别处的状态而半路停下。
+    """
+    from app.core import inflight
+
+    inflight._running.clear()
+    inflight._cancels.clear()
+    inflight.try_acquire("prompt-eval:FEYNMAN_PROMPT")
+    inflight.request_cancel("prompt-eval:FEYNMAN_PROMPT")
+
+    async def gen(_model_id: str, _messages: list[dict]) -> str:
+        return "1. 先讲调度\n2. 再讲 await"
+
+    try:
+        rep = asyncio.run(pe.check("FEYNMAN_PROMPT", model_id="fake/model", generate=gen))
+    finally:
+        inflight.release("prompt-eval:FEYNMAN_PROMPT")
+
+    assert rep.get("stopped") is not True
+    assert rep["rate"] is not None

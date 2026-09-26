@@ -31,6 +31,23 @@ def notify_index_change() -> None:
         except Exception:  # noqa: BLE001
             pass
 
+# 静默截断是真的（bge-small-zh-v1.5 窗口 512 token，超窗不报错、只丢弃尾部），
+# 但**压块不是它的解**——这是量出来的，不是拍的（RAG升级.md §2 P1a / §3）：
+#   964 块（vault 50 + repos 914）：token p99=628、max=749、73 块（7.6%）超窗；
+#   token/字符 = 0.53（中英混排实测。原先按「中文约 1.3 token/字」估的换算偏高了一倍多。）
+# 按语料重切、逐个参数实测（同一份语料、同一批 34 条金标，hybrid=on）：
+#   800/120 → 964 块  hit@1=0.6471  MRR=0.7314  注入中位数 2762
+#   700/105 → 1105 块 hit@1=0.5882  MRR=0.6985  注入中位数 2387
+#   550/90  → 1375 块 hit@1=0.4706  MRR=0.6186  注入中位数 2009
+#   500/80  → 1494 块 hit@1=0.4706  MRR=0.6137  注入中位数 1745
+# recall 对 CHUNK_SIZE **单调**：越碎越差，一路到 800 都还在涨。而「p99 ≤ 512 token」
+# 要求 CHUNK_SIZE ≤ 600（600/100 实测 p99=509）——**没有任何一个值能同时满足窗口与
+# recall**（方案 §3 的 P1a 验收要求「三项达标」）。把 top_k 5→8 补注入量（2915 字符，
+# 超过基线）也只救回 hit@3（0.8235），hit@1/MRR 仍低于基线。
+# 所以本版**不压块**，截断按 §1.1 触发条件 ①（「压块调优救不回来」）挂到换窗口模型
+# （Qwen3-Embedding-0.6B / BGE-M3）那一笔上——那才是修截断的正解，也是 CHUNK_SIZE
+# 将来能回升到 1200+ 的前提。量法留在 smoke_retrieval.py（块 token 分布）与
+# smoke_rag_eval.py（注入总量）里，重开时原样复跑。
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 120
 MIN_CHUNK = 200  # 低于这个长度的块尽量并进邻居——太碎的块检索价值低
@@ -179,9 +196,10 @@ def index_file(path: Path, root: Path = VAULT_DIR, source_prefix: str = "") -> i
     # 版本契约的两个戳，每个块都带着：
     #   hash  —— 源文件字节的哈希。`mtime` 是靠不住的信号（cp -p、解压备份、
     #            从快照还原都会保留它），哈希能看见 watcher 看不见的漂移。
-    #   embed —— 建这个向量的模型。换了模型，旧向量和新向量在同一个余弦空间里
-    #            没有可比性，必须能被发现（stats().stale_embed）。
-    stamp = {"hash": _file_hash(path), "embed": embedder.MODEL_NAME}
+    #   embed —— 建这个向量的**模型 + 做法**（`embedder.VECTOR_TAG`）。换了模型、或
+    #            同一段文本换了算法（如超窗块从截断改成窗口池化），旧向量和新向量在
+    #            同一个余弦空间里都没有可比性，必须能被发现（stats().stale_embed）。
+    stamp = {"hash": _file_hash(path), "embed": embedder.VECTOR_TAG}
     # 先 upsert 再清残留：delete 放到 upsert 之后，并发检索看到的中间态是
     # 「新旧并存」而非「整文件缺失」——最多读到旧内容，不会漏掉整个文件。
     col.upsert(
@@ -309,8 +327,9 @@ def stats() -> dict:
 
     - `stale`：用**旧切法**切出来的块数。切法一变块的边界全变，旧块留在库里既检索
       不准，也让「这次改动有没有用」没法判断。
-    - `stale_embed`：用**别的模型** embed 的块数。同一个余弦空间里混两个模型的向量
-      得到的相似度没有意义——不为 0 就必须重建。
+    - `stale_embed`：用**别的模型或别的建向量做法** embed 的块数（戳的值是
+      `embedder.VECTOR_TAG` = 模型名#方法版本）。同一个余弦空间里混两种向量得到的
+      相似度没有意义——不为 0 就必须重建。
     - `unhashed`：还没有内容哈希的块数（内容哈希是后加的，改动前写入的块没有）。
       不为 0 只说明「漂移检查覆盖不全」，点一次重建即可，不影响检索结果。
     """
@@ -337,7 +356,7 @@ def stats() -> dict:
         "stale_embed": sum(
             1
             for m in metas
-            if m.get("embed") is not None and m.get("embed") != embedder.MODEL_NAME
+            if m.get("embed") is not None and m.get("embed") != embedder.VECTOR_TAG
         ),
         "unhashed": sum(1 for m in metas if not m.get("hash")),
     }

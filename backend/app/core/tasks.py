@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -34,7 +35,7 @@ from app.core.llm import (
 )
 from app.core.prefs import load_config
 from app.db import SessionLocal
-from app.models import Conversation, Message, ProviderConfig, ScheduledTask, TaskRun
+from app.models import Conversation, Message, ProviderConfig, ScheduledTask, TaskRun, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -101,15 +102,12 @@ def filter_tools(specs: list[dict], whitelist: str) -> list[dict]:
     """Keep only specs whose function name matches a whitelist pattern.
 
     Patterns are fnmatch-style ('vault_*', 'server__*'); empty or '*' = all.
+    `none` = 不给任何工具。**语义在 `mcp.filter_specs` 一处**（A2 起 agent 侧的白名单
+    也走那里，两处不许各写一份）。
     """
-    tokens = [t for t in re.split(r"[,\s]+", (whitelist or "").strip()) if t]
-    if not tokens or "*" in tokens:
-        return specs
-    return [
-        s
-        for s in specs
-        if any(fnmatch.fnmatchcase(s.get("function", {}).get("name", ""), tok) for tok in tokens)
-    ]
+    from app.core.mcp import filter_specs
+
+    return filter_specs(specs, whitelist)
 
 
 # ---------- scheduling ----------
@@ -479,7 +477,12 @@ async def run_task(
         async with SessionLocal() as db:
             task = await db.get(ScheduledTask, task_id)
             if task:
-                task.last_run = started.astimezone()
+                # `last_run` 与 `task_runs.started_at` 说的是**同一个时刻**，所以必须是
+                # 同一个时钟。原来是 `started.astimezone()`（`started` 本身是本地 naive），
+                # 于是同一屏上任务行说「上次 13:58」、它自己的运行记录说「05:58」。
+                # 而 `started` 仍旧留给 `_write_vault`——**落盘文件名里的日期该是本地**的
+                # （「今天写的」按用户的今天算，不按 UTC 的今天）。
+                task.last_run = utcnow()
                 task.last_status = status
                 task.last_result = (answer or error)[:_RESULT_CAP]
                 if conv_id:
@@ -643,7 +646,11 @@ async def _finish_run(
         if not row:
             return
         row.status = status
-        row.finished_at = datetime.now().astimezone()
+        # **UTC，与 `started_at` 同一个时钟**。这里原来是 `datetime.now().astimezone()`
+        # （本地），而 `started_at` 是模型默认的 `utcnow()`——两个时钟混在一行里，
+        # 于是 `finished_at - started_at` 永远多八小时（前端 `elapsed()` 就是那么算的，
+        # 实测一次 50 秒的运行显示成「480 分 50 秒」）。
+        row.finished_at = utcnow()
         row.answer = answer[:_RESULT_CAP]
         row.error = error[:2000]
         row.model_id = model_id
@@ -983,6 +990,44 @@ async def _transcribe_note(t: dict) -> dict:
     }
 
 
+class _Steps:
+    """一次运行的**步骤账**——写进 `task_runs.log_json`，与工具调用同一个数组。
+
+    **为什么是同一个数组**（方案 §8.3 的步骤条）：那一条的全部价值在**顺序**，而两个数组
+    没法交错——工具那几项没有时间戳，插不回去。同一个数组里两种形状靠键区分
+    （`tool` / `step`），读的人各取各的：`skill_trials` 与 `skill_metrics` 按 `tool` 过滤，
+    看不见这些。
+
+    **为什么要有这个类**：每一步都要记「花了多久」，而 `time.monotonic()` 的成对调用散在
+    各处最容易漏——漏一处那一步就没有耗时，界面上看起来像 0 秒（那是**一句假话**，
+    比不显示更糟）。`begin` / `end` 把成对这件事收成一个对象，漏不掉。
+    """
+
+    def __init__(self, entries: list[dict] | None = None):
+        self.entries = entries if entries is not None else []
+        self._name = ""
+        self._t0 = 0.0
+
+    def begin(self, name: str) -> None:
+        """开一步。上一步还开着就**先结掉**——顺序错乱比少一步难查得多。"""
+        self.end()
+        self._name, self._t0 = name, time.monotonic()
+
+    def end(self, *, ok: bool = True, **extra) -> None:
+        """结掉当前这一步。没有开着的就什么都不做（收尾那一下因此可以随手写）。"""
+        if not self._name:
+            return
+        self.entries.append(
+            {
+                "step": self._name,
+                "ok": bool(ok),
+                "ms": max(0, int((time.monotonic() - self._t0) * 1000)),
+                **extra,
+            }
+        )
+        self._name = ""
+
+
 async def _run_engine(t: dict, engine: str, log_entries: list[dict] | None = None) -> dict:
     """把一个成文引擎无人值守地跑一遍（§15）。
 
@@ -1011,15 +1056,30 @@ async def _run_engine(t: dict, engine: str, log_entries: list[dict] | None = Non
     title = markdown = error = ""
     sources: list[dict] = []
     saved: dict | None = None
+    # 步骤条（§8.3）：无人值守的那几步就是引擎自己的相位。**「取材」在这里就开**——
+    # 引擎从被调起来的那一刻就在取材，`gathering` 那帧只是它自己确认一下。
+    # 不再对那一帧开第二步：那样会得到两个「取材」（一个 ms≈0，一个有材料数），
+    # 而步骤条上重复的一步看起来像引擎跑了两遍。
+    steps = _Steps(log_entries)
+    steps.begin("取材")
     async for ev, data in gen:
         if ev == "error":
+            steps.end(ok=False, note=str((data or {}).get("message") or "引擎没跑成")[:200])
             error = (data or {}).get("message") or "引擎没跑成"
             break
         if ev == "skills":
             # 本次运行吃了哪份工序。注入了就算数——哪怕这一步随后失败（它确实被用过了）。
             if log_entries is not None and (data or {}).get("skills"):
                 log_entries.append(skill_match.log_entry(data))
-        if ev == "report":
+        if ev == "sources":
+            n = len((data or {}).get("sources") or [])
+            # 一条都没找到也是一步——而且是**该被看见**的一步（`ok=False`）。
+            # 我省略它的话，那趟失败看上去会像「没跑过」。
+            steps.end(ok=n > 0, note=f"{n} 条材料" if n else "没找到材料")
+            steps.begin("成文")
+        elif ev == "report":
+            steps.end(note=f"{len(data.get('sections') or [])} 节")
+            steps.begin("落盘")
             sources = data.get("sources") or []
             rep = _report.Report(
                 title=(data.get("title") or "").strip(),
@@ -1032,13 +1092,20 @@ async def _run_engine(t: dict, engine: str, log_entries: list[dict] | None = Non
             title = rep.title
             markdown = _report.to_markdown(rep, sources, ENGINE_LABELS[engine])
             saved = await mod.save(rep, sources)  # 路由里那一步「预览后再存」，这里直接存
+            steps.end(ref=str((saved or {}).get("filename") or ""))
         elif ev == "saved":  # recap 自己落盘，没有 review 环节
             saved = data
             title = data.get("title") or title
+            steps.end(ref=str((data or {}).get("filename") or ""))
+    # 收尾：还开着的那一步按**这趟成没成**结掉。**不能提前结**——提前结会把
+    # 「引擎一个字都没吐」记成一步成功的「取材」，而那正是最该被看见的那种失败。
     if error:
+        steps.end(ok=False, note=str(error)[:200])
         raise RuntimeError(error)
     if not saved:
+        steps.end(ok=False, note="引擎没有产出可落盘的结果")
         raise RuntimeError("引擎没有产出可落盘的结果")
+    steps.end()
 
     where = saved.get("filename", "")
     answer = f"# {title or ENGINE_LABELS[engine]}\n\n{markdown}\n\n---\n\n已落到 vault/{where}"
@@ -1152,11 +1219,20 @@ async def _execute(t: dict, log_entries: list[dict]) -> dict:
         return {"answer": answer, "sources": sources, "model_id": served.get("label") or model_id, **stats, "tokens_in": usage.get("input"), "tokens_out": usage.get("output")}
 
     async def _run_tool(name: str, args: dict) -> str:
+        t0 = time.monotonic()
         result = await mcp_manager.call_tool(name, args)
         stats["tool_calls"] += 1
         text = str(result)
         log_entries.append(
-            {"tool": name, "args": args, "ok": not text.startswith("[tool error]"), "result": text[:600]}
+            {
+                "tool": name,
+                "args": args,
+                "ok": not text.startswith("[tool error]"),
+                "result": text[:600],
+                # 步骤条要「每步耗时」（§8.3）。这一次调用花的时间就在这里量——
+                # 别处补不出来：`rounds` 是次数，`started_at/finished_at` 是整趟。
+                "ms": max(0, int((time.monotonic() - t0) * 1000)),
+            }
         )
         return result
 

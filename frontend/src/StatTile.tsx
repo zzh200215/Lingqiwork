@@ -1,4 +1,4 @@
-/** 家底砖：一个数 + 一句它是什么 + 可选落点。
+﻿/** 家底砖：一个数 + 一句它是什么 + 可选落点。
  *
  *  2026-09-18：为「页面内容太少」这件事加的。量过：资产页只有 205 字、今日页 205 字，
  *  而同一台机器的仪表盘有 2905 字——差别不在版面，在**这一页到底摆了几件事**。
@@ -21,7 +21,7 @@ export default function StatTile({
   href,
   accent,
 }: {
-  /** lucide 图标（`<FileText className="h-3.5 w-3.5" />`）；传 emoji 字符串也照旧渲染 */
+  /** lucide 图标（`<FileText className="h-4 w-4" />`）；传 emoji 字符串也照旧渲染 */
   icon: ReactNode
   /** 这个数是什么（小字） */
   label: string
@@ -36,7 +36,7 @@ export default function StatTile({
 }) {
   const body = (
     <>
-      <p className="flex items-center gap-2 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
+      <p className="flex items-center gap-2 text-xs font-medium text-neutral-400 dark:text-neutral-500">
         <span
           className={`wb-chip h-7 w-7 rounded-lg ${
             accent ?? 'bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
@@ -53,7 +53,7 @@ export default function StatTile({
         {value === null ? '—' : value}
       </p>
       {sub ? (
-        <p className="pt-0.5 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        <p className="pt-0.5 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
           {sub}
         </p>
       ) : null}

@@ -1,4 +1,4 @@
-/** 会话流里的**一行回执**：这一轮存下来的成品，指到产出详情，正文不在对话里。
+﻿/** 会话流里的**一行回执**：这一轮存下来的成品，指到产出详情，正文不在对话里。
  *
  *  为什么单独一行而不是把正文摊开：长文卡是「页面乱」的最大单点——一份周报糊在
  *  对话里，上下文的对话全被推走。回执只留「体裁 + 标题 + 去哪看」，正文活在
@@ -27,10 +27,10 @@ export default function ArtifactReceipt({ art }: { art: ArtifactRef }) {
   return (
     <Link
       to={art.href}
-      className="not-prose flex items-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs transition-colors hover:border-teal-300 hover:bg-teal-50 dark:border-teal-500/30 dark:bg-teal-500/10 dark:hover:border-teal-500/50"
+      className="not-prose flex items-center gap-2 rounded-md border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs transition-colors hover:border-teal-300 hover:bg-teal-50 dark:border-teal-500/30 dark:bg-teal-500/10 dark:hover:border-teal-500/50"
     >
       <span className="shrink-0 text-sm leading-none">📄</span>
-      <span className="shrink-0 rounded border border-teal-300 px-1.5 py-0.5 text-[10px] text-teal-700 dark:border-teal-600 dark:text-teal-300">
+      <span className="shrink-0 rounded border border-teal-300 px-1.5 py-0.5 text-xs text-teal-700 dark:border-teal-600 dark:text-teal-300">
         {art.label}
       </span>
       <span className="min-w-0 flex-1 truncate font-medium text-teal-800 dark:text-teal-200">
@@ -42,8 +42,8 @@ export default function ArtifactReceipt({ art }: { art: ArtifactRef }) {
           title={art.budget != null ? `用户要的是 ${art.budget} 字${art.hard ? '以内' : '左右'}` : undefined}
           className={
             over
-              ? 'shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
-              : 'shrink-0 text-[10px] text-teal-600/80 dark:text-teal-400/80'
+              ? 'shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
+              : 'shrink-0 text-xs text-teal-600/80 dark:text-teal-400/80'
           }
         >
           {art.chars} 字{over ? ` · 超 ${art.over_by}` : ''}

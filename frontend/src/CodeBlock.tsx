@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { api, type ArtifactsResult, type ArtifactsStatus } from './api'
 
 // Code block with copy + (opt-in) run/preview buttons; used as the `pre`
@@ -88,12 +88,12 @@ export default function CodeBlock({ children }: { children?: React.ReactNode }) 
             </button>
           </div>
           {result.stdout && (
-            <pre className="max-h-60 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-neutral-700 dark:text-neutral-200">
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-neutral-700 dark:text-neutral-200">
               {result.stdout}
             </pre>
           )}
           {result.stderr && (
-            <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-red-600 dark:text-red-400">
+            <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-red-600 dark:text-red-400">
               {result.stderr}
             </pre>
           )}

@@ -2,7 +2,6 @@
 % 和 _ 当普通字符而不是通配符。直接调端点函数，不起 HTTP。"""
 import asyncio
 import atexit
-import os
 import shutil
 import sys
 import tempfile
@@ -22,8 +21,6 @@ def _cleanup() -> None:
 
 
 atexit.register(_cleanup)
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 
 from app.db import SessionLocal, engine  # noqa: E402
 from app.models import Base, Conversation, Message, TutorSession, TutorTurn  # noqa: E402

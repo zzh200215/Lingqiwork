@@ -16,6 +16,7 @@ vi.mock('./api', () => ({
     promptRegistry: vi.fn(),
     promptEntry: vi.fn(),
     checkPrompt: vi.fn(),
+    cancelPromptCheck: vi.fn(),
     addPromptCase: vi.fn(),
     removePromptCase: vi.fn(),
     setPromptDomain: vi.fn(),
@@ -158,7 +159,7 @@ beforeEach(() => {
 afterEach(cleanup)
 
 /** 实验室现在读 `?prompt=` 深链（技能卡跳过来的那条），所以测试得给它一个 Router。 */
-function renderLab(entry = '/work?tab=lab') {
+function renderLab(entry = '/work?tab=eval') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <PromptLab />
@@ -275,8 +276,51 @@ describe('PromptLab', () => {
     expect(await screen.findByText(/读登记表出错了：后端不在/)).toBeTruthy()
   })
 
+  it('跑到一半被停：**明说这不是一次跑分**，且不摆区间（§六 停止 → 真取消）', async () => {
+    // 半趟的 k/n 会被读成「变差了」，而它只是被打断了。后端因此不落库、不给区间
+    // （`rate: null` / `ci: null`）——这一条钉的是界面**不许把它读成一次成绩**。
+    const { container } = renderLab()
+    fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
+    vi.mocked(api.checkPrompt).mockResolvedValue({
+      ...REPORT,
+      total: 2,
+      passed: 1,
+      rate: null,
+      ci: null,
+      tell: false,
+      stopped: true,
+      planned: 7,
+    })
+    fireEvent.click(await screen.findByText('跑一次对照（已登记内容）'))
+
+    const banner = await waitFor(() => {
+      const el = container.querySelector('[data-lab-stopped]')
+      if (!el) throw new Error('没有那条「停了」的横幅')
+      return el
+    })
+    expect(banner.textContent).toContain('停在第 2/7 条')
+    expect(banner.textContent).toContain('这不算一次跑分')
+    // 区间为 null 时不许崩、也不许摆一个编出来的区间
+    expect(container.querySelector('[data-lab-report]')?.textContent).not.toContain('Wilson')
+  })
+
+  it('点「停止」调的是后端那条真取消（不是只把界面停掉）', async () => {
+    vi.mocked(api.cancelPromptCheck).mockResolvedValue({ stopped: false }) // 假装刚好已经跑完了
+    renderLab()
+    fireEvent.click(await screen.findByText('FEYNMAN_PROMPT'))
+
+    // 让这一趟挂着不返回，才看得到「正在跑」那个面板
+    vi.mocked(api.checkPrompt).mockReturnValue(new Promise(() => {}))
+    fireEvent.click(await screen.findByText('跑一次对照（已登记内容）'))
+
+    fireEvent.click(await screen.findByText('停止'))
+    await waitFor(() => expect(api.cancelPromptCheck).toHaveBeenCalledWith('FEYNMAN_PROMPT'))
+    // 后端说「没有在跑的」→ 不假装停成功，也不停在「正在停…」上
+    await waitFor(() => expect(screen.getByText('停止')).toBeTruthy())
+  })
+
   it('深链 ?prompt=<key> 直接打开那一条（技能卡就是这么跳过来的）', async () => {
-    renderLab('/work?tab=lab&prompt=FEYNMAN_PROMPT')
+    renderLab('/work?tab=eval&prompt=FEYNMAN_PROMPT')
     await waitFor(() => expect(api.promptEntry).toHaveBeenCalledWith('FEYNMAN_PROMPT'))
     expect(await screen.findByText('golden set 2 条')).toBeTruthy()
   })
@@ -395,7 +439,7 @@ describe('PromptLab · 喂食', () => {
 
 // Q3 · 领域：技能那一边**唯一**标领域的地方。
 //
-// 形态（`/work?tab=form`）按 golden set 的 `domain` 把这套用例算进对应那根枝；这里写空
+// 形态（`/work?tab=eval`）按 golden set 的 `domain` 把这套用例算进对应那根枝；这里写空
 // 就等于这个领域没有技能。和喂食一样，写的是**用例文件**，提示词一个字节都不动。
 describe('PromptLab · 领域', () => {
   /** 领域框（golden set 表头上那个）。等它真的出来再返回，别拿 null 去断言。 */

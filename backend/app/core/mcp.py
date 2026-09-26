@@ -15,6 +15,7 @@ MCP servers are configured in `data/config.json` under `mcp_servers`:
     function names. Built-in vault / fetch tools are always available.
 """
 import asyncio
+import fnmatch
 import json
 import logging
 import re
@@ -568,6 +569,59 @@ async def search_web(query: str) -> list[dict]:
     raise SearchError("; ".join(errors))
 
 
+NO_TOOLS = "none"
+
+# A3（`Agent升级.md` §2）的**触发条件**：2026-09-22 起**不再是一个工具数**。
+#
+# 原来写死的是「总数 >20（约等于接 3 家外部 MCP 服务器）」——查过一遍，那个数是**估的**
+# （同一份文档 §1.4 里还写着另一个版本：30+），而"工具多到选不过来"这件事**今天没有任何读数
+# 支撑**：20 条 A0 基线里 `tool_not_allowed` / `tool_not_used` 都是 0、工具调用没有报错。
+# 按「量出来的才上」，一条只有估计值支撑的线不该继续当及格线用。
+#
+# 现在看的是**两个可观测的症状**，任一出现就动手（任一出现都该把 A3 从挂账里拿出来）：
+#   ① **选择症状**：A0 报告里的 `tool_not_allowed` / `tool_not_used` / 工具报错 非零
+#      ——读数已经在报告与仪表盘那一格上（`core/agent_report.py`），不用新造一处；
+#   ② **成本症状**：工具定义那一坨在固定前缀里涨到显眼——实测今天 12 个工具 = **4206 字**，
+#      而同一次普通回合的 system 只有 **402 字**（10 倍），**每轮都重发一遍**；
+#      单条最长的 `save_artifact` 一家就 827 字。
+#      （这一栏**先只做读数**：多少字算多我们还没量过，不许再凭估计编一条线。）
+#
+# `A3_REVIEW_HINT` 只是"到了就复看一遍"的提示，**不再是及格线**——它不进任何布尔。
+A3_REVIEW_HINT = 20
+
+
+def allowlist_tokens(raw: str | None) -> list[str]:
+    """工具白名单字符串 → 记号列表。Pure。空/空白 = 空列表（= 不限制）。"""
+    return [t for t in re.split(r"[,\s]+", (raw or "").strip()) if t]
+
+
+def filter_specs(specs: list[dict], raw: str | None) -> list[dict]:
+    """按白名单过滤工具规格。Pure。**「哪些工具」的语义只在这里一份。**
+
+    A2 把两处的白名单统一到这里（`tasks.tool_whitelist` 与 `agents.tool_whitelist`）：
+    先前 `tasks.filter_tools` 自己实现了一遍，agent 侧再写一遍就会各说各话。三条语义：
+
+    - **空 或 `*`** → 全给（不限制）。这是默认，也是老数据的含义；
+    - **`none`**（保留字）→ **一个都不给**。这是「这个 agent 不用工具」在字符串里的说法：
+      `tools_enabled` 从布尔升级成白名单时，迁移把 `False` 写成它（保留字挑得短、
+      且不可能与真实工具名撞车——工具名都是 `vault_*` / `server__tool` 这种）；
+    - **其余** → fnmatch 通配（`vault_*`、`server__*`），多个记号之间是「或」。
+
+    记号一个都没匹配上 → 返回空表（**不是**回落到全给）：白名单写错了该是「没有工具」，
+    不是「什么都能用」。
+    """
+    tokens = allowlist_tokens(raw)
+    if not tokens or "*" in tokens:
+        return list(specs)
+    if any(t.lower() == NO_TOOLS for t in tokens):
+        return []
+    return [
+        s
+        for s in specs
+        if any(fnmatch.fnmatchcase(s.get("function", {}).get("name", ""), tok) for tok in tokens)
+    ]
+
+
 async def _web_search(args: dict) -> str:
     query = (args.get("query") or "").strip()
     if not query:
@@ -602,6 +656,17 @@ async def _image_gen(args: dict) -> str:
         return f"[错误] {e}"
 
 
+async def _delegate_tool(args: dict) -> str:
+    """`delegate`（A1）的入口 —— **薄壳**，判定与隔离都在 `core/delegate.py` 一处。
+
+    不在这里 import：`delegate` 要用 `mcp_manager`（工具网关），模块级互相 import 会成环。
+    这也是这个仓库处理这类关系的既有形状（`turn_quality` → `routers.chat` 那一份）。
+    """
+    from app.core import delegate
+
+    return await delegate.handler(args)
+
+
 BUILTIN_TOOLS: list[dict] = [
     {
         "name": "vault_read_file",
@@ -624,7 +689,7 @@ BUILTIN_TOOLS: list[dict] = [
     },
     {
         "name": "vault_write_file",
-        "description": "在知识库 vault 中创建或覆盖写一个文件（常用于保存整理后的笔记）。写入后自动重新索引，可被 RAG 检索。",
+        "description": "在 vault 里创建或覆盖写一个文件（保存整理后的笔记）。写完自动重新索引，可被检索。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -637,13 +702,15 @@ BUILTIN_TOOLS: list[dict] = [
     },
     {
         "name": "save_artifact",
+        # **瘦身（2026-09-22，A3 第一步）**：248 → 108 字。砍掉的三句都在 `chat._OUTPUT_RULE`
+        # 里（那段每次都在 system 里，而且实测过：规矩只在工具描述里时 0/10 会调它、提到
+        # system 层 6/10）——**重复的规矩不是双保险，是每轮都付的钱**。留下的每一条都是
+        # 这个工具**独有的事实**：落点、体裁定目录、一輪两次的额度、重存覆盖、返回的是
+        # 服务端数的字数。`tests/test_tool_descriptions.py` 把这些事实逐条钉住。
         "description": (
-            "把一份**写好的成品**存进 vault 的产出区，并让它在工作页的产出清单里出现。"
-            "写周报、调研、方案、复盘、交付稿这类成篇的东西，一律用它存——**别把长文直接"
-            "写在回复里**，长篇正文会淹掉对话。存完只回一句「已存入产出」，正文用户点链接看。"
-            "**一轮里同一个体裁最多存两次**（1 次初稿 + 1 次修订，第三次会被服务端拒绝）："
-            "写完直接存，字数不对就在 content 里改好再存一次（会覆盖同一份文件）；"
-            "返回里会告诉你**服务端数出来的实际字数**以及还剩几次修订额度，按那个来，别自己估。"
+            "把写好的成品存进 vault 产出区（会出现在工作页的产出清单里）。正文放 content，"
+            "回复只留一句「已存入产出」。同一体裁一轮最多存两次（第三次服务端拒），"
+            "重存会覆盖同一份文件；返回里给**服务端数的实际字数**与剩余额度，按那个来，别自己估。"
         ),
         "parameters": {
             "type": "object",
@@ -651,15 +718,15 @@ BUILTIN_TOOLS: list[dict] = [
                 "kind": {
                     "type": "string",
                     "enum": list(_ARTIFACT_KINDS),
-                    "description": "体裁：research 调研 / decide 方案 / conflict 对质 / recap 复盘 / deliver 交付稿 / compose 成文",
+                    "description": "体裁（决定落哪个目录）：research 调研/decide 方案/conflict 对质/recap 复盘/deliver 交付稿/compose 成文",
                 },
-                "title": {"type": "string", "description": "标题，一句话说清这份东西是什么"},
+                "title": {"type": "string", "description": "标题，一行说清这份是什么"},
                 "content": {"type": "string", "description": "成品正文（Markdown）"},
                 "length_budget": {
                     "type": "integer",
                     "description": (
-                        "可选：用户要的字数上限。用户在对话里说清了（如「300 字左右」）时"
-                        "**不必填**，服务端自己认；只有在服务端认不出、而你确实知道目标字数时才填。"
+                        "可选：用户要的字数上限。对话里说清过（如「300 字左右」）就不必填"
+                        "——服务端自己认。"
                     ),
                 },
             },
@@ -680,9 +747,8 @@ BUILTIN_TOOLS: list[dict] = [
     {
         "name": "web_search",
         "description": (
-            "联网搜索：用关键词搜索网页，返回标题/链接/摘要列表。"
-            "需要最新信息、不确定的事实、或用户明确要求搜索时使用；"
-            "拿到结果后可用 fetch_url 阅读具体页面。"
+            "联网搜索：按关键词返回标题/链接/摘要。需要最新信息或用户要求搜索时用；"
+            "再用 fetch_url 读具体页面。"
         ),
         "parameters": {
             "type": "object",
@@ -694,9 +760,7 @@ BUILTIN_TOOLS: list[dict] = [
     {
         "name": "kb_search",
         "description": (
-            "检索用户的个人知识库（笔记/PDF/文档），返回最相关的文本片段。"
-            "当用户问到可能记在笔记里的内容、或需要用户私有资料作答时使用；"
-            "回答时标注来源文件。"
+            "检索你的个人知识库（笔记/PDF/文档），返回最相关的片段；回答时标注来源文件。"
         ),
         "parameters": {
             "type": "object",
@@ -711,9 +775,8 @@ BUILTIN_TOOLS: list[dict] = [
     {
         "name": "image_gen",
         "description": (
-            "文生图：按描述生成图片并返回可直接展示的 markdown（![](/api/images/xxx.png)）。"
-            "用户要求画图/配图/生成图片时使用；prompt 越具体越好（主体、风格、构图、光线），"
-            "生成需要 30-90 秒，一次调用即可，不要重复调用。"
+            "文生图：按描述出图，返回可直接展示的 markdown。用户要画图/配图时用；"
+            "prompt 写具体（主体、风格、构图、光线）。生成要 30-90 秒，一次调用即可，别重复调。"
         ),
         "parameters": {
             "type": "object",
@@ -731,8 +794,8 @@ BUILTIN_TOOLS: list[dict] = [
     {
         "name": "memory_save",
         "description": (
-            "保存一条关于用户的长期记忆（单条事实，如偏好、背景、约定）。"
-            "只在用户明确表达个人偏好/重要背景信息时使用，不要记普通聊天内容。"
+            "保存一条关于用户的长期记忆（单条事实：偏好/背景/约定）。"
+            "只在用户明确表达时用，别记普通聊天内容。"
         ),
         "parameters": {
             "type": "object",
@@ -764,8 +827,8 @@ BUILTIN_TOOLS: list[dict] = [
     {
         "name": "skill_load",
         "description": (
-            "加载一个「技能」的完整指令内容（技能清单见系统提示）。"
-            "当当前任务与某个技能的描述相关时，先调用本工具加载全文，再遵循其中的指导执行。"
+            "加载一个技能的完整指令（清单见系统提示）。任务与某个技能的描述相关时先调它，"
+            "再按里面的指导执行。"
         ),
         "parameters": {
             "type": "object",
@@ -774,9 +837,60 @@ BUILTIN_TOOLS: list[dict] = [
         },
         "handler": _skill_load,
     },
+    {
+        # A1：委托（子代理）。**规格写在这里**（与其它内置工具同一处，好让「模型能看到
+        # 哪些工具」永远只有一份清单）；深度、工具子集、轮数预算那几条纪律在 `core/delegate.py`。
+        # 描述里那句「最多 3 轮」与 `delegate.SUB_ROUNDS_CAP` 由一条测试钉着不许漂。
+        # **瘦身（2026-09-22，A3 第一步）**：254 → 137 字。砍的是重复与铺陈（「这件事需要连着查
+        # 好几处材料」→「要连查好几处」；「不想让中间步骤占满主对话」→ 已由前半句隐含）。
+        # 七条事实一条没少：子任务 / 看不到对话 / 只凭 task / 默认只读+检索 / `tools` 点名 /
+        # 3 轮 / 不能外委 / 简单事别委托——见 `tests/test_tool_descriptions.py`。
+        "name": "delegate",
+        "description": (
+            "把一个**子任务**交给独立的子代理，拿回一段结果——适合要连查好几处材料、"
+            "或该在另一套上下文里跑完再归纳的活。子代理**看不到**你现在的对话，只凭 `task` 里的"
+            "说明；它默认只有只读与检索工具（要落盘或写文件得在 `tools` 里点名）；"
+            "最多 3 轮，且**不能再往外委托**。**一步能做完的别委托**——它比你直接调一次工具贵。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "要委托的那件事。子代理只看到这一段，写清目标与交付形状。",
+                },
+                "agent_name": {
+                    "type": "string",
+                    "description": "可选：用哪个已保存的 agent（人设/模型/工具开关）。不给就用默认。",
+                },
+                "model_id": {
+                    "type": "string",
+                    "description": "可选：子代理用哪个模型（'provider/model'）。不给就跟着主循环。",
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选：**额外**给它的工具名（只读+检索之外）。要让它落盘就加 save_artifact。",
+                },
+            },
+            "required": ["task"],
+        },
+        "handler": _delegate_tool,
+    },
 ]
 
 _BUILTIN_BY_NAME = {b["name"]: b for b in BUILTIN_TOOLS}
+
+# **破坏性工具**（`Agent升级.md` §4.1 ①，2026-09-22 落地）：会**不可逆地丢掉用户东西**的那些。
+# 今天只有一个——`memory_delete` 按 id 或内容删长期记忆，删掉就没了（没有回收站；界面上那个
+# 「清空」是另一条路，不经过模型）。
+#
+# **声明放在工具表旁边**，因为"哪些工具危险"是**工具自己的属性**，不是调用方各自的名单：
+# 散在 chat / 零柒 / 定时任务 / 子代理四处各写一遍 `!= "memory_delete"`，迟早漏一处——
+# 而漏掉的那一处正好是没人在看的那个（`docs/testing.md` §6.12 那一族：失败换个身份继续跑）。
+#
+# 加一个新名字之前先回答两个问题：① 它丢了什么、能不能补回来？② 哪条路有资格拿到它？
+DESTRUCTIVE_TOOLS: tuple[str, ...] = ("memory_delete",)
 
 # map tool->actual server for MCP tools (server__tool -> server)
 # handled inline via name.partition("__").
@@ -819,14 +933,35 @@ class McpManager:
     def status(self) -> dict:
         return dict(self._status)
 
-    def tool_specs(self, include_memory: bool = True) -> list[dict]:
-        """OpenAI-style function specs handed to the model's `tools` parameter."""
+    def tool_specs(
+        self,
+        include_memory: bool = True,
+        include_delegate: bool = False,
+        *,
+        allow_destructive: bool = False,
+    ) -> list[dict]:
+        """OpenAI-style function specs handed to the model's `tools` parameter.
+
+        `include_delegate`（A1）**默认 False，只有 chat 显式打开**：委托是有成本、有失败
+        半径的能力，无人值守那条路（tasks 的 cron/watch）与零柒的工具清单都不该凭空多出它。
+        默认关 = 以后新加调用方不会不小心把它带出去（fail-closed）。
+
+        `allow_destructive`（§4.1 ①，2026-09-22）**默认 False**：`DESTRUCTIVE_TOOLS` 那几个
+        工具不给——除非调用方说得出理由。今天唯一该说这个理由的地方是**交互那两条路**
+        （chat / 零柒）：用户这一轮**明说**要忘掉什么，才把 `memory_delete` 给它
+        （`turn_quality.asked_to_forget`，见那里的代价不对称）。**无人值守那两条路
+        （tasks 的 cron/watch、子代理）永远拿默认值**——那里没有"这一轮"，也就没有人可问。
+        """
         prefs = load_config()
         flat = []
         for b in BUILTIN_TOOLS:
             if b["name"].startswith("memory_") and not include_memory:
                 continue
             if b["name"] == "image_gen" and not prefs.get("image_enabled", True):
+                continue
+            if b["name"] == "delegate" and not include_delegate:
+                continue
+            if b["name"] in DESTRUCTIVE_TOOLS and not allow_destructive:
                 continue
             flat.append({"name": b["name"], "description": b["description"], "parameters": b["parameters"]})
         for t in self._tools:
@@ -847,6 +982,40 @@ class McpManager:
             {"server": t.server, "name": t.name, "description": t.description}
             for t in self._tools
         ]
+
+    def inventory(self, include_memory: bool = True, include_delegate: bool = True) -> dict:
+        """模型**现在拿到什么** + A3 那两个症状的读数。**读数只此一处。**
+
+        A3 的触发条件 2026-09-22 起是**症状驱动**（见 `A3_REVIEW_HINT` 上面那段）：选择症状
+        看 A0 报告（这一处给不了），成本症状就是这里的 `chars` / `biggest`。
+
+        设置页以前显示的是 `active_tools`（**只有已连接的 MCP 工具**），所以本机那一栏写着
+        「0 个可用工具」，而模型手里其实有十几个：**计数与口径都得是这一处说了算**。
+
+        `include_memory` 跟设置走（关掉记忆就不给那三个 `memory_*`），`include_delegate=True`
+        与 chat 那条路一致——它给的那个数才是「模型这一轮真能用的那些」。
+
+        **返回里没有 `fired`**：那不是个布尔，是"复看时两栏一起读"。以前有 `trigger`/`fired`
+        一对（数工具、到线变红），现在只剩 `review_hint` 那个提示——**别把它读成及格线**。
+        """
+        specs = self.tool_specs(
+            include_memory=include_memory, include_delegate=include_delegate
+        )
+        names = [s["function"]["name"] for s in specs]
+        sizes = [
+            (len(json.dumps(s, ensure_ascii=False, separators=(",", ":"))), s["function"]["name"])
+            for s in specs
+        ]
+        sizes.sort(reverse=True)
+        return {
+            "count": len(names),
+            "names": names,
+            "mcp": len(self.active_tools()),
+            # 成本症状（每轮都重发的那一坨）：总字数 + 最占地方的三个
+            "chars": sum(n for n, _ in sizes),
+            "biggest": [{"name": name, "chars": n} for n, name in sizes[:3]],
+            "review_hint": A3_REVIEW_HINT,
+        }
 
     # ---------- lifecycle ----------
 
@@ -926,6 +1095,7 @@ class McpManager:
             "kb_search",
             "image_gen",
             "save_artifact",
+            "delegate",
         ):
             handler = _BUILTIN_BY_NAME.get(name)
             if not handler:

@@ -193,3 +193,78 @@ def test_the_board_reads_the_real_tables():
     assert chain["steps"][0]["state"] == "awaiting"
     assert chain["steps"][1]["state"] == "blocked"
     assert "等你点头" in out["broadcast"]
+
+
+# ---------- 4. 30 天成绩**按任务分解**（方案 §8.3：清单每行一条，不是只给全站一个数）----------
+
+
+def test_task_stats_break_down_per_task():
+    """工作流清单每行要自己的 30 天成功率。
+
+    原来 `task_stats` 只按 status 分组，于是只有全站一个数——「哪条流程在悄悄变差」
+    答不出来。多一个 group by 键就够了，不新增查询。
+    """
+    from app.db import SessionLocal, engine
+    from app.models import Base, ScheduledTask, TaskRun
+    from app.routers.dashboard import dashboard
+
+    async def go():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+        async with SessionLocal() as db:
+            db.add_all(
+                [
+                    ScheduledTask(id=1, name="每日抓取", prompt="x"),
+                    ScheduledTask(id=2, name="总结成稿", prompt="x"),
+                ]
+            )
+            await db.commit()
+            # 1 号：3 成 1 败 → 75%；2 号：全成 → 100%
+            db.add_all(
+                [TaskRun(task_id=1, status="ok", trigger="cron") for _ in range(3)]
+                + [TaskRun(task_id=1, status="error", trigger="cron")]
+                + [TaskRun(task_id=2, status="ok", trigger="cron")]
+            )
+            await db.commit()
+            return await dashboard(db=db)
+
+    out = asyncio.run(go())
+    stats = out["task_stats"]
+    # 全站那个数照旧（不能因为加了分解就把它算错）
+    assert stats["runs_30d"] == 5
+    assert stats["ok"] == 4
+    # 按任务那两份
+    by_task = stats["by_task"]
+    assert by_task["1"] == {"runs": 4, "ok": 3, "rate": 0.75}
+    assert by_task["2"] == {"runs": 1, "ok": 1, "rate": 1.0}
+
+
+def test_task_stats_omit_tasks_with_no_runs():
+    """**30 天内没跑过的任务不出现在分解里。**
+
+    出现的话前端会摆一个「0%」——那是把「没跑过」说成「全挂了」，两件事不一样。
+    """
+    from app.db import SessionLocal, engine
+    from app.models import Base, ScheduledTask, TaskRun
+    from app.routers.dashboard import dashboard
+
+    async def go():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+        async with SessionLocal() as db:
+            db.add_all(
+                [
+                    ScheduledTask(id=1, name="跑过的", prompt="x"),
+                    ScheduledTask(id=2, name="没跑过的", prompt="x"),
+                ]
+            )
+            await db.commit()
+            db.add(TaskRun(task_id=1, status="ok", trigger="cron"))
+            await db.commit()
+            return await dashboard(db=db)
+
+    out = asyncio.run(go())
+    assert "1" in out["task_stats"]["by_task"]
+    assert "2" not in out["task_stats"]["by_task"]

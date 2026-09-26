@@ -55,11 +55,11 @@ function Number_({
           : 'border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900/60'
       }`}
     >
-      <div className="text-[10px] text-neutral-400 dark:text-neutral-500">{label}</div>
+      <div className="text-xs text-neutral-400 dark:text-neutral-500">{label}</div>
       <div className="text-sm tabular-nums text-neutral-700 dark:text-neutral-200">
         {enough ? value : '样本不足'}
       </div>
-      <div className="text-[10px] text-neutral-400 dark:text-neutral-500">
+      <div className="text-xs text-neutral-400 dark:text-neutral-500">
         {enough ? extra : note}
       </div>
     </div>
@@ -73,7 +73,7 @@ function Card({ b }: { b: FormDomain }) {
     <li
       data-form-domain={b.domain}
       data-form-grown={b.grown ? '1' : '0'}
-      className={`rounded-xl border p-3 ${
+      className={`rounded-md border p-3 ${
         b.grown
           ? 'border-emerald-200 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-500/5'
           : 'border-neutral-200 dark:border-neutral-800'
@@ -85,7 +85,7 @@ function Card({ b }: { b: FormDomain }) {
           {b.domain}
         </span>
         <div className="flex-1" />
-        <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+        <span className="text-xs text-neutral-400 dark:text-neutral-500">
           {b.grown ? '三样都有数' : '还没成枝'}
         </span>
       </div>
@@ -127,14 +127,14 @@ function Card({ b }: { b: FormDomain }) {
       </div>
 
       {r.run_id != null ? (
-        <div className="mt-1 text-[10px] text-neutral-400 dark:text-neutral-500">
+        <div className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
           检索读的是 #{r.run_id} 那次评测（{when(r.at)}），这个领域当时有 {r.cases} 条题
           {r.labelled > r.cases ? `（现在标了 ${r.labelled} 条，多出来的还没跑过）` : ''}
         </div>
       ) : null}
 
       {b.grown ? (
-        <p className="mt-2 text-[11px] leading-relaxed text-neutral-600 dark:text-neutral-300">
+        <p className="mt-2 text-xs leading-relaxed text-neutral-600 dark:text-neutral-300">
           它没有学会{b.domain}。这三个数说的是「在你的材料里找得到、讲得有据、这一条跑通过」
           ——没有一样测过它对你这类问题的判断。
         </p>
@@ -212,7 +212,7 @@ export default function FormPane() {
 
   return (
     <div data-form-root className="space-y-6">
-      <section className="rounded-xl border border-neutral-200 bg-neutral-50/60 p-3 text-[11px] leading-relaxed text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900/40 dark:text-neutral-400">
+      <section className="rounded-md border border-neutral-200 bg-neutral-50/60 p-3 text-xs leading-relaxed text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900/40 dark:text-neutral-400">
         一根枝 = 同一个领域里三样可验证的东西都够说话了：
         <b className="text-neutral-600 dark:text-neutral-300">检索住</b>（这个领域的样例题命中率）、
         <b className="text-neutral-600 dark:text-neutral-300">搞懂过</b>（这个领域已掌握的概念）、
@@ -229,8 +229,8 @@ export default function FormPane() {
             领域（{grown.length}/{domains.length} 长成了枝）
           </h2>
           <div className="flex-1" />
-          <Link to="/work?tab=lab" className="text-xs text-violet-500 hover:underline">
-            技能那边去实验室
+          <Link to="/work?tab=prompt" className="text-xs text-violet-500 hover:underline">
+            技能那边去提示词页的「技能草稿」
           </Link>
         </div>
         {domains.length === 0 ? (
@@ -254,7 +254,7 @@ export default function FormPane() {
             样例题的领域
           </h2>
           <div className="flex-1" />
-          <span className="text-[11px] text-neutral-400">
+          <span className="text-xs text-neutral-400">
             {unclassified.length > 0 ? `${unclassified.length} 条还没归类` : '都归好类了'}
           </span>
         </div>
@@ -263,13 +263,13 @@ export default function FormPane() {
             评测集是空的。检索那一样读的就是它——先往 `eval_items` 里放几条「问题 + 期望源」。
           </p>
         ) : (
-          <ul className="divide-y divide-neutral-100 rounded-xl border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+          <ul className="divide-y divide-neutral-100 rounded-md border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
             {items.map((i) => (
               <li key={i.id} data-form-item={i.id} className="flex items-center gap-2 px-3 py-2">
-                <span className="min-w-0 flex-1 truncate text-[11px] text-neutral-600 dark:text-neutral-300">
+                <span className="min-w-0 flex-1 truncate text-xs text-neutral-600 dark:text-neutral-300">
                   {i.question}
                 </span>
-                <span className="hidden shrink-0 truncate text-[10px] text-neutral-400 sm:block sm:max-w-[12rem]">
+                <span className="hidden shrink-0 truncate text-xs text-neutral-400 sm:block sm:max-w-[12rem]">
                   {i.expected_source || '（没有期望源）'}
                 </span>
                 <input
@@ -281,7 +281,7 @@ export default function FormPane() {
                   }}
                   onBlur={() => void saveDomain(i.id)}
                   placeholder="领域"
-                  className="w-24 shrink-0 rounded-lg border border-neutral-300 bg-white px-2 py-1 text-[11px] outline-none placeholder:text-neutral-400 focus:border-emerald-400 dark:border-neutral-700 dark:bg-neutral-900"
+                  className="w-24 shrink-0 rounded-lg border border-neutral-300 bg-white px-2 py-1 text-xs outline-none placeholder:text-neutral-400 focus:border-emerald-400 dark:border-neutral-700 dark:bg-neutral-900"
                 />
               </li>
             ))}
@@ -294,12 +294,12 @@ export default function FormPane() {
               onClick={() => void runEval()}
               disabled={busy}
               title={`每条题一次回答 + 一次判分，${items.length} 条 = 最多 ${items.length * 2} 次模型调用`}
-              className="rounded-full border border-neutral-300 px-2.5 py-0.5 text-[11px] text-neutral-600 transition-colors hover:border-emerald-400 hover:text-emerald-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+              className="rounded-full border border-neutral-300 px-2.5 py-0.5 text-xs text-neutral-600 transition-colors hover:border-emerald-400 hover:text-emerald-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
             >
               {busy ? '评测中…' : `跑一次评测（${items.length} 条，最多 ${items.length * 2} 次调用）`}
             </button>
             {msg ? (
-              <span data-form-msg className="text-[11px] text-neutral-500">
+              <span data-form-msg className="text-xs text-neutral-500">
                 {msg}
               </span>
             ) : null}

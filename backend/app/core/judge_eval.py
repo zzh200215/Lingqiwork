@@ -235,16 +235,20 @@ async def check(
     model_id: str = "",
     judge: Callable[..., Awaitable[dict]] | None = None,
     save: bool = True,
+    cancel_key: str = "",
 ) -> dict:
     """跑一次判分金标集。`variant` 为空 = 重放**已登记**的判分提示词（跑基线/回归）。
 
     报告的**顶层形状与 `prompt_eval.check()` 一致**（key/cases/total/passed/rate/ci/tell/
     baseline/flips/context），所以对照台那一页不用为它长一个分支；多出来的是判分专有的
     那几个数（`near` / `over` / `under` / `matrix` / `fallback` / `contested`）。
+
+    `cancel_key` 非空 = 可被取消（合作式，见 `core/inflight`）。**判分型最需要它**：
+    金标集是 30–50 条，每条一次判分调用，一趟下来很久。
     """
     import hashlib
 
-    from app.core import prompt_eval, providers, retell
+    from app.core import inflight, prompt_eval, providers, retell
 
     entry = prompt_eval._entry(KEY)  # noqa: SLF001 - 同一条登记表读取
     cases = load_cases()
@@ -260,7 +264,12 @@ async def check(
 
     started = time.time()
     rows: list[dict] = []
+    stopped = False
     for case in cases:
+        # 每条用例之间查一次（一次判分调用 ≈ 几秒到几十秒，所以粒度就是「当前这条跑完」）
+        if cancel_key and inflight.cancel_requested(cancel_key):
+            stopped = True
+            break
         expect = int(case["grade"])
         t0 = time.time()
         err = ""
@@ -317,6 +326,37 @@ async def check(
                 "error": err,
             }
         )
+
+    if stopped:
+        # 半趟不落记录（理由同 `prompt_eval.check`：跑了一半的「档位一致率」会被读成
+        # 「这一版变差了」）。形状与 `prompt_eval.check` 的 stopped 分支对齐，
+        # 对照台那一页照旧不用长分支。
+        done = len(rows)
+        return {
+            "key": KEY,
+            "module": entry.module,
+            "purpose": entry.purpose,
+            "kind": entry.kind,
+            "prompt_sha": entry.sha,
+            "variant_sha": variant_sha,
+            "variant_label": variant_label.strip()[:60],
+            "model_id": model_id,
+            "cases": rows,
+            "total": done,
+            "planned": len(cases),
+            "passed": sum(1 for r in rows if r.get("passed")),
+            "rate": None,
+            "ci": None,
+            "tell": False,
+            "assertions": {"total": done, "failed": sum(1 for r in rows if not r.get("passed"))},
+            "seconds": round(time.time() - started, 1),
+            "calls": done,
+            "baseline": None,
+            "flips": [],
+            "grading": True,
+            "stopped": True,
+            "context": "空上下文（无召回 / 无材料 / 无画像）——上下文会显著改变行为",
+        }
 
     out = summarize(rows)
     seconds = round(time.time() - started, 1)

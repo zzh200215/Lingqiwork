@@ -103,6 +103,27 @@ def test_a_non_markdown_path_is_not_a_path():
     assert tq.invented_path_in_reply("看 src/app/core/llm.py 里的实现。", []) == ""
 
 
+def test_a_material_path_in_the_next_sentence_is_not_a_receipt():
+    """**同一句才算**（2026-09-20 加，A0 第一轮基线抓到的误报）。
+
+    这是实测原文：产出真的存了（回执在 `deliver/`），模型只是顺口提了一句材料来源，
+    而「往前 14 字」的窗口把**上一句**的「已存入产出」捞了进来 —— 于是报了一个
+    根本不存在的「编造路径」，界面上还会给用户一句不实的提示。
+    一句话里的落盘字眼，管不到下一句的主语。
+    """
+    reply = "已存入产出。周报基于 notes/本周进展.md 的四条记录整理，按结论先行组织。"
+    assert tq.invented_path_in_reply(reply, [{"path": "deliver/2026-09-20-周报.md"}]) == ""
+    assert tq.findings(reply, [{"path": "deliver/2026-09-20-周报.md"}]) == []
+
+
+def test_a_receipt_split_across_a_newline_is_still_caught():
+    """**换行不算断句**：模型常把回执写成两行，那仍然是同一个回执，不能因此漏掉。"""
+    arts = [{"path": "deliver/周报.md"}]
+    assert tq.invented_path_in_reply("已存入产出：\nrecap/2026-09-14-精简版.md", arts) == (
+        "recap/2026-09-14-精简版.md"
+    )
+
+
 # ---------- 该不该补跑（三个「不」） ----------
 
 
@@ -125,6 +146,95 @@ def test_a_long_body_with_a_save_claim_is_retried_even_without_an_explicit_ask()
     bad = tq.findings("已存入产出（约 100 字）。\n" + LONG, [])
     assert {f["code"] for f in bad} == {"claims_a_save_without_one", "long_body_without_a_receipt"}
     assert tq.should_retry(bad, "帮我写一份本周周报，300 字左右。") is True
+
+
+# ---------- 口头授权：这一句是不是在让我「忘掉」（§4.1 ①，2026-09-22） ----------
+
+
+@pytest.mark.parametrize(
+    "ask",
+    [
+        "把那条关于 Python 的记忆删掉",
+        "删除记忆 #3",
+        "忘掉我上次说的那个偏好",
+        "别再记着我不吃香菜",
+        "memory 里那条清掉吧",
+        "把这条记忆删了",
+        "有没有多余的记忆？帮我忘掉它",  # 「忘」这个动作天然只指向记忆
+    ],
+)
+def test_an_explicit_forget_authorises_the_delete_tool(ask):
+    assert tq.asked_to_forget(ask) is True
+
+
+@pytest.mark.parametrize(
+    "ask",
+    [
+        "我忘了上次说的是什么",  # 「忘了」是陈述，不是指令（所以词表里没有裸的「忘了」）
+        "别忘了提醒我下午开会",  # 同上，而且方向相反
+        "删掉这个草稿",  # 没有「记忆」这个对象 → 不放行（否则可能顺手删掉一条提到它的记忆）
+        "把这条笔记删掉",  # 笔记不是记忆，而且根本没有删笔记的工具
+        "帮我记住我不吃香菜",  # 方向相反
+        "清理一下这个目录",  # 「清」不在词表里，且没有对象
+        "记忆功能是怎么做的？",  # 只是提到「记忆」
+        "",
+        "   ",
+        None,
+    ],
+)
+def test_everything_else_does_not(ask):
+    """**认不出就是不放行**：模型少一只手，好过它替你删掉一条你还要的记忆。"""
+    assert tq.asked_to_forget(ask) is False
+
+
+# ---------- 嘴上删了（§4.1 ① 的另一半，2026-09-23） ----------
+
+
+def test_a_claim_without_the_call_is_flagged():
+    """**这一条就是那个洞**：没授权时工具不在它手里，它仍可能回一句「已经帮你删掉了」。"""
+    assert tq.claims_a_delete_without_one("已经帮你删掉了。", [], "忘掉那条关于早睡的偏好")
+    assert tq.claims_a_delete_without_one("已删除记忆 #3。", ["memory_list"], "把那条记忆删了")
+    assert tq.claims_a_delete_without_one(
+        "那条偏好我忘掉了，之后不会再提。", [], "别再记着我不吃香菜"
+    )
+
+
+def test_the_call_makes_the_claim_true():
+    """真调了就不算谎报——哪怕它同时说了一堆客气话。"""
+    assert not tq.claims_a_delete_without_one(
+        "已经帮你删掉了。", ["memory_delete"], "忘掉那条关于早睡的偏好"
+    )
+
+
+def test_no_ask_no_judgement():
+    """**只在你这一轮明说要删/忘的时候判**：同一个「删掉了」在别处完全可能是实话
+    （「我把第三段冗余删掉了」说的是它正在写的那篇稿子，不是你的记忆）。"""
+    assert not tq.claims_a_delete_without_one("那段冗余删掉了。", [], "把这份周报压缩到 300 字")
+    assert not tq.claims_a_delete_without_one("已经帮你删掉了。", [], "")
+
+
+def test_hedging_and_refusals_are_not_claims():
+    """征询 / 否定 / 做不到都不是"声称做完了"——把它们算进去，判据就会去怪说实话的回合。"""
+    for reply in (
+        "我还没删除任何记忆，要我删掉吗？",
+        "这条记忆我删不了——工具不在我手里。",
+        "要不要我帮你删掉那条偏好？",
+        "无法删除：这一轮没有给我 memory_delete 工具。",
+    ):
+        assert not tq.claims_a_delete_without_one(reply, [], "忘掉那条关于早睡的偏好"), reply
+
+
+def test_without_the_tool_ledger_it_does_not_judge():
+    """读不到工具账就别说人家撒谎（`None` 与「空表」是两件事）。"""
+    assert not tq.claims_a_delete_without_one("已经帮你删掉了。", None, "忘掉那条偏好")
+
+
+def test_findings_wires_it_through():
+    """**判据只有一份**：`findings()` 是线上与 A0 都走的那条路，那条 code 得从这里出来。"""
+    bad = tq.findings("已经帮你删掉了。", [], tool_names=[], ask="忘掉那条关于早睡的偏好")
+    assert [f["code"] for f in bad] == ["claims_a_delete_without_one"]
+    # 老调用方（不传 tool_names / ask）行为一个字不变：那一条不判
+    assert tq.findings("已经帮你删掉了。", []) == []
 
 
 def test_a_plain_long_explanation_without_a_claim_is_not_retried():

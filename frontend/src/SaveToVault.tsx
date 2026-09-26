@@ -1,4 +1,4 @@
-/** 「存进产出」——把一条已经在手上的回答归档进 vault 的产出区。
+﻿/** 「存进产出」——把一条已经在手上的回答归档进 vault 的产出区。
  *
  *  为什么需要这条人工出口：`save_artifact` 是**靠模型自觉**调的，而模型并不总调。
  *  实测（sensenova-6.8-flash-lite 自然说法下两批合计 1/18；deepseek-v4-pro 0/3）——
@@ -78,12 +78,12 @@ export default function SaveToVault({
               key={k.kind}
               disabled={busy}
               onClick={() => void pick(k.kind)}
-              className="rounded-full border border-teal-300 px-2 py-0.5 text-[11px] text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-40 dark:border-teal-600 dark:text-teal-300 dark:hover:bg-teal-500/10"
+              className="rounded-full border border-teal-300 px-2 py-0.5 text-xs text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-40 dark:border-teal-600 dark:text-teal-300 dark:hover:bg-teal-500/10"
             >
               {k.label}
             </button>
           ))}
-          {err ? <span className="text-[11px] text-red-500">{err}</span> : null}
+          {err ? <span className="text-xs text-red-500">{err}</span> : null}
         </>
       ) : null}
     </span>

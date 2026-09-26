@@ -29,6 +29,9 @@ vi.mock('./api', () => ({
     deliverSave: vi.fn(),
     listTasks: vi.fn(),
     listTaskRuns: vi.fn(),
+    // 引擎档那块「最近几次运行」走的批量接口（P2：8 次请求合成 1 次）。
+    // 默认给空对象：没跑过的任务不在里面，界面就不摆那一块。
+    recentTaskRuns: vi.fn().mockResolvedValue({}),
     runTask: vi.fn(),
     approveRun: vi.fn(),
     rejectRun: vi.fn(),
@@ -46,6 +49,7 @@ vi.mock('./api', () => ({
     healthJobs: vi.fn().mockResolvedValue({ jobs: [], keep_runs: 20 }),
     // 2026-09-19 引擎档顶部那排计数卡会读 30 天成功率（`/api/dashboard` 的
     // `task_stats`）——给 null，卡片摆「—」，不影响原有断言。
+    // 2026-09-25（P2）：工作流清单每行也读它（`by_task`），所以下面几条用例会自己给一份。
     dashboard: vi.fn().mockResolvedValue({ task_stats: null }),
   },
 }))
@@ -62,8 +66,12 @@ vi.mock('./ThreadsPage', () => ({
 vi.mock('./PromptLab', () => ({
   default: () => <div data-testid="lab-stub">实验室</div>,
 }))
+// 「提示词」整页是 PromptLibrary（自己的测试文件钉它的行为），同上
+vi.mock('./PromptLibrary', () => ({
+  default: () => <div data-testid="prompt-stub">提示词</div>,
+}))
 import { api } from './api'
-import { streamDeliver } from './stream'
+import { WORK_TAB_ALIAS, type WorkTab } from './routes'
 
 const OUTPUTS: WorkOutput[] = [
   {
@@ -86,8 +94,8 @@ const OUTPUTS: WorkOutput[] = [
 
 const CATALOGUE: DeliverCatalogue = {
   genres: [
-    { id: 'weekly', label: '周报' },
-    { id: 'email', label: '邮件短稿' },
+    { id: 'weekly', label: '周报', long: true, custom: false },
+    { id: 'email', label: '邮件短稿', long: false, custom: false },
   ],
   audiences: [
     { id: 'self', label: '自己' },
@@ -172,7 +180,13 @@ const GATED = task(3, '人工审', {
   last_status: 'ok',
 })
 
-function renderPage(opts: { tab?: 'engine' | 'follow' | 'lab' } = {}) {
+/** `?tab=` 取**新域名或旧 key 都行**：这一页的调用点大多还用旧 key（`engine`/`lab`…），
+ *  它们**正好在端到端地验证别名层**——「旧链接能打开新页面」这件事，
+ *  光靠 `routes.test.ts` 钉那几个纯函数是不够的。
+ *
+ *  类型**从 `routes` 取**，不手写 union：2026-09-25 那次改名漏了这个手写列表，
+ *  于是新增的 `workflow` 在测试里编译不过——而它本该跟着 `WorkTab` 自动生效。 */
+function renderPage(opts: { tab?: WorkTab | keyof typeof WORK_TAB_ALIAS } = {}) {
   return render(
     <MemoryRouter initialEntries={[opts.tab ? `/work?tab=${opts.tab}` : '/work']}>
       <WorkPage />
@@ -218,6 +232,90 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
+describe('WorkPage · 域级取数（P2）', () => {
+  it('工作流拉不到要说出来——收进 `workData` 之前它是 `.catch(() => {})`', async () => {
+    // 原来是静默吞：拉不到就摆一个空列表，看起来像「你一条工作流都没建」。
+    // 收进域 hook 之后纪律统一了——这一条钉住它别再退回去。
+    vi.mocked(api.listTasks).mockRejectedValue(new Error('500: {"detail":"库锁着"}'))
+    renderPage({ tab: 'engine' })
+
+    const bar = await screen.findByText(/工作流拉不出来/)
+    expect(bar.textContent).toContain('库锁着')
+  })
+
+  it('会议拉不到也说出来', async () => {
+    vi.mocked(api.workMeetings).mockRejectedValue(new Error('500: boom'))
+    renderPage({ tab: 'engine' })
+    expect(await screen.findByText(/会议拉不出来/)).toBeTruthy()
+  })
+})
+
+describe('WorkPage · 最近几次运行（P2）', () => {
+  it('走**一次**批量请求，不是每条任务各来一次', async () => {
+    // 这一条防的是**退化**：批量接口的价值全在「一次」上，
+    // 改回逐条 `listTaskRuns` 的话功能一模一样、测试全绿，只有请求数悄悄变回 8。
+    renderPage({ tab: 'engine' })
+    await waitFor(() => expect(api.recentTaskRuns).toHaveBeenCalled())
+    expect(api.listTaskRuns).not.toHaveBeenCalled()
+  })
+
+  it('只问前 8 条任务——那块地方就摆得下 8 条', async () => {
+    renderPage({ tab: 'engine' })
+    await waitFor(() => expect(api.recentTaskRuns).toHaveBeenCalled())
+    const ids = vi.mocked(api.recentTaskRuns).mock.calls[0][0]
+    expect(ids.length).toBeLessThanOrEqual(8)
+  })
+})
+
+describe('WorkPage · 失败不再静默（P0）', () => {
+  it('重跑失败要说出来——原来是空 catch，点了什么都没发生', async () => {
+    vi.mocked(api.runTask).mockRejectedValue(new Error('503: {"detail":"后端没起来"}'))
+    renderPage({ tab: 'engine' })
+    // 「重跑」在每条工作流上各有一颗，取第一颗就行——这里验的是失败会不会被吞
+    fireEvent.click((await screen.findAllByText('重跑'))[0])
+
+    const bar = await screen.findByText(/重跑没起来/)
+    expect(bar.textContent).toContain('后端没起来')
+  })
+
+  it('错误条**不按 tab 门控**：在非「产出」档触发的失败也浮现出来', async () => {
+    // 原来渲染那一行被 `tab === 'output' &&` 门控着，于是引擎档里 setErr 写进去
+    // 却永远不显示；切回产出档还会突然弹一条陈旧错误。
+    vi.mocked(api.runTask).mockRejectedValue(new Error('boom'))
+    renderPage({ tab: 'engine' })
+    fireEvent.click((await screen.findAllByText('重跑'))[0])
+    expect(await screen.findByText(/重跑没起来/)).toBeTruthy()
+  })
+
+  it('运行记录拉不到就说「拉不到」，不摆成「还没有运行记录」', async () => {
+    // 这两句长得像，意思正相反：「拉不到」是**不知道**，「还没有」是**知道没有**。
+    // 原来 `catch` 里只 `setRuns([])` 不吭声，于是后端挂了的时候，界面比谁都肯定地说
+    // 「还没有运行记录」——用户据此以为这工作流从没跑过。展开那一栏走的是
+    // `WorkflowRow` 里那颗任务名按钮（既有用例也是点它）。
+    vi.mocked(api.listTaskRuns).mockRejectedValue(new Error('500: {"detail":"读不到运行目录"}'))
+    renderPage({ tab: 'engine' })
+
+    fireEvent.click((await screen.findAllByText('每日抓取'))[0])
+
+    const bar = await screen.findByText(/运行记录拉不出来/)
+    expect(bar.textContent).toContain('读不到运行目录')
+    // 要害：它**没有**被讲成「没有运行记录」——「拉不到」是不知道，「还没有」是知道没有
+    expect(screen.queryByText('还没有运行记录。')).toBeNull()
+  })
+})
+
+describe('WorkPage · 可达性（P0）', () => {
+  it('「改写成」和「挂到…」**常显**——原来是 hidden + group-hover:block，键盘和触屏都够不着', async () => {
+    renderPage()
+    await screen.findByText('asyncio 事件循环')
+
+    const rewrite = screen.getAllByText('改写成')[0]
+    // `display:none` 的元素不在 Tab 序列里，所以「有没有被 hidden 掉」正是要害
+    expect(rewrite.className).not.toContain('hidden')
+    expect(rewrite.className).toContain('opacity-60')
+  })
+})
+
 describe('WorkPage · 产出', () => {
   it('把引擎的产出列出来，并给出每种的数量', async () => {
     renderPage()
@@ -227,19 +325,20 @@ describe('WorkPage · 产出', () => {
     expect(screen.getByText(/研究 1/)).toBeTruthy()
   })
 
-  it('按种类筛掉别的', async () => {
+  it('按分组筛掉别的——筛选是**分组**（研究/成文/工作流），不是每一种 kind 一个胶囊', async () => {
     renderPage()
     await screen.findByText('asyncio 事件循环')
 
-    fireEvent.click(screen.getByText(/复盘 1/))
+    // 「成文」这一组管着交付/产出/方案/复盘/对质；这份夹具里落进去的是复盘那份
+    fireEvent.click(screen.getByText(/成文 1/))
     expect(screen.queryByText('asyncio 事件循环')).toBeNull()
     expect(screen.getByText('9 月 11 日')).toBeTruthy()
   })
 
-  it('一个产出都没有时给一句实话，而不是空白', async () => {
+  it('一份报告都没有时给一句实话并给去处，而不是空白', async () => {
     vi.mocked(api.workOutputs).mockResolvedValue({ outputs: [] })
     renderPage()
-    expect(await screen.findByText('还没有产出。')).toBeTruthy()
+    expect(await screen.findByText('还没有报告')).toBeTruthy()
   })
 
   it('改写成：拿这件产出当钉住材料，开交付流换体裁重写（J4）', async () => {
@@ -276,6 +375,21 @@ describe('WorkPage · 工作流', () => {
     expect(screen.getByText('接地 4/5').getAttribute('title')).toContain('材料里找到依据')
   })
 
+  it('运行记录带这一趟的**耗时**（§8.3）；算不出来时那一格不摆，不编「0 秒」', async () => {
+    // 夹具里 08:00:00 → 08:00:20
+    renderPage({ tab: 'engine' })
+    fireEvent.click((await screen.findAllByText('每日抓取'))[0])
+    expect(await screen.findByText('20 秒')).toBeTruthy()
+
+    // 还没结束的那一趟（`finished_at` 为空）不摆耗时——摆「0 秒」读起来像瞬间跑完
+    vi.mocked(api.listTaskRuns).mockResolvedValue([{ ...RUN, finished_at: null }])
+    cleanup()
+    renderPage({ tab: 'engine' })
+    fireEvent.click((await screen.findAllByText('每日抓取'))[0])
+    await screen.findByText('接地 4/5')
+    expect(screen.queryByText(/秒$/)).toBeNull()
+  })
+
   it('运行记录里看得见「本次注入」——吃了哪份工序是匹配出来的，不是人指的（S1）', async () => {
     vi.mocked(api.listTaskRuns).mockResolvedValue([
       {
@@ -301,6 +415,44 @@ describe('WorkPage · 工作流', () => {
     fireEvent.click((await screen.findAllByText('每日抓取'))[0])
     await screen.findByText('接地 4/5')
     expect(screen.queryByText(/^注入 /)).toBeNull()
+  })
+
+  it('步骤条（§8.3）：运行记录上点「步骤 N」就地摊开每一步，再点收起', async () => {
+    vi.mocked(api.listTaskRuns).mockResolvedValue([
+      {
+        ...RUN,
+        log: [
+          { step: '取材', ok: true, ms: 120, note: '3 条材料' },
+          { step: '成文', ok: true, ms: 2400 },
+          { step: '落盘', ok: true, ms: 5, ref: 'research/2026-09-25-x.md' },
+        ],
+      },
+    ])
+    renderPage({ tab: 'engine' })
+    fireEvent.click((await screen.findAllByText('每日抓取'))[0])
+    await screen.findByText('接地 4/5')
+
+    // 默认收着（`skill_inject` 不算一步，所以这里正好 3 步）
+    expect(screen.queryByText('取材')).toBeNull()
+    fireEvent.click(screen.getByText('步骤 3'))
+
+    expect(await screen.findByText('取材')).toBeTruthy()
+    expect(screen.getByText('120 毫秒')).toBeTruthy()
+    expect(screen.getByText('2.4 秒')).toBeTruthy()
+    expect(screen.getByText('3 条材料')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('收起步骤'))
+    expect(screen.queryByText('取材')).toBeNull()
+  })
+
+  it('一次没留下步骤：按钮上写「步骤 0」，摊开也是一句实话', async () => {
+    vi.mocked(api.listTaskRuns).mockResolvedValue([RUN]) // log: []
+    renderPage({ tab: 'engine' })
+    fireEvent.click((await screen.findAllByText('每日抓取'))[0])
+    await screen.findByText('接地 4/5')
+
+    fireEvent.click(screen.getByText('步骤 0'))
+    expect(await screen.findByText(/这次没留下步骤/)).toBeTruthy()
   })
 
   it('运行记录上「读成技能」：落了草稿就把「按哪几次运行判断的」一起说清（S2）', async () => {
@@ -358,7 +510,24 @@ describe('WorkPage · 工作流', () => {
     vi.mocked(api.runTask).mockResolvedValue({ status: 'ok' } as TaskRunResult)
     renderPage({ tab: 'engine' })
     fireEvent.click((await screen.findAllByText('重跑'))[0])
+    // **只传 id**：不改参数的重跑与从前逐字一致
     await waitFor(() => expect(api.runTask).toHaveBeenCalledWith(1))
+  })
+
+  it('「改参数」重跑：把这次的题目带上去，**不改任务模板**（§8.3 第 5 条）', async () => {
+    // 想换个说法再跑一次，原来只能去设置里改任务本身——那会动到以后每一次运行。
+    vi.mocked(api.runTask).mockResolvedValue({ status: 'ok' } as TaskRunResult)
+    renderPage({ tab: 'workflow' })
+    await screen.findByText('每日抓取')
+
+    fireEvent.click(screen.getAllByText('改参数')[0])
+    const input = (await screen.findByPlaceholderText('这次跑什么？（只覆盖这一次）')) as HTMLInputElement
+    // 预填任务自己的题目，改一改就行
+    expect(input.value).toBe('跑 每日抓取')
+    fireEvent.change(input, { target: { value: '只抓 HN 头版' } })
+    fireEvent.click(screen.getByText('按这个跑'))
+
+    await waitFor(() => expect(api.runTask).toHaveBeenCalledWith(1, '只抓 HN 头版'))
   })
 
   it('没有工作流时指路设置页', async () => {
@@ -372,8 +541,9 @@ describe('WorkPage · 工作流', () => {
     vi.mocked(api.approveRun).mockResolvedValue({ ok: true, approved: true, next_task_id: 2 })
     renderPage({ tab: 'engine' })
 
-    expect(await screen.findByText('等你点头')).toBeTruthy()
-    fireEvent.click(screen.getByText('通过'))
+    // 置顶横幅与清单行都会有这一颗，所以判据用徽章本身；点哪一颗都调同一个 handler
+    expect((await screen.findAllByText('等你放行')).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getAllByText('通过')[0])
     await waitFor(() => expect(api.approveRun).toHaveBeenCalledWith(9))
   })
 
@@ -382,8 +552,128 @@ describe('WorkPage · 工作流', () => {
     vi.mocked(api.rejectRun).mockResolvedValue({ ok: true, approved: false, next_task_id: null })
     renderPage({ tab: 'engine' })
 
-    fireEvent.click(await screen.findByText('驳回'))
+    fireEvent.click((await screen.findAllByText('驳回'))[0])
     await waitFor(() => expect(api.rejectRun).toHaveBeenCalledWith(9))
+  })
+})
+
+describe('WorkPage · 工作流页（P2 · §8.3）', () => {
+  it('等你放行**置顶成一条横幅**，就地通过 / 驳回', async () => {
+    // 「停在卡点上」是此刻唯一非做不可的事，摆在清单顶上就地放行，
+    // 省掉「先去清单里找到那一行」。没有待放行时整块不出现（下面那条钉它）。
+    vi.mocked(api.listTasks).mockResolvedValue([...TASKS, GATED])
+    vi.mocked(api.approveRun).mockResolvedValue({ ok: true, approved: true, next_task_id: 2 })
+    const { container } = renderPage({ tab: 'workflow' })
+
+    await screen.findByText('等你放行')
+    const banner = container.querySelector('[data-waiting-banner]') as HTMLElement
+    expect(banner).toBeTruthy()
+    expect(banner.textContent).toContain('1 步等你放行')
+    expect(banner.textContent).toContain('人工审')
+
+    // 就地放行走的是同一个 handler
+    fireEvent.click(banner.querySelectorAll('button')[0])
+    await waitFor(() => expect(api.approveRun).toHaveBeenCalledWith(9))
+  })
+
+  it('没有待放行时，那条横幅**一个字都不占**', async () => {
+    renderPage({ tab: 'workflow' })
+    await screen.findByText('每日抓取')
+    expect(document.querySelector('[data-waiting-banner]')).toBeNull()
+  })
+
+  it('待放行的行**排到清单最前**', async () => {
+    // 夹具里 TASKS 是「每日抓取 / 总结成稿」，GATED「人工审」在最后——
+    // 待放行的话它必须冒到第一位，而不是让人翻到清单底部去找。
+    vi.mocked(api.listTasks).mockResolvedValue([...TASKS, GATED])
+    const { container } = renderPage({ tab: 'workflow' })
+
+    // 名字**出现两次**：置顶横幅一次、清单行一次（这正是本轮的设计）。
+    // 名字后面还跟着「卡点」两个字，所以用正则而不是精确匹配。
+    await screen.findAllByText(/人工审/)
+    const rows = [...container.querySelectorAll('li[id^="task-"]')]
+    expect(rows[0].getAttribute('id')).toBe('task-3') // GATED 的 id
+  })
+
+  it('行内写「上次跑于何时、跑了多久」——耗时只活在运行记录上（§8.3 每行）', async () => {
+    // 方案原话是「上次运行**+耗时**」。任务的 `last_run` 只有开始时刻，
+    // 耗时得从那次运行上拿（批量只读接口，`useTaskCenter` 拉的）。
+    vi.mocked(api.recentTaskRuns).mockResolvedValue({ '1': RUN })
+    renderPage({ tab: 'workflow' })
+
+    // 「每日抓取」现在会出现两处（清单行 + 折叠区里的「最近几次运行」），所以用 findAll
+    await screen.findAllByText('每日抓取')
+    // RUN 是 08:00:00 → 08:00:20
+    expect(screen.getByText(/上次 09-12 08:00（20 秒）/)).toBeTruthy()
+  })
+
+  it('读不到那次运行就**不摆耗时**——不编一个「0 秒」出来', async () => {
+    vi.mocked(api.recentTaskRuns).mockRejectedValue(new Error('500: 读不到'))
+    renderPage({ tab: 'workflow' })
+
+    await screen.findAllByText('每日抓取')
+    expect(screen.getByText(/上次 09-12 08:00/)).toBeTruthy()
+    expect(screen.queryByText(/（\d+ 秒）/)).toBeNull()
+  })
+
+  it('三块统计砖在**页头**，不在折叠区里（§8.3：EnginePulse 统计砖并入页头 stats）', async () => {    // 埋在折叠区里等于「每次都要先展开才看得见这台机器的状态」——而它们本来就是
+    // 那一档最该先看到的东西。取数仍在 EnginePulse 里（唯一同时读那三个接口的地方），
+    // 算好了报给页面；这条钉的是**画在哪**。
+    vi.mocked(api.dashboard).mockResolvedValue({
+      task_stats: { runs_30d: 11, ok: 10, error: 1, rate: 0.91, by_task: {} },
+    } as never)
+    const { container } = renderPage({ tab: 'workflow' })
+
+    const tile = await screen.findByText('30 天成功率')
+    const header = container.querySelector('header') as HTMLElement
+    expect(header, '页头没了？').toBeTruthy()
+    expect(header.contains(tile)).toBe(true)
+    // 三个接口各自异步回来，值晚于砖本身——等它到位（挂载那一瞬不报空值，
+    // 所以这里一定等得到真数，不会停在 — 上）
+    await waitFor(() => expect(header.textContent).toContain('91%'))
+    expect(header.textContent).toContain('11 次运行')
+
+    // 折叠区里一块砖都不该剩（那两块只剩「最近几次运行」与「后台作业」）
+    for (const d of container.querySelectorAll('details')) {
+      expect(d.querySelector('[data-stat-tile]'), '折叠区里还有统计砖').toBeNull()
+    }
+  })
+
+  it('每行摆自己的 30 天成绩；**没跑过的那条不摆**（0% 会把「没跑过」说成「全挂了」）', async () => {    vi.mocked(api.dashboard).mockResolvedValue({
+      task_stats: {
+        runs_30d: 10,
+        ok: 9,
+        error: 1,
+        rate: 0.9,
+        by_task: {
+          // 只给「每日抓取」（id 1）——「总结成稿」（id 2）30 天内没跑过
+          '1': { runs: 8, ok: 6, rate: 0.75 },
+        },
+      },
+    } as never)
+    renderPage({ tab: 'workflow' })
+
+    await screen.findByText('每日抓取')
+    expect(await screen.findByText(/30 天 75%/)).toBeTruthy()
+    // 没成绩的那条不写「30 天」
+    const rows = [...document.querySelectorAll('li[id^="task-"]')]
+    const second = rows.find((r) => r.getAttribute('id') === 'task-2') as HTMLElement
+    expect(second.textContent).not.toContain('30 天')
+  })
+
+  it('次要的两块**默认收起**：首屏只留「等你放行 + 起题目 + 清单」', async () => {
+    // 方案 §8.3：运行视图与后台作业折到底部。用原生 <details>，所以「收着」就是真的
+    // 没展开（不是视觉上藏起来）——键盘也能开。
+    const { container } = renderPage({ tab: 'workflow' })
+    await screen.findByText('每日抓取')
+
+    const folds = [...container.querySelectorAll('details')]
+    expect(folds.length).toBe(2)
+    expect(folds.every((d) => !(d as HTMLDetailsElement).open)).toBe(true)
+    // 查 `<summary>` 本身：纯文本查会撞上 EnginePulse 里那块也叫「后台作业」的统计砖
+    const titles = folds.map((d) => d.querySelector('summary')?.textContent ?? '')
+    expect(titles[0]).toContain('运行视图')
+    expect(titles[1]).toContain('后台作业')
   })
 })
 
@@ -396,7 +686,7 @@ describe('WorkPage · 处理一项工作', () => {
     vi.mocked(api.runTask).mockResolvedValue({ status: 'ok' } as TaskRunResult)
     renderPage({ tab: 'engine' })
 
-    fireEvent.click(await screen.findByText('起一个题目'))
+    fireEvent.click(await screen.findByText('起一个题目', { selector: '[data-open-work]' }))
     fireEvent.change(screen.getByPlaceholderText('一句话题目（例：要不要上向量库选型）'), {
       target: { value: '要不要上向量库' },
     })
@@ -419,14 +709,14 @@ describe('WorkPage · 处理一项工作', () => {
     } as TaskRunResult)
     renderPage({ tab: 'engine' })
 
-    fireEvent.click(await screen.findByText('起一个题目'))
+    fireEvent.click(await screen.findByText('起一个题目', { selector: '[data-open-work]' }))
     fireEvent.change(screen.getByPlaceholderText('一句话题目（例：要不要上向量库选型）'), {
       target: { value: '要不要上向量库' },
     })
     fireEvent.click(screen.getByText('开始'))
 
     const back = await screen.findByRole('link', { name: '要不要上向量库' })
-    expect(back.getAttribute('href')).toBe('/work?tab=follow&thread=3')
+    expect(back.getAttribute('href')).toBe('/work?tab=thread&thread=3')
   })
 
   it('重用了同名的那件事时，也照实说（不是「新建」）', async () => {
@@ -441,7 +731,7 @@ describe('WorkPage · 处理一项工作', () => {
     } as TaskRunResult)
     renderPage({ tab: 'engine' })
 
-    fireEvent.click(await screen.findByText('起一个题目'))
+    fireEvent.click(await screen.findByText('起一个题目', { selector: '[data-open-work]' }))
     fireEvent.change(screen.getByPlaceholderText('一句话题目（例：要不要上向量库选型）'), {
       target: { value: '要不要上向量库' },
     })
@@ -458,7 +748,7 @@ describe('WorkPage · 处理一项工作', () => {
     vi.mocked(api.runTask).mockResolvedValue({ status: 'ok', thread_id: null } as TaskRunResult)
     renderPage({ tab: 'engine' })
 
-    fireEvent.click(await screen.findByText('起一个题目'))
+    fireEvent.click(await screen.findByText('起一个题目', { selector: '[data-open-work]' }))
     fireEvent.change(screen.getByPlaceholderText('一句话题目（例：要不要上向量库选型）'), {
       target: { value: '要不要上向量库' },
     })
@@ -470,7 +760,7 @@ describe('WorkPage · 处理一项工作', () => {
 
   it('空题目不起链，只给一句提醒', async () => {
     renderPage({ tab: 'engine' })
-    fireEvent.click(await screen.findByText('起一个题目'))
+    fireEvent.click(await screen.findByText('起一个题目', { selector: '[data-open-work]' }))
     fireEvent.click(screen.getByText('开始'))
     expect(await screen.findByText('先写一个题目。')).toBeTruthy()
     expect(api.installWorkPreset).not.toHaveBeenCalled()
@@ -535,182 +825,8 @@ describe('WorkPage · 会议', () => {
   })
 })
 
-describe('WorkPage · 交付', () => {
-  it('「写一份交付」摊开体裁与读者，默认选中后端给的那一组', async () => {
-    renderPage()
-    fireEvent.click(await screen.findByText('写一份交付'))
-    expect(screen.getByText('周报')).toBeTruthy()
-    expect(screen.getByText('邮件短稿')).toBeTruthy()
-    expect(screen.getByText('领导')).toBeTruthy()
-  })
-
-  it('预览里看得见「本次注入」，点 👍 时把注入清单一起带上（S1）', async () => {
-    // 手动跑引擎**没有运行记录**，所以「吃到了什么」只能靠这一帧事件与这次反馈带上去
-    vi.mocked(streamDeliver).mockImplementation(async (_t, _g, _a, onStage) => {
-      onStage('skills', { skills: ['给领导写汇报要结论先行'], picked: [] })
-      onStage('writing', {})
-      return {
-        ok: true,
-        report: {
-          title: '第 37 周周报',
-          sections: [{ heading: '结论', body: '先说结论 [1]' }],
-          used: [1],
-          sources: [{ n: 1, kind: 'kb', title: 'A', ref: 'notes/a.md' }],
-          model_id: 'm',
-          prompt_sha: 'abc123',
-          genre: 'weekly',
-          audience: 'leader',
-        },
-      }
-    })
-    vi.mocked(api.qualityFeedback).mockResolvedValue({ id: 1, kind: 'deliver', verdict: 'good' })
-    renderPage()
-    fireEvent.click(await screen.findByText('写一份交付'))
-    fireEvent.change(screen.getByPlaceholderText('写什么？（例：这周的 RAG 调研）'), {
-      target: { value: '这周的 RAG' },
-    })
-    fireEvent.click(screen.getByText('生成'))
-
-    const line = await screen.findByText(/本次注入：给领导写汇报要结论先行/)
-    expect(line.textContent).toContain('按话题匹配出来的工序')
-
-    fireEvent.click(screen.getByTitle('好'))
-    await waitFor(() =>
-      expect(api.qualityFeedback).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: 'deliver', injected: '["给领导写汇报要结论先行"]' })
-      )
-    )
-  })
-
-  it('没命中就不摆那一行，反馈也不带 injected（不知道 ≠ 没注入）（S1）', async () => {
-    vi.mocked(streamDeliver).mockImplementation(async (_t, _g, _a, onStage) => {
-      onStage('writing', {}) // 没有 skills 这一帧
-      return {
-        ok: true,
-        report: {
-          title: '第 37 周周报',
-          sections: [{ heading: '结论', body: '先说结论' }],
-          used: [],
-          sources: [],
-          model_id: 'm',
-          prompt_sha: 'abc123',
-          genre: 'weekly',
-          audience: 'leader',
-        },
-      }
-    })
-    vi.mocked(api.qualityFeedback).mockResolvedValue({ id: 2, kind: 'deliver', verdict: 'good' })
-    renderPage()
-    fireEvent.click(await screen.findByText('写一份交付'))
-    fireEvent.change(screen.getByPlaceholderText('写什么？（例：这周的 RAG 调研）'), {
-      target: { value: '这周的 RAG' },
-    })
-    fireEvent.click(screen.getByText('生成'))
-    await screen.findByText('第 37 周周报')
-
-    expect(screen.queryByText(/本次注入/)).toBeNull()
-    fireEvent.click(screen.getByTitle('好'))
-    await waitFor(() => expect(api.qualityFeedback).toHaveBeenCalled())
-    // 这一页说得出「确实没有」——所以带 `[]`，而不是不带（不带 = 不知道）
-    expect(vi.mocked(api.qualityFeedback).mock.calls[0][0]).toMatchObject({ injected: '[]' })
-  })
-
-  it('生成：按选中的体裁×读者出稿，草稿渲染出来后可存进 vault', async () => {
-    vi.mocked(streamDeliver).mockResolvedValue({
-      ok: true,
-      report: {
-        title: '第 37 周周报',
-        sections: [{ heading: '本周进展', body: '做了 A [1]' }],
-        used: [1],
-        sources: [{ n: 1, kind: 'kb', title: 'A', ref: 'notes/a.md' }],
-        model_id: 'm',
-        prompt_sha: 'abc123',
-        genre: 'weekly',
-        audience: 'leader',
-      },
-    })
-    renderPage()
-    fireEvent.click(await screen.findByText('写一份交付'))
-    fireEvent.click(screen.getByText('领导'))
-    fireEvent.change(screen.getByPlaceholderText('写什么？（例：这周的 RAG 调研）'), {
-      target: { value: '这周的 RAG' },
-    })
-    fireEvent.click(screen.getByText('生成'))
-
-    expect(await screen.findByText('第 37 周周报')).toBeTruthy()
-    expect(screen.getByText('存进 vault')).toBeTruthy()
-    // 正文里的引用点得回原材料（§4-8）
-    expect(screen.getByRole('link', { name: '[1]' }).getAttribute('href')).toBe(
-      '/notes?path=notes%2Fa.md'
-    )
-    expect(streamDeliver).toHaveBeenCalledWith(
-      '这周的 RAG',
-      'weekly',
-      'leader',
-      expect.any(Function),
-      expect.anything(),
-      []
-    )
-  })
-
-  it('钉一条材料进这次产出：搜到、钉住，生成时带上它（§4-14）', async () => {
-    vi.mocked(api.searchMaterial).mockResolvedValue({
-      query: '事件循环',
-      hits: [
-        {
-          source: 'notes/loop.md',
-          spec: 'notes/loop.md',
-          title: '事件循环笔记',
-          chunk: 0,
-          score: 0.8,
-          text: '正文',
-          cards: 0,
-        },
-      ],
-    })
-    vi.mocked(streamDeliver).mockResolvedValue({
-      ok: true,
-      report: {
-        title: '第 37 周周报',
-        sections: [{ heading: '本周进展', body: '做了 A [1]' }],
-        used: [1],
-        sources: [{ n: 1, kind: 'kb', title: 'A', ref: 'notes/a.md' }],
-        model_id: 'm',
-        prompt_sha: 'abc123',
-        genre: 'weekly',
-        audience: 'self',
-      },
-    })
-    renderPage()
-    fireEvent.click(await screen.findByText('写一份交付'))
-    fireEvent.click(screen.getByText('＋ 钉一条材料'))
-    fireEvent.change(screen.getByPlaceholderText('在你自己的材料里搜一条…'), {
-      target: { value: '事件循环' },
-    })
-    fireEvent.click(screen.getByText('搜'))
-    fireEvent.click(await screen.findByText('事件循环笔记'))
-
-    // 钉住的材料显示成 chip —— 生成时随请求一起走
-    expect(screen.getByText('事件循环笔记')).toBeTruthy()
-    fireEvent.change(screen.getByPlaceholderText('写什么？（例：这周的 RAG 调研）'), {
-      target: { value: '这周的 RAG' },
-    })
-    fireEvent.click(screen.getByText('生成'))
-    await waitFor(() =>
-      expect(streamDeliver).toHaveBeenCalledWith(
-        '这周的 RAG',
-        'weekly',
-        'self',
-        expect.any(Function),
-        expect.anything(),
-        ['notes/loop.md']
-      )
-    )
-  })
-})
-
 describe('WorkPage · 标签', () => {
-  it('默认停在「产出」：清单看得见，「引擎」的内容不抢屏', async () => {
+  it('默认停在「报告」：清单看得见，「自动化」的内容不抢屏', async () => {
     renderPage()
     expect(await screen.findByText('asyncio 事件循环')).toBeTruthy()
     expect(screen.queryByText('每日抓取')).toBeNull()
@@ -722,10 +838,80 @@ describe('WorkPage · 标签', () => {
     expect(screen.queryByText('asyncio 事件循环')).toBeNull()
   })
 
-  it('「实验室」标签渲染提示词对照台，产出清单退场（Q1 落在工作模块里）', async () => {
+  it('页头那句说明也按档换——不然它一个字都没说到眼前这屏', async () => {
+    renderPage({ tab: 'prompt' })
+    expect(await screen.findByText(/攒 → 试 → 量/)).toBeTruthy()
+    // 「报告」那一档的主题句不该出现在提示词这档
+    expect(screen.queryByText(/写一个交得出去的东西/)).toBeNull()
+  })
+
+  it('页头的主操作按档换：提示词这档不写着「写一份报告」', async () => {
+    // 原来它在每一档都写着「写一份交付」，在提示词那档点下去会跳去产出——
+    // **按钮说的和按钮做的对不上**，比少一个按钮更糟。
+    renderPage({ tab: 'prompt' })
+    expect(await screen.findByText('＋ 新建提示词')).toBeTruthy()
+    expect(screen.queryByText('写一份报告')).toBeNull()
+  })
+
+  it('「评测」不再单独一档：旧 key `lab` 落到提示词页（方案 §一 5→4）', async () => {
+    // 2026-09-25 定稿方案把「评测」并进了「提示词」——攒提示词、拿它对照、量它好不好
+    // 本来就是一件事的三步。旧地址 `?tab=lab` 由别名层接住，落在同一页。
     renderPage({ tab: 'lab' })
+    expect(await screen.findByTestId('prompt-stub')).toBeTruthy()
     expect(await screen.findByTestId('lab-stub')).toBeTruthy()
     expect(screen.queryByText('asyncio 事件循环')).toBeNull()
+  })
+
+  it('提示词页 = 库 + 对照台 + 技能草稿 + 数据形态（五区同页，方案 §8.2）', async () => {
+    renderPage({ tab: 'prompt' })
+    expect(await screen.findByTestId('prompt-stub')).toBeTruthy()
+    // 原先挂在「评测」档下的三块，现在跟着提示词页走
+    expect(await screen.findByTestId('lab-stub')).toBeTruthy()
+    expect(screen.queryByText('asyncio 事件循环')).toBeNull()
+  })
+
+  it('五区有 sticky 锚点导航，且**每个锚点都真有落点**（§8.2）', async () => {
+    // 「锚点指向一个不存在的 id」是最容易犯又最难发现的错：点了没反应，
+    // 而页面上什么都不报。所以这条不只查导航在不在，还查每个 href 有对应元素。
+    //
+    // **「库」与「对打」的落点这一页查不到**：那两块的内容在 `PromptLibrary` 里
+    // （对打要用它手上那份提示词清单），这一页把那个组件换成了 stub。它们的落点由
+    // `PromptLibrary.test.tsx` 查——两边各查自己拥有的那部分，合起来是完整的五个。
+    const { container } = renderPage({ tab: 'prompt' })
+    await screen.findByTestId('prompt-stub')
+
+    const nav = container.querySelector('[data-prompt-sections]') as HTMLElement
+    expect(nav).toBeTruthy()
+    const links = [...nav.querySelectorAll('a')]
+    expect(links.map((a) => a.textContent)).toEqual(['库', '对打', '评测', '技能', '数据形态'])
+
+    const mine = ['prompt-lib', 'prompt-eval', 'prompt-skill', 'prompt-form']
+    for (const a of links) {
+      const id = (a.getAttribute('href') ?? '').replace('#', '')
+      if (!mine.includes(id)) continue
+      expect(container.querySelector(`#${id}`), `锚点 #${id} 没有落点`).toBeTruthy()
+    }
+  })
+
+  it('三区各带方案里那句标题与副标题（§8.2 区3/4/5）', async () => {
+    // 那三块是**现成组件原样并入**的：它们自己有内容，但没有「这一区叫什么、干嘛的」。
+    // 副标题照抄方案——它是「看标签名猜中页面内容」那条验收的一部分。
+    //
+    // **判据钉在区里的 h2 上，不钉 `getByText`**：导航胶囊里也有「评测」两个字，
+    // 按文本查会同时命中两个（而那条导航本身由上面那条用例管）。
+    const { container } = renderPage({ tab: 'prompt' })
+    await screen.findByTestId('prompt-stub')
+
+    for (const [id, title, sub] of [
+      ['prompt-eval', '评测', '系统提示词的对照台——改了有没有变好，拿金标题量'],
+      ['prompt-skill', '技能草稿', '把材料读成 SKILL.md 草稿，跑过对照才算数'],
+      ['prompt-form', '数据形态', '金标题集的领域分布'],
+    ]) {
+      const sec = container.querySelector(`#${id}`) as HTMLElement
+      expect(sec, `#${id} 没有落点`).toBeTruthy()
+      expect(sec.querySelector('h2')?.textContent, `#${id} 的标题`).toBe(title)
+      expect(sec.textContent, `#${id} 的副标题`).toContain(sub)
+    }
   })
 
   it('跟进标签里的「事」是无头渲染——页头只有「工作」一个', async () => {
@@ -780,7 +966,10 @@ describe('WorkPage · 读成能力（环一）', () => {
     })
     fireEvent.click(screen.getByText('读一读'))
 
-    await waitFor(() => expect(api.makeCandidate).toHaveBeenCalledWith('notes/paper.md', '', false))
+    // 第 4 个参数是 AbortSignal（「不等了」用）——每次都不同，所以判形状
+    await waitFor(() =>
+      expect(api.makeCandidate).toHaveBeenCalledWith('notes/paper.md', '', false, expect.any(AbortSignal))
+    )
     expect(await screen.findByText('论文评测复现')).toBeTruthy()
     // 「落盘 ≠ 登记」这条必须写在界面上，而不是只在代码注释里
     expect(screen.getByText(/这是\*\*草稿\*\*/)).toBeTruthy()
@@ -834,7 +1023,9 @@ describe('WorkPage · 读成能力（环一）', () => {
 
     const force = await screen.findByText(/覆盖已有的/)
     fireEvent.click(force)
-    await waitFor(() => expect(api.makeCandidate).toHaveBeenLastCalledWith('notes/paper.md', '', true))
+    await waitFor(() =>
+      expect(api.makeCandidate).toHaveBeenLastCalledWith('notes/paper.md', '', true, expect.any(AbortSignal))
+    )
   })
 
   it('没量过的技能如实说「还没量过」，不编分数', async () => {

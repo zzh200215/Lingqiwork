@@ -101,9 +101,9 @@ describe('侧栏 · 分组', () => {
 
 describe('侧栏 · 高亮', () => {
   it('高亮跟着地址走：`?tab=` 决定亮哪一条', () => {
-    renderAt('/work?tab=dispatch')
+    renderAt('/work?tab=workflow')
     const active = document.querySelector('[data-nav-item][data-nav-active="1"]')
-    expect(active?.getAttribute('data-nav-item')).toBe('/work?tab=dispatch')
+    expect(active?.getAttribute('data-nav-item')).toBe('/work?tab=workflow')
     expect(document.querySelector('[data-nav-group][data-nav-active="1"]')?.getAttribute('data-nav-group')).toBe('work')
   })
 
@@ -111,7 +111,7 @@ describe('侧栏 · 高亮', () => {
     renderAt('/work')
     expect(
       document.querySelector('[data-nav-item][data-nav-active="1"]')?.getAttribute('data-nav-item')
-    ).toBe('/work?tab=output')
+    ).toBe('/work?tab=report')
   })
 
   it('资产那一组里，/notes 这种独立页面也亮在它下面', () => {
@@ -155,16 +155,16 @@ describe('侧栏 · 高亮', () => {
 
 describe('顶栏 · 面包屑', () => {
   it('子页写成「模块 / 子页」', () => {
-    renderAt('/work?tab=dispatch')
+    renderAt('/work?tab=workflow')
     expect(crumb('module')?.textContent).toBe('工作')
-    expect(crumb('item')?.textContent).toBe('调度台')
+    expect(crumb('item')?.textContent).toBe('工作流')
   })
 
   it('没写参数时也说得出现在是哪一档（默认档），不写成「工作 / 工作」', () => {
     renderAt('/work')
     expect(crumb('module')?.textContent).toBe('工作')
-    // 默认档是「产出」——面包屑照实写出来，比只写「工作」更有用
-    expect(crumb('item')?.textContent).toBe('产出')
+    // 默认档是「报告」——面包屑照实写出来，比只写「工作」更有用
+    expect(crumb('item')?.textContent).toBe('报告')
   })
 
   it('组名与子项同名时也只留一段（「学 / 学」）', () => {

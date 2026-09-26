@@ -1,0 +1,43 @@
+{
+  "key": "channel",
+  "note": "通道预判（P2）的金标集：**这一句该跳过检索、走图谱、还是走混合检索**。35 条 = 跳过 12 / 图谱 5 / 混合 18。形状照 W3 的 `deliver_or_chat.json`（key/note/cases），但**验收口径与它相反**：那边「漏判比误判烦人」，这边**误跳过是最贵的错**——该检索却跳过了 = 材料缺失、答案变差，而且用户看不见；反过来该跳过却检索了，只是白付几十毫秒。所以本集里专门放了 4 条「看着像寒暄其实要材料」的（h04/h05/h16 与 h02 的短句），它们**一条都不许被判成 skip**。跳过那一档的要求因此更松：漏跳过只记数、不算失败，但误跳过是红线。",
+  "cases": [
+    { "id": "s01", "ask": "在吗", "channel": "skip" },
+    { "id": "s02", "ask": "你好", "channel": "skip" },
+    { "id": "s03", "ask": "早啊", "channel": "skip" },
+    { "id": "s04", "ask": "谢谢你了", "channel": "skip" },
+    { "id": "s05", "ask": "辛苦了", "channel": "skip" },
+    { "id": "s06", "ask": "哈哈这个有点意思", "channel": "skip" },
+    { "id": "s07", "ask": "嗯嗯", "channel": "skip" },
+    { "id": "s08", "ask": "好的好的", "channel": "skip" },
+    { "id": "s09", "ask": "你是谁", "channel": "skip", "note": "问助手本身，不需要材料" },
+    { "id": "s10", "ask": "介绍一下你自己", "channel": "skip" },
+    { "id": "s11", "ask": "我先去吃饭了", "channel": "skip" },
+    { "id": "s12", "ask": "你觉得呢", "channel": "skip" },
+
+    { "id": "k01", "ask": "这两份材料有什么关系", "channel": "kg" },
+    { "id": "k02", "ask": "A 方案和 B 方案之间的关联是什么", "channel": "kg", "note": "关系线索与疑问词同时出现，关系优先" },
+    { "id": "k03", "ask": "把这几条笔记的关系网理一下", "channel": "kg" },
+    { "id": "k04", "ask": "实体之间的关联能画出来吗", "channel": "kg" },
+    { "id": "k05", "ask": "为什么这两次事故有关系", "channel": "kg" },
+
+    { "id": "h01", "ask": "用两句话讲一下数据库索引为什么能让查询变快", "channel": "hybrid" },
+    { "id": "h02", "ask": "RAG 是什么", "channel": "hybrid", "note": "很短，但信息需求明确——不该跳过" },
+    { "id": "h03", "ask": "这段代码为什么会报 KeyError", "channel": "hybrid" },
+    { "id": "h04", "ask": "你好，帮我看看这份材料里怎么说的", "channel": "hybrid", "note": "看着像寒暄，其实要材料：**误跳过红线**" },
+    { "id": "h05", "ask": "早上好，那份周报里的数据对不对", "channel": "hybrid", "note": "看着像寒暄，其实要材料：**误跳过红线**" },
+    { "id": "h06", "ask": "我上周记的那条笔记在哪", "channel": "hybrid" },
+    { "id": "h07", "ask": "向量库和关键词检索各自有什么优缺点", "channel": "hybrid" },
+    { "id": "h08", "ask": "把这个项目的进展总结一下", "channel": "hybrid" },
+    { "id": "h09", "ask": "那篇调研里提了哪些方案", "channel": "hybrid" },
+    { "id": "h10", "ask": "FastAPI 有哪些核心功能特性", "channel": "hybrid" },
+    { "id": "h11", "ask": "帮我翻译一下这句话", "channel": "hybrid" },
+    { "id": "h12", "ask": "找找有没有讲过混合检索的地方", "channel": "hybrid" },
+    { "id": "h13", "ask": "笔记按网状互相引用比按目录分类好在哪", "channel": "hybrid" },
+    { "id": "h14", "ask": "为什么每多给助手一件工具成本就先涨了", "channel": "hybrid" },
+    { "id": "h15", "ask": "把这份材料整理成一份周报存进产出", "channel": "hybrid", "note": "交付型请求，但还是要材料" },
+    { "id": "h16", "ask": "在吗？顺便问一下无幻觉上下文长度是什么概念", "channel": "hybrid", "note": "寒暄与信息需求混在一句：**误跳过红线**" },
+    { "id": "h17", "ask": "我之前是不是问过一个差不多的问题", "channel": "hybrid" },
+    { "id": "h18", "ask": "根据笔记里的说法，这个结论站得住吗", "channel": "hybrid" }
+  ]
+}

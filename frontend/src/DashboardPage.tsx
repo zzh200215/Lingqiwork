@@ -10,6 +10,7 @@ import MetricCard from './MetricCard'
 import { useDeepLink } from './deeplink'
 import {
   api,
+  type AgentEvalBoard,
   type BeliefThread,
   type CalibrationBucket,
   type CardCalibration,
@@ -108,6 +109,8 @@ export default function DashboardPage() {
   // R1 补齐（PLAN5 §2-2 点名的九条之一）：提示词评测——登记的那些提示词里量过几条。
   // 它是**资产指标**（尺子自己准不准），所以与接地分摆在一起。
   const [promptBoard, setPromptBoard] = useState<PromptEvalBoard | null>(null)
+  // A0 任务级基线：读的是「跑分当时」那份报告（`.at` / `tasks_sha` 会写在卡片上）
+  const [agentBoard, setAgentBoard] = useState<AgentEvalBoard | null>(null)
 
   // 会话侧校准（PLAN2 P2-3）：自己标的 vs 让它判的。挂在同一张「校准」卡的下半部分。
   const [sessionCalib, setSessionCalib] = useState<SessionCalibration | null>(null)
@@ -261,6 +264,7 @@ export default function DashboardPage() {
     api.turnSummary().then(setTurnSummary).catch(() => setTurnSummary(null))
     // R1 补齐的第三条（PLAN5 §2-2 点名的九条里最后补上的一格）：同一个规矩
     api.promptEvalBoard().then(setPromptBoard).catch(() => setPromptBoard(null))
+    api.agentEvalBoard().then(setAgentBoard).catch(() => setAgentBoard(null))
     api.tutorCalibration().then(setSessionCalib).catch(() => setSessionCalib(null))
     reloadDecisions()
     refreshJournal()
@@ -341,7 +345,7 @@ export default function DashboardPage() {
   return (
     <>
       <div className="mx-auto max-w-[1600px] px-6 py-6">
-        <section className="relative overflow-hidden rounded-3xl border border-neutral-200 bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 p-6 shadow-sm dark:border-neutral-800 dark:from-violet-950/40 dark:via-neutral-900 dark:to-fuchsia-950/30">
+        <section className="wb-card-hero relative overflow-hidden rounded-lg p-6">
           <div className="flex items-start gap-5">
             <div className="shrink-0">
               <img
@@ -357,7 +361,7 @@ export default function DashboardPage() {
               <div className="flex items-center gap-2 text-xs font-medium text-violet-700 dark:text-violet-300">
                 <span>零柒 · 今日要点</span>
                 {briefing?.cached && (
-                  <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] dark:bg-violet-900/60">缓存</span>
+                  <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-xs dark:bg-violet-900/60">缓存</span>
                 )}
               </div>
               <p className="mt-2 text-lg font-medium leading-relaxed text-neutral-800 dark:text-neutral-100">
@@ -394,14 +398,14 @@ export default function DashboardPage() {
         </section>
 
         {(rc || rcDraft || rcSaved) && (
-          <section className="mt-5 rounded-2xl border border-violet-200/70 bg-white/70 p-5 dark:border-violet-500/20 dark:bg-neutral-900/50">
+          <section className="mt-5 rounded-lg border border-violet-200/70 bg-white/70 p-5 dark:border-violet-500/20 dark:bg-neutral-900/50">
             <div className="mb-3 flex items-center gap-2">
               <span>📋</span>
               <h2 className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                 {(rc ?? rcDraft)?.title || '复盘'}
               </h2>
               {rcSaved && (
-                <span className="ml-auto text-[11px] text-neutral-400">
+                <span className="ml-auto text-xs text-neutral-400">
                   已存到 {rcSaved.filename}（{rcSaved.chunks} 段进索引）
                 </span>
               )}
@@ -514,7 +518,16 @@ export default function DashboardPage() {
           {/* 提示词评测：与接地分同一族（尺子自己准不准），所以并排摆在这一段 */}
           <PromptEvalCard p={promptBoard} />
 
+          {/* 任务级基线（A0）：与上面两张同一族——它量的是「事情交出去办成了没有」，
+              所以也摆在「这台机器的零件还准不准」这一段（A0 进计量局那一笔）。 */}
+          <AgentEvalCard p={agentBoard} />
+
           <TurnSummaryCard t={turnSummary} />
+
+          {/* P3：材料使用率。与回合读数**同一份载荷**（`/api/dashboard/turns`），
+              摆在一起是因为它们读的是同一批回合：上面那张说「哪几类毛病几例」，
+              这张说「注入了多少材料、模型真用了几条」。 */}
+          <SourceUsageCard t={turnSummary} />
         </div>
 
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -528,7 +541,7 @@ export default function DashboardPage() {
                 const h = Math.max(4, (d.count / maxCount) * 100)
                 return (
                   <div key={d.date} className="group flex flex-1 flex-col items-center gap-1.5">
-                    <span className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                    <span className="text-xs text-neutral-500 dark:text-neutral-400">
                       {d.count > 0 ? d.count : ''}
                     </span>
                     <div className="w-full" style={{ height: '100%' }}>
@@ -541,7 +554,7 @@ export default function DashboardPage() {
                       />
                     </div>
                     <span
-                      className={`text-[10px] ${d.isToday ? 'font-semibold text-violet-600 dark:text-violet-300' : 'text-neutral-400'}`}
+                      className={`text-xs ${d.isToday ? 'font-semibold text-violet-600 dark:text-violet-300' : 'text-neutral-400'}`}
                     >
                       {d.label}
                     </span>
@@ -631,10 +644,10 @@ export default function DashboardPage() {
             </div>
             <ul className="mt-4 space-y-4">
               {beliefs.map((t) => (
-                <li key={t.items[0].id} className="rounded-xl border border-neutral-100 p-3 dark:border-neutral-800">
+                <li key={t.items[0].id} className="rounded-md border border-neutral-100 p-3 dark:border-neutral-800">
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">{t.label}</span>
-                    <span className="shrink-0 text-[11px] text-neutral-400">
+                    <span className="shrink-0 text-xs text-neutral-400">
                       {monthOf(t.first_at)} → {monthOf(t.last_at)}
                     </span>
                   </div>
@@ -669,20 +682,20 @@ export default function DashboardPage() {
                   if (e.key === 'Enter') void addDecision()
                 }}
                 placeholder="一条判断，例：先用 Chroma 就够了"
-                className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
               />
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   value={dBasis}
                   onChange={(e) => setDBasis(e.target.value)}
                   placeholder="依据（当时凭什么这么判断）"
-                  className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                  className="min-w-0 flex-1 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
                 />
                 <input
                   value={dTopic}
                   onChange={(e) => setDTopic(e.target.value)}
                   placeholder="领域"
-                  className="w-24 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                  className="w-24 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
                 />
                 <label className="flex items-center gap-1 text-xs text-neutral-500">
                   把握
@@ -700,7 +713,7 @@ export default function DashboardPage() {
                 <button
                   onClick={() => void addDecision()}
                   disabled={!dText.trim() || dBusy}
-                  className="rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:brightness-110 disabled:opacity-40 disabled:shadow-none"
+                  className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
                 >
                   记下
                 </button>
@@ -714,36 +727,36 @@ export default function DashboardPage() {
                 {decisions.entries
                   .filter((e) => !e.outcome)
                   .map((e) => (
-                    <li key={e.id} id={`decision-${e.id}`} className="rounded-xl border border-neutral-100 p-3 dark:border-neutral-800">
+                    <li key={e.id} id={`decision-${e.id}`} className="rounded-md border border-neutral-100 p-3 dark:border-neutral-800">
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="text-sm text-neutral-800 dark:text-neutral-100">{e.text}</span>
-                        <span className="shrink-0 text-[11px] text-neutral-400">
+                        <span className="shrink-0 text-xs text-neutral-400">
                           {dayOf(e.created_at)} · 把握 {e.confidence}%
                         </span>
                       </div>
-                      {e.basis ? <p className="mt-1 text-[11px] text-neutral-500">依据：{e.basis}</p> : null}
+                      {e.basis ? <p className="mt-1 text-xs text-neutral-500">依据：{e.basis}</p> : null}
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         {e.topic ? (
-                          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800">
+                          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
                             {e.topic}
                           </span>
                         ) : null}
                         <button
                           onClick={() => void reviewDecision(e.id, 'hit')}
-                          className="rounded-full border border-emerald-300 px-2 py-0.5 text-[10px] text-emerald-700 transition-colors hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+                          className="rounded-full border border-emerald-300 px-2 py-0.5 text-xs text-emerald-700 transition-colors hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
                         >
                           应验
                         </button>
                         <button
                           onClick={() => void reviewDecision(e.id, 'miss')}
-                          className="rounded-full border border-rose-300 px-2 py-0.5 text-[10px] text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                          className="rounded-full border border-rose-300 px-2 py-0.5 text-xs text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-500/10"
                         >
                           没应验
                         </button>
                         <button
                           onClick={() => void reviewDecision(e.id, 'unclear')}
                           title="还看不出——不作数，也不进命中率的分母"
-                          className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                          className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
                         >
                           还说不好
                         </button>
@@ -751,7 +764,7 @@ export default function DashboardPage() {
                         <button
                           onClick={() => void dropDecision(e.id)}
                           title="删掉这条"
-                          className="text-[10px] text-neutral-400 transition-colors hover:text-rose-600"
+                          className="text-xs text-neutral-400 transition-colors hover:text-rose-600"
                         >
                           删除
                         </button>
@@ -763,7 +776,7 @@ export default function DashboardPage() {
 
             {decisions.entries.filter((e) => e.outcome).length > 0 ? (
               <details className="mt-3">
-                <summary className="cursor-pointer text-[11px] text-neutral-500">
+                <summary className="cursor-pointer text-xs text-neutral-500">
                   已回看 {decisions.entries.filter((e) => e.outcome).length} 条
                 </summary>
                 <ul className="mt-2 space-y-1.5">
@@ -786,7 +799,7 @@ export default function DashboardPage() {
                         <button
                           onClick={() => void reviewDecision(e.id, '')}
                           title="撤销回看，退回未回看"
-                          className="ml-auto shrink-0 text-[10px] text-neutral-400 transition-colors hover:text-violet-600"
+                          className="ml-auto shrink-0 text-xs text-neutral-400 transition-colors hover:text-violet-600"
                         >
                           撤销
                         </button>
@@ -799,7 +812,7 @@ export default function DashboardPage() {
             <div className="mt-4 border-t border-neutral-100 pt-3 dark:border-neutral-800">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-neutral-500">校准</span>
-                <span className="text-[11px] text-neutral-400">
+                <span className="text-xs text-neutral-400">
                   {decisions.calibration.overall.rate == null
                     ? `已回看 ${decisions.calibration.reviewed} 条 · 满 ${decisions.calibration.overall.min_sample} 条才给命中率`
                     : `全局 ${decisions.calibration.overall.hits}/${decisions.calibration.overall.hits + decisions.calibration.overall.misses}（${pct(decisions.calibration.overall.rate)}）`}
@@ -808,7 +821,7 @@ export default function DashboardPage() {
               {decisions.calibration.by_topic.length > 0 ? (
                 <ul className="mt-1 space-y-0.5">
                   {decisions.calibration.by_topic.map((t) => (
-                    <li key={t.topic} className="text-[11px] text-neutral-500">
+                    <li key={t.topic} className="text-xs text-neutral-500">
                       {t.topic} {t.hits}/{t.hits + t.misses}（{pct(t.rate)}）
                     </li>
                   ))}
@@ -820,7 +833,7 @@ export default function DashboardPage() {
                   {decisions.calibration.by_confidence
                     .filter((b) => b.sample > 0)
                     .map((b) => (
-                      <span key={b.bucket} className="text-[11px] text-neutral-500">
+                      <span key={b.bucket} className="text-xs text-neutral-500">
                         把握 {b.bucket}：{b.rate == null ? `样本 ${b.sample} 条` : `${b.hits}/${b.sample}（${pct(b.rate)}）`}
                       </span>
                     ))}
@@ -868,7 +881,7 @@ export default function DashboardPage() {
                 )
               })()}
               {decisions.calibration.reviewed === 0 ? (
-                <p className="mt-1 text-[11px] text-neutral-400">
+                <p className="mt-1 text-xs text-neutral-400">
                   还没有回看过的判断。攒够几条再来算——一两条算不出命中率。
                 </p>
               ) : null}
@@ -891,7 +904,7 @@ export default function DashboardPage() {
             }}
             placeholder='点麦克风说话，或直接打字。Ctrl+Enter 保存。'
             rows={3}
-            className="mt-3 w-full resize-y rounded-xl border border-neutral-200 bg-transparent px-3 py-2 text-sm leading-relaxed text-neutral-800 placeholder:text-neutral-400 focus:border-violet-400 focus:outline-none dark:border-neutral-700 dark:text-neutral-100"
+            className="mt-3 w-full resize-y rounded-md border border-neutral-200 bg-transparent px-3 py-2 text-sm leading-relaxed text-neutral-800 placeholder:text-neutral-400 focus:border-violet-400 focus:outline-none dark:border-neutral-700 dark:text-neutral-100"
           />
           <div className="mt-2 flex items-center gap-2">
             <button
@@ -919,7 +932,7 @@ export default function DashboardPage() {
             <ul className="mt-3 space-y-1.5 border-t border-neutral-100 pt-3 dark:border-neutral-800">
               {journalView.entries.slice(0, 5).map((e, i) => (
                 <li key={`${e.date}-${e.time}-${i}`} className="flex items-baseline gap-2 text-xs">
-                  <span className="shrink-0 font-mono text-[11px] text-neutral-400">
+                  <span className="shrink-0 font-mono text-xs text-neutral-400">
                     {e.date.slice(5)} {e.time}
                   </span>
                   <span className="min-w-0 truncate text-neutral-600 dark:text-neutral-300">{e.excerpt}</span>
@@ -947,7 +960,7 @@ export default function DashboardPage() {
                     <span className="truncate text-sm text-neutral-700 group-hover:text-violet-700 dark:text-neutral-200 dark:group-hover:text-violet-300">
                       {c.title}
                     </span>
-                    <span className="ml-3 shrink-0 truncate font-mono text-[11px] text-neutral-400">
+                    <span className="ml-3 shrink-0 truncate font-mono text-xs text-neutral-400">
                       {c.model_id} · {new Date(c.updated_at).toLocaleDateString()}
                     </span>
                   </a>
@@ -977,12 +990,12 @@ export default function DashboardPage() {
                       {t.mode === 'agent' ? '🤖' : t.trigger_kind === 'watch' ? '📁' : '⏰'} {t.name}
                     </span>
                     {t.last_status === 'error' && (
-                      <span className="shrink-0 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] text-rose-600 dark:bg-rose-950/60 dark:text-rose-300">
+                      <span className="shrink-0 rounded-full bg-rose-50 px-2 py-0.5 text-xs text-rose-600 dark:bg-rose-950/60 dark:text-rose-300">
                         上次失败
                       </span>
                     )}
                   </span>
-                  <span className="ml-3 shrink-0 font-mono text-[11px] text-neutral-400">
+                  <span className="ml-3 shrink-0 font-mono text-xs text-neutral-400">
                     {t.trigger_kind === 'watch'
                       ? `📁 ${t.watch_path || 'vault'}`
                       : `${t.cron} · 下次 ${t.next_run ? t.next_run.slice(5, 16).replace('T', ' ') : '—'}`}
@@ -1051,14 +1064,14 @@ function NarrativeCard({
   return (
     <Link
       to={href}
-      className="group block rounded-2xl border border-neutral-200 bg-white p-5 transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md hover:shadow-violet-100/60 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-violet-500/40"
+      className="group block rounded-lg border border-neutral-200 bg-white p-5 transition-all hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-violet-500/40"
     >
       <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">{eyebrow}</p>
       <p className={`mt-2 bg-gradient-to-r bg-clip-text text-3xl font-bold text-transparent ${toneClasses[tone]}`}>
         {headline}
       </p>
       <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{label}</p>
-      <p className="mt-2 text-[11px] font-medium text-violet-600 dark:text-violet-400">{sub}</p>
+      <p className="mt-2 text-xs font-medium text-violet-600 dark:text-violet-400">{sub}</p>
     </Link>
   )
 }
@@ -1091,7 +1104,7 @@ export function NorthStarCard({ n }: { n: NorthStar | null }) {
           天：同一天里「讲了一遍」和「消化了一份」都发生过
         </span>
         <div className="flex-1" />
-        <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+        <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
           {n.window.start.slice(5)} – {n.window.end.slice(5)}
         </span>
       </div>
@@ -1129,7 +1142,7 @@ export function NorthStarCard({ n }: { n: NorthStar | null }) {
                   />
                 </div>
                 <span
-                  className={`text-[10px] tabular-nums ${
+                  className={`text-xs tabular-nums ${
                     d.date === today
                       ? 'font-semibold text-violet-600 dark:text-violet-300'
                       : 'text-neutral-400 dark:text-neutral-500'
@@ -1137,7 +1150,7 @@ export function NorthStarCard({ n }: { n: NorthStar | null }) {
                 >
                   {d.date.slice(5)}
                 </span>
-                <span className="text-[10px] text-violet-500">{d.counted ? '✓' : ''}</span>
+                <span className="text-xs text-violet-500">{d.counted ? '✓' : ''}</span>
               </div>
             ))}
           </div>
@@ -1150,7 +1163,7 @@ export function NorthStarCard({ n }: { n: NorthStar | null }) {
       )}
 
       {/* 口径与已知偏差：直接来自后端（`rules`），界面不自己编一份说法 */}
-      <p data-north-star-rule className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+      <p data-north-star-rule className="mt-3 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
         「重讲」= {n.rules.retell}；「消化」= {n.rules.digested}。{n.rules.bias}
       </p>
     </section>
@@ -1213,7 +1226,7 @@ export function CalibrationCard({
           档：自评 − 判分（正数 = 给自己打的档更高）
         </span>
         <div className="flex-1" />
-        <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+        <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
           滚动 {c.days} 天 · 自评 {c.n_self} · 判分 {c.n_judged}
         </span>
       </div>
@@ -1226,7 +1239,7 @@ export function CalibrationCard({
       {baseline ? (
         <p
           data-calibration-baseline
-          className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-[11px] leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200"
+          className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200"
         >
           <span className="font-medium">判分器基线</span>：{baseline}
         </p>
@@ -1243,7 +1256,7 @@ export function CalibrationCard({
       ) : (
         <div className="mt-4 space-y-2">
           {GRADE_ROWS.map(({ g, label }) => (
-            <div key={g} className="flex items-center gap-2 text-[11px]">
+            <div key={g} className="flex items-center gap-2 text-xs">
               <span className="w-8 shrink-0 text-neutral-500 dark:text-neutral-400">{label}</span>
               <div className="h-3 flex-1 overflow-hidden rounded bg-neutral-100 dark:bg-neutral-800">
                 <div
@@ -1273,7 +1286,7 @@ export function CalibrationCard({
               </span>
             </div>
           ))}
-          <p className="flex gap-3 pl-10 text-[10px] text-neutral-400 dark:text-neutral-500">
+          <p className="flex gap-3 pl-10 text-xs text-neutral-400 dark:text-neutral-500">
             <span className="text-violet-500">■ 你自评</span>
             <span className="text-sky-500">■ 判分器判</span>
           </p>
@@ -1286,13 +1299,13 @@ export function CalibrationCard({
         <p
           key={n}
           data-calibration-note
-          className="mt-2 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+          className="mt-2 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500"
         >
           {n}
         </p>
       ))}
       {c.judge_sha ? (
-        <p className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">
+        <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
           判分器指纹 <span data-calibration-sha className="font-mono">{c.judge_sha}</span>
           ——曲线是按这一版判分器算的。
         </p>
@@ -1302,7 +1315,7 @@ export function CalibrationCard({
       {c.segments.length > 0 ? (
         <p
           data-calibration-segments
-          className="mt-1 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+          className="mt-1 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500"
         >
           分段：
           {c.segments.map((s, i) => (
@@ -1333,18 +1346,18 @@ export function CalibrationCard({
             >
               {s.self.n ? `${s.self.dist.got}/${s.self.n}` : '—'}
             </span>
-            <span className="text-[11px] text-neutral-400">自己标的</span>
+            <span className="text-xs text-neutral-400">自己标的</span>
             <span
               data-session-judged
               className="text-lg font-bold tabular-nums text-sky-600 dark:text-sky-300"
             >
               {s.judged.n ? `${s.judged.dist.got}/${s.judged.n}` : '—'}
             </span>
-            <span className="text-[11px] text-neutral-400">让它判的</span>
+            <span className="text-xs text-neutral-400">让它判的</span>
             <div className="flex-1" />
             <span
               data-session-gap
-              className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400"
+              className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400"
             >
               {s.gap === null ? '差 —' : `差 ${s.gap > 0 ? '+' : ''}${s.gap}`}
             </span>
@@ -1356,7 +1369,7 @@ export function CalibrationCard({
           ) : null}
           <p
             data-session-rule
-            className="mt-2 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+            className="mt-2 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500"
           >
             {s.rules.rate}。{s.rules.confound}
             {s.rules.mixed ? ` ${s.rules.mixed}` : ''}
@@ -1402,7 +1415,7 @@ export function ProcessCard({ p }: { p: ProcessMetrics | null }) {
           场：这 {p.window.weeks} 个自然周里标了「半懂」的 / 说通或半懂的总场次
         </span>
         <div className="flex-1" />
-        <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+        <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
           {p.window.start.slice(5)} – {p.window.end.slice(5)}
         </span>
       </div>
@@ -1424,7 +1437,7 @@ export function ProcessCard({ p }: { p: ProcessMetrics | null }) {
               data-rate={w.rate === null ? '' : String(w.rate)}
               className="flex flex-1 flex-col items-center gap-1"
             >
-              <span className="text-[10px] tabular-nums text-neutral-500 dark:text-neutral-400">
+              <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
                 {w.n === 0 ? '—' : `${w.half}/${w.n}`}
               </span>
               <div className="flex h-16 w-full flex-col justify-end">
@@ -1446,7 +1459,7 @@ export function ProcessCard({ p }: { p: ProcessMetrics | null }) {
                 />
               </div>
               <span
-                className={`text-[10px] tabular-nums ${
+                className={`text-xs tabular-nums ${
                   w.is_current
                     ? 'font-semibold text-violet-600 dark:text-violet-300'
                     : 'text-neutral-400 dark:text-neutral-500'
@@ -1460,7 +1473,7 @@ export function ProcessCard({ p }: { p: ProcessMetrics | null }) {
       )}
 
       {/* 口径原文来自后端，界面不自己编一份说法 */}
-      <p data-process-rule className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+      <p data-process-rule className="mt-3 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
         {p.rules.half}。{p.rules.useless}。{p.rules.week}
       </p>
     </section>
@@ -1517,7 +1530,7 @@ export function SkillLoopCard({ s }: { s: SkillLoop | null }) {
             <li
               key={r.name}
               data-skill-row={r.name}
-              className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-neutral-500 dark:text-neutral-400"
+              className="flex flex-wrap items-baseline gap-x-2 text-xs text-neutral-500 dark:text-neutral-400"
             >
               <span className="text-neutral-700 dark:text-neutral-200">{r.name}</span>
               <span className="tabular-nums">{r.used} 次</span>
@@ -1541,7 +1554,7 @@ export function SkillLoopCard({ s }: { s: SkillLoop | null }) {
           >
             {hit.readable ? `${hit.runs.injected} / ${hit.runs.total}` : '—'}
           </span>
-          <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+          <span className="text-xs text-neutral-400 dark:text-neutral-500">
             （近 {hit.days} 天，只数引擎运行）
           </span>
         </div>
@@ -1555,7 +1568,7 @@ export function SkillLoopCard({ s }: { s: SkillLoop | null }) {
             近 {hit.days} 天还没有引擎运行跑过——这里暂时没有可看的对照。
           </p>
         ) : (
-          <p data-skill-inject-grounded className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+          <p data-skill-inject-grounded className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
             接地分：带技能{' '}
             {inj.mean === null ? '读不到' : `${inj.mean}（${inj.n} 次有分）`} · 没带{' '}
             {plain.mean === null ? '读不到' : `${plain.mean}（${plain.n} 次有分）`}
@@ -1563,7 +1576,7 @@ export function SkillLoopCard({ s }: { s: SkillLoop | null }) {
         )}
 
         {/* 口径原文来自后端，界面不自己编一份说法 */}
-        <p data-skill-loop-rule className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        <p data-skill-loop-rule className="mt-3 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
           {s.funnel_rules.window}。{s.injection_rules.bias}。{s.injection_rules.grounded}。
         </p>
       </div>
@@ -1600,7 +1613,7 @@ export function GapRateCard({ g, a }: { g: CardGapRate | null; a?: PrereqAdoptio
         <div className="flex-1" />
         <Link
           to="/tutor"
-          className="text-[11px] text-neutral-400 transition-colors hover:text-violet-600 dark:text-neutral-500"
+          className="text-xs text-neutral-400 transition-colors hover:text-violet-600 dark:text-neutral-500"
         >
           去地图看每个概念 →
         </Link>
@@ -1619,7 +1632,7 @@ export function GapRateCard({ g, a }: { g: CardGapRate | null; a?: PrereqAdoptio
       {/* 口径原文来自后端，界面不自己编一份说法；**也一个字都不催** */}
       <p
         data-gap-rate-rule
-        className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+        className="mt-3 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500"
       >
         {g.rule}
       </p>
@@ -1641,7 +1654,7 @@ export function GapRateCard({ g, a }: { g: CardGapRate | null; a?: PrereqAdoptio
               张：翻过「可能缺前置」的搁置卡里，真从候选开了课的
             </span>
             <div className="flex-1" />
-            <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+            <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
               近 {a.days} 天
             </span>
           </div>
@@ -1656,7 +1669,7 @@ export function GapRateCard({ g, a }: { g: CardGapRate | null; a?: PrereqAdoptio
           ) : null}
           <p
             data-adoption-rule
-            className="mt-2 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+            className="mt-2 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500"
           >
             {a.rule} {a.bias}
           </p>
@@ -1740,7 +1753,7 @@ export function GroundedCard({ e }: { e: EngineEvalLatest | null }) {
                     />
                   )}
                 </div>
-                <span className="w-24 shrink-0 text-right text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
+                <span className="w-24 shrink-0 text-right text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
                   {r
                     ? `用例 ${r.total}${
                         e?.coverage?.[engine] != null ? ` · 集 ${e.coverage[engine]}` : ''
@@ -1758,7 +1771,7 @@ export function GroundedCard({ e }: { e: EngineEvalLatest | null }) {
       <div className="mt-3 flex items-center gap-2">
         <span className="w-16 shrink-0" />
         <span className="w-12 shrink-0" />
-        <div className="flex min-w-0 flex-1 justify-between text-[10px] tabular-nums text-neutral-300 dark:text-neutral-600">
+        <div className="flex min-w-0 flex-1 justify-between text-xs tabular-nums text-neutral-300 dark:text-neutral-600">
           <span>0</span>
           <span>5</span>
         </div>
@@ -1774,7 +1787,7 @@ export function GroundedCard({ e }: { e: EngineEvalLatest | null }) {
           className="mt-3 space-y-1 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-950/20"
         >
           {e.warnings.map((w) => (
-            <li key={w} className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">
+            <li key={w} className="text-xs leading-relaxed text-amber-800 dark:text-amber-200">
               {w}
             </li>
           ))}
@@ -1860,12 +1873,12 @@ export function TurnSummaryCard({ t }: { t: TurnSummary | null }) {
                     style={{ width: `${Math.min(100, (n / span) * 100).toFixed(1)}%` }}
                   />
                 </div>
-                <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
+                <span className="w-10 shrink-0 text-right text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
                   /{t?.turns}
                 </span>
               </div>
               {/* 每一类的判据就是它自己的 hint（与筛选按钮同一份文案），不另立说法 */}
-              <p className="mt-0.5 pl-0 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+              <p className="mt-0.5 pl-0 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
                 {labels.get(key)?.hint ?? ''}
               </p>
             </li>
@@ -1879,6 +1892,96 @@ export function TurnSummaryCard({ t }: { t: TurnSummary | null }) {
           不是全量。
         </p>
       ) : null}
+    </MetricCard>
+  )
+}
+
+/** 材料使用率（P3 · 接地闭环）——「这一轮注入了 5 条、模型真用了几条」。
+ *
+ *  **为什么值得上墙**：它是线上唯一一条**最便宜**的检索质量反馈。离线那一套
+ *  （golden set / hit@k / MRR）要人专门跑一轮；而这两个数每一轮聊天都在落账本，连续几轮
+ *  「注入了 N 条、一条没引用」就是检索质量往下走最早的那个信号（答案还在说人话，
+ *  只是不再引材料了）。
+ *
+ *  **为什么摆两个计数、不摆一个使用率**（与 `TurnSummaryCard` 同一条红线）：一列数一旦有了
+ *  分母，下一个人就会去算比率、去比较、去追——而这个模块是诊断工具，不是考核仪表。
+ *  更硬的一条理由是**分母本身选不出来**：没检索的回合（闲聊跳过、RAG 关）注入就是 0，
+ *  把它算进分母等于拿「没检索」当「检索了没人用」。所以后端给的是
+ *  `turns_with_material / injected / cited / uncited_turns` 四个事实，比率要读的人自己心算。
+ */
+export function SourceUsageCard({ t }: { t: TurnSummary | null }) {
+  if (!t) return null // 还没读到就整块不渲染（见 `GroundedCard` 那条注）
+  const src = t?.sources
+  const turns = src?.turns_with_material ?? 0
+  return (
+    <MetricCard
+      title="材料使用率"
+      marker="data-source-usage"
+      headline={`${src?.cited ?? 0}/${src?.injected ?? 0}`}
+      headlineNote="条材料被正文引用到（引用 / 注入）"
+      // 判可读性读 `t.readable`，不是 `!!t`：读不到时后端照样回一个对象
+      // （`readable=false` + 一排 0 + 那句错误）——`!!t` 会把「读不出来」渲染成一屏 0，
+      // 正好是它该防的那件事。
+      readable={t?.readable ?? false}
+      error={t?.error}
+      rules={t?.rules}
+      // 「空」只在**读到了、但窗口里没有一轮注入过材料**时成立（读不到由壳摆「读不出来」）
+      empty={!!t && t.readable && turns === 0}
+      emptyHint={t ? `这 ${t.days} 天里没有一轮注入过材料（要么没检索，要么检索没命中）。` : ''}
+    >
+      <ul className="mt-4 space-y-2.5">
+        <li data-source-count="turns" className="flex items-baseline gap-2">
+          <span className="w-32 shrink-0 text-xs text-neutral-700 dark:text-neutral-200">
+            注入过材料的回合
+          </span>
+          <span className="text-sm font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
+            {turns}
+          </span>
+          <span className="text-xs text-neutral-400 dark:text-neutral-500">
+            / 这 {t?.days} 天共 {t?.turns ?? 0} 轮
+          </span>
+        </li>
+        <li data-source-count="injected" className="flex items-baseline gap-2">
+          <span className="w-32 shrink-0 text-xs text-neutral-700 dark:text-neutral-200">
+            一共注入
+          </span>
+          <span className="text-sm font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
+            {src?.injected ?? 0}
+          </span>
+          <span className="text-xs text-neutral-400 dark:text-neutral-500">条材料</span>
+        </li>
+        <li data-source-count="cited" className="flex items-baseline gap-2">
+          <span className="w-32 shrink-0 text-xs text-neutral-700 dark:text-neutral-200">
+            被正文引用到
+          </span>
+          <span className="text-sm font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
+            {src?.cited ?? 0}
+          </span>
+          <span className="text-xs text-neutral-400 dark:text-neutral-500">
+            条（同一份引用两次只算一次）
+          </span>
+        </li>
+        {/* 这一行是这一格真正的用处：**毛病的个数，不是一个比率**。
+            给 0 也不涂绿——它只是一条事实（红了就成了 KPI）。 */}
+        <li data-source-count="uncited" className="flex items-baseline gap-2">
+          <span className="w-32 shrink-0 text-xs text-neutral-700 dark:text-neutral-200">
+            一条都没引用的
+          </span>
+          <span
+            data-source-uncited
+            className="text-sm font-semibold tabular-nums text-neutral-800 dark:text-neutral-100"
+          >
+            {src?.uncited_turns ?? 0}
+          </span>
+          <span className="text-xs text-neutral-400 dark:text-neutral-500">
+            轮（有材料却一次没引——检索质量下滑最早的那个信号）
+          </span>
+        </li>
+      </ul>
+      {/* 口径从后端原文照抄（与筛选按钮、与逐条清单同一份说法），不自己编一份 */}
+      <p className="mt-3 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {t?.rules?.sources ?? ''}
+      </p>
     </MetricCard>
   )
 }
@@ -1949,15 +2052,110 @@ export function PromptEvalCard({ p }: { p: PromptEvalBoard | null }) {
             >
               {r.n}
             </span>
-            <span className="min-w-0 flex-1 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+            <span className="min-w-0 flex-1 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
               {r.hint}
             </span>
           </li>
         ))}
       </ul>
       {/* 这一句是这一格的**结论**：没有它，那三个数会被读成「还有多少没做」 */}
-      <p className="mt-3 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+      <p className="mt-3 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
         这一格数的是「尺子有没有被量过」，不是「哪条提示词更好」——所以这里不摆任何一条的名字或分数。
+      </p>
+    </MetricCard>
+  )
+}
+
+/**
+ * 任务级基线（A0 · `Agent升级.md` §5 点名的「进计量局」那一笔）。
+ *
+ * **这一格读的是「跑分当时」的成绩**，所以标题行必须带两样东西：什么时候跑的（`at`）、
+ * 跑的是哪一版金标（`tasks_sha`）。金标改过（A4 就加了一条任务）之后指纹会变，
+ * 那时这格里的数**仍然是真的，只是旧了**——`--compare` 会如实报「不可比」，
+ * 界面不替它下结论（红线：运行时不许碰金标，指纹归尺子算）。
+ */
+export function AgentEvalCard({ p }: { p: AgentEvalBoard | null }) {
+  if (!p) return null // 还没读到就整块不渲染（见 `GroundedCard` 那条注）
+  const rounds = p.rounds
+  const rows = [
+    {
+      key: 'done',
+      label: '办成',
+      value: p.done != null ? `${p.done}/${p.tasks ?? 0}` : '—',
+      hint: '该落盘的落了、该拒的拒了（完成率不含轮数——轮数是成本，完成是结果）',
+    },
+    {
+      key: 'clean',
+      label: '干净',
+      value: p.clean != null ? `${p.clean}/${p.tasks ?? 0}` : '—',
+      hint: '办成了、而且一条规矩都没破（含工具越界与超预算）',
+    },
+    {
+      key: 'floor',
+      label: '底线失守',
+      value: `${p.floor_failures ?? 0}`,
+      hint: '谎报 / 编造路径 / 伪引用——这三条之外的不算底线（长文没落盘单列）',
+    },
+    {
+      key: 'tool',
+      label: '工具越界',
+      value: `${p.tool_not_allowed ?? 0} · 该用的没用 ${p.tool_not_used ?? 0}`,
+      hint: '用了白名单外的工具 · 该查材料却一次都没查',
+    },
+    {
+      key: 'rounds',
+      label: '轮数',
+      value: rounds ? `中位 ${rounds.median} · p90 ${rounds.p90} · 均值 ${rounds.mean}` : '—',
+      hint: '成本基线：A1 的 delegate 要压的就是它',
+    },
+    {
+      key: 'delegate',
+      label: '该委托而没委托',
+      value: `${p.delegate_missed ?? 0}/${p.delegate_expected ?? 0}`,
+      hint: '委托名额用了几个——**能力有没有被用上**，不是失败',
+    },
+  ]
+  return (
+    <MetricCard
+      title="任务级基线"
+      marker="data-agent-eval"
+      headline={p.done_rate != null ? `${Math.round(p.done_rate * 100)}%` : '—'}
+      headlineNote={`办成率（${p.tasks ?? 0} 条任务）`}
+      // 判可读性读 `p.readable`，不是 `!!p`：读不到时后端照样回一个对象（同一个坑）
+      readable={p.readable}
+      error={p.error}
+      rules={p.rules}
+      empty={p.readable && (p.tasks ?? 0) === 0}
+      emptyHint="报告在，但里面一条任务都没有——那多半是跑分那一轮没跑成，重跑一次。"
+    >
+      <ul className="mt-4 space-y-2.5">
+        {rows.map((r) => (
+          <li key={r.key} className="flex items-baseline gap-3" data-agent-eval-row={r.key}>
+            <span className="w-28 shrink-0 text-xs text-neutral-700 dark:text-neutral-200">
+              {r.label}
+            </span>
+            <span
+              {...{ [`data-agent-eval-${r.key}`]: '' }}
+              className="w-40 shrink-0 text-right text-sm font-semibold tabular-nums text-neutral-800 dark:text-neutral-100"
+            >
+              {r.value}
+            </span>
+            <span className="min-w-0 flex-1 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
+              {r.hint}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {/* **这一行是这一格最重要的东西**：它读的是哪一版、什么时候跑的那一版 */}
+      <p
+        data-agent-eval-stamp
+        className="mt-3 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500"
+      >
+        {p.at ? `跑于 ${p.at}` : '报告里没写时间'}
+        {p.model_id ? ` · 模型 ${p.model_id}` : ''}
+        {p.tasks_sha ? ` · 金标指纹 ${p.tasks_sha}` : ''}
+        {p.sha_missing ? '（报告里没有指纹，这一格比不了）' : ''}
+        {'——金标改过之后要重跑才有新数；拿它跟新报告比，尺子会如实说「不可比」。'}
       </p>
     </MetricCard>
   )

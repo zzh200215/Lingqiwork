@@ -58,7 +58,9 @@ def next_suggestion(facts: dict) -> dict:
     if f["threads"]:
         t = f["threads"][0]
         return {
-            "text": f"「{t['name']}」最近动过：{t['summary']}。",
+            # 逗号而不是冒号：`summary` 自己带着一个冒号（「挂着 3 份：材料 1 · 成品 1」），
+            # 两个冒号连着读起来像断句错了（2026-09-22 措辞那一笔）。
+            "text": f"「{t['name']}」最近动过，{t['summary']}。",
             "tone": "idle",
             "action": {"kind": "thread", "thread_id": t["id"], "label": "去这件事"},
         }
@@ -69,29 +71,38 @@ def next_suggestion(facts: dict) -> dict:
     }
 
 
-# 五档概览：固定优先级，空档不出现。**与 next_suggestion 完全分开**——那条文案由测试用
+# 概览档位：固定优先级，空档不出现。**与 next_suggestion 完全分开**——那条文案由测试用
 # 封存词表守着（`tests/test_today.py:24`，不许出现 卡/到期/复习/习惯/打勾），这里是计数
-# 与落点，不是那一句会主动开口的建议。所以标签里的「到期卡」「卡点」只活在这个独立常量里。
+# 与落点，不是那一句会主动开口的建议。所以标签里的「到期卡」「到期事项」只活在这个独立常量里。
+#
+# 「到期事项」（§五-5）与「到期卡」是**两回事**，所以是两档：
+#   到期卡 = 复习队列里该重看的知识卡（`cards.stats().due_now`）；
+#   到期事项 = 你自己给某件「事」设的截止日到了（`threads.due()`）。
+# 合成一档的话，概览上「3 件到期」说不清是卡片还是事情，点了也不知道该去哪。
 SUMMARY_ROWS: tuple[tuple[str, str, str], ...] = (
     ("tasks_failing", "失败任务", "bad"),
     ("untouched", "未消化", "warn"),
     ("due_cards", "到期卡", "info"),
+    ("due_threads", "到期事项", "warn"),
     ("awaiting", "卡点", "warn"),
     ("inflight", "进行中产出", "info"),
 )
 
 # 每一档没有特别落点时的默认去处（路由器可以按 id/source 覆盖，见 facts 的 `*_href`）。
+# **tab key 是方案 §一 那一代**（`workflow` / `thread`）：`engine` 那批旧名字只是
+# `routes.tsx` 的重定向层认，新写的链接不该再吐旧 key 出去。
 SUMMARY_HREF_DEFAULT: dict[str, str] = {
     "tasks_failing": "/settings",
     "untouched": "/tutor",
     "due_cards": "/review",
-    "awaiting": "/work?tab=engine",
-    "inflight": "/work?tab=engine",
+    "due_threads": "/work?tab=thread",
+    "awaiting": "/work?tab=workflow",
+    "inflight": "/work?tab=workflow",
 }
 
 
 def summary(facts: dict) -> list[dict]:
-    """五档概览 -> [{key, label, count, href, tone}]。固定优先级、空档省略。Pure.
+    """概览档位 -> [{key, label, count, href, tone}]。固定优先级、空档省略。Pure.
 
     facts: {key: count}，可附 `{key}_href` 字符串覆盖默认落点。负值 / 非数字一律当 0
     （垃圾输入不该让概览崩）——和 next_suggestion 一样，一个计数不该 500。

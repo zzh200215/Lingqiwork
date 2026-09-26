@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
-from app.core import indexer, structured_turn, turn_quality
+from app.core import citations, delegate, indexer, structured_turn, turn_quality
 from app.core.llm import MAX_TOOL_ROUNDS, ProviderInfo, run_agentic_chat
 from app.core.mcp import begin_turn, mcp_manager
 from app.core.prefs import load_config
@@ -99,12 +99,51 @@ async def indexer_retrieve(query: str, top_k: int) -> list[dict]:
     return await asyncio.to_thread(indexer.search_auto, query, top_k)
 
 
-def _build_rag_context(sources: list[dict]) -> str:
-    """Format retrieved chunks as a system prompt for grounded answering."""
+def _build_rag_context(sources: list[dict], quality=None) -> str:
+    """Format retrieved chunks as a system prompt for grounded answering.
+
+    **三种情况，只有一个出口**（P2 + P3）：
+
+    - **一条都没检索到**（`sources` 为空）→ 明说「这一轮没有检索到任何材料」。这是 P2
+      记下的边界①，2026-09-20 补上：当时不做的理由是「闲聊 + 常开 RAG 会把每一轮都灌
+      一句『材料里没有』」，而**通道预判已经把闲聊拦在检索之前**（skip 那一路根本不检索，
+      也就走不到这里），所以现在补它不会误伤闲聊。
+    - **检索到了、但质量门判不足** → 明说「这批片段里没有与当前问题直接相关的材料」，
+      片段**照旧全给它**（万一里面有能用的）。
+    - **门通过**（或没给判定）→ **一个字都不加**：那段提示词是校准过的，没理由为一堆
+      本来就没问题的检索动它。
+
+    两种「不足」的两句规矩是同一套（不许硬拿常识冒充材料 / 直说没有、并说缺什么）。
+    刻意**没有**抽成一个常量：两段挨着写在同一个函数里，改的人一定看得见另一段；
+    而它们的措辞各自贴着自己的情境（有片段 / 没片段），硬合并反而要说一句更含糊的话。
+    """
     blocks = [
         f'[来源 {i} — {s["source"]}]\n{s["text"]}'
         for i, s in enumerate(sources, 1)
     ]
+    if not sources:
+        # 判据是门自己给的（`assess([])` → 「没有检索到任何材料」），这里只负责说出去
+        why = quality.reason if quality is not None else "没有检索到任何材料"
+        return (
+            "你是用户的个人 AI 工作台助手。**这一轮从用户的知识库里没有检索到任何材料**"
+            f"（判据：{why}）。\n"
+            "所以这一轮你要守两条：\n"
+            "1. **不要**凭自己的常识作答，更**不要**把它说成「你的材料里写的」；\n"
+            "2. 直说「你的材料里没有这个」，并顺带说一句缺的是什么"
+            "——这样用户才知道该往库里放什么。\n"
+        )
+    if quality is not None and not quality.ok:
+        # 「材料不足」的明示（RAG升级.md §3「P2 实施记录」定下的用法）
+        return (
+            "你是用户的个人 AI 工作台助手。以下是从用户知识库检索到的片段——"
+            "但**检索质量门判定：这批片段里没有与当前问题直接相关的材料**"
+            f"（判据：{quality.reason}）。\n"
+            "所以这一轮你要守两条：\n"
+            "1. **不要**拿这些片段硬凑答案，也**不要**用你自己的常识冒充「材料里说的」；\n"
+            "2. 如果确实答不了，就直说「你的材料里没有」，并顺带说一句缺的是什么。\n"
+            "如果片段里恰好有能用的，照常引用并标注 [来源 N]。\n\n"
+            + "\n\n".join(blocks)
+        )
     return (
         "你是用户的个人 AI 工作台助手。以下是从用户知识库检索到的相关片段，"
         "请基于这些片段回答当前问题。回答时尽量引用片段内容，"
@@ -391,7 +430,9 @@ async def _generate(req: ChatRequest):
 
     # user's global system prompt (settings page), if configured
     prefs = load_config()
-    tools_on = agent.tools_enabled if agent is not None else True
+    # A2：agent 那一栏从布尔升成了白名单（空 = 不限制，`none` = 一个都不给）。
+    # `tools_on` 仍然问「用不用工具」——它决定要不要给输出规矩、要不要走工具循环。
+    tools_on = (agent.tool_whitelist or "") != "none" if agent is not None else True
     # ---- W7：这个模型该被怎么用（画像）。**没有基线的画像不生效**（回落默认，原因记在账本）
     from app.core import model_profiles
 
@@ -424,6 +465,25 @@ async def _generate(req: ChatRequest):
         mem_block = await memory.format_memories(query_text)
         if mem_block:
             system_blocks.append(mem_block)
+
+    # A4：你手头那件事（§2）。**只在消息真的指涉它时**才注入（`thread_context.refers_to_thread`
+    # 是启发式，代价写在那个模块里），而且只注入最近的一条——不列清单。
+    # `can_read` 是同一把闸门：这一段写着「用 vault_read_file 打开」，只有在模型**真拿得到**
+    # 那把工具时才能说（同 `_OUTPUT_RULE`：工具关掉时不许指使模型去调它没有的东西）。
+    # 判据不另写一遍：拿 `mcp.filter_specs` 问「这个白名单下 read_file 还在不在」。
+    if prefs.get("thread_context_enabled", True):
+        from app.core import thread_context
+        from app.core.mcp import filter_specs
+
+        can_read = bool(
+            filter_specs(
+                [{"function": {"name": thread_context.READ_TOOL}}],
+                agent.tool_whitelist if agent is not None else "",
+            )
+        )
+        thread_block = await thread_context.recent_block(query_text, can_read=can_read)
+        if thread_block:
+            system_blocks.append(thread_block)
 
     # agent skills: inject the compact index; the model loads full SKILL.md
     # via the skill_load tool when one is relevant
@@ -459,31 +519,18 @@ async def _generate(req: ChatRequest):
             top_k = int(prefs.get("rag_top_k") or 5)
         except (TypeError, ValueError):
             top_k = 5
+    rag_gate = None  # 质量门的判定，供 _build_rag_context 用，也记进本轮台账
+    chan = None  # 通道预判的结论（P2），同样记进台账
     if use_rag:
-        try:
-            sources = await indexer_retrieve(query_text, top_k)
-        except Exception as e:  # noqa: BLE001 - RAG failure should not break chat
-            yield _sse("rag_error", {"message": f"{type(e).__name__}: {e}"})
-            sources = []
-        if sources:
-            # full-context mode: short source docs go in whole, not as fragments
-            from app.core import fullctx
+        from app.core import channel as channel_gate, kg, retrieval_gate
 
-            if fullctx.enabled():
-                try:
-                    sources = await asyncio.to_thread(fullctx.expand, sources)
-                except Exception:  # noqa: BLE001 - never break chat
-                    pass
-            context = _build_rag_context(sources)
-            llm_messages = [{"role": "system", "content": context}] + llm_messages
-            yield _sse("sources", {"sources": sources})
-
-        # knowledge-graph channel (local Neo4j): entity/relation context on
-        # top of chunk RAG — silent no-op when the feature is off or the
-        # graph is unreachable
-        from app.core import kg
-
-        if kg.enabled():
+        # 通道预判（P2）：闲聊/寒暄**零检索**——省下一次嵌入 + 一次混合检索。
+        # 判据与代价的取舍在 `core/channel.py` 开头：漏判只是白付检索，误判是材料缺失
+        # 且用户看不见，所以判不定一律去检索。
+        chan = channel_gate.pick(query_text)
+        kg_block = ""
+        if chan.channel == "kg" and kg.enabled():
+            # 关系/多跳型：图谱**为主**（方案 §1.5）
             try:
                 kg_block = await asyncio.to_thread(kg.context_for_query, query_text)
             except Exception:  # noqa: BLE001 - context_for_query already guards
@@ -492,12 +539,85 @@ async def _generate(req: ChatRequest):
                 llm_messages = [{"role": "system", "content": kg_block}] + llm_messages
                 yield _sse("kg_used", {"ok": True})
 
+        if chan.channel == "skip":
+            yield _sse(
+                "rag_skipped",
+                {"channel": "skip", "level": chan.level, "reason": chan.reason},
+            )
+        elif kg_block:
+            pass  # 图谱那条通道已经给了材料，不再跑块检索（「为主」就是这个意思）
+        else:
+            if chan.channel == "kg":
+                # 图谱那边没给出东西 → **回退到混合检索**，别让关系型问题空手而归。
+                # 这条也解释了为什么 kg 判错不贵：它的失败是可见的、且自动降级。
+                yield _sse("kg_fallback", {"reason": "图谱没有给出材料，回退混合检索"})
+            try:
+                sources = await indexer_retrieve(query_text, top_k)
+            except Exception as e:  # noqa: BLE001 - RAG failure should not break chat
+                yield _sse("rag_error", {"message": f"{type(e).__name__}: {e}"})
+                sources = []
+            # 质量门判的是**检索**，所以在 fullctx 把片段换成整文件之前跑（那一步会重写文本）
+            rag_gate = retrieval_gate.assess(sources)
+            if sources:
+                # full-context mode: short source docs go in whole, not as fragments
+                from app.core import fullctx
+
+                if fullctx.enabled():
+                    try:
+                        sources = await asyncio.to_thread(fullctx.expand, sources)
+                    except Exception:  # noqa: BLE001 - never break chat
+                        pass
+                context = _build_rag_context(sources, quality=rag_gate)
+                llm_messages = [{"role": "system", "content": context}] + llm_messages
+                yield _sse("sources", {"sources": sources})
+            else:
+                # 一条都没检索到（P2 的边界①，2026-09-20 补齐）：门算出的「没有检索到任何
+                # 材料」原来只进账本，模型那边一个字都没有 —— 它会拿常识硬答，而用户以为
+                # 材料里有。**这一支只在真的去检索了、且返回空时才走到**：skip 那一路不
+                # 检索（`chan.channel == "skip"`），就没这个机会，所以闲聊不会被误伤。
+                llm_messages = [
+                    {"role": "system", "content": _build_rag_context([], quality=rag_gate)}
+                ] + llm_messages
+                yield _sse("rag_empty", {"reason": rag_gate.reason})
+
+            # knowledge-graph channel (local Neo4j): entity/relation context on
+            # top of chunk RAG — silent no-op when the feature is off or the
+            # graph is unreachable
+            if kg.enabled():
+                try:
+                    kg_block = await asyncio.to_thread(kg.context_for_query, query_text)
+                except Exception:  # noqa: BLE001 - context_for_query already guards
+                    kg_block = ""
+                if kg_block:
+                    llm_messages = [{"role": "system", "content": kg_block}] + llm_messages
+                    yield _sse("kg_used", {"ok": True})
+
     p = resolved.provider
     info = ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key)
 
     # ---- tool loop: runner task pushes events into a queue, we pump SSR ----
     q: asyncio.Queue = asyncio.Queue()
-    tool_specs = mcp_manager.tool_specs(include_memory=memory_on) if tools_on else []
+    tool_specs = (
+        mcp_manager.tool_specs(
+            include_memory=memory_on,
+            include_delegate=True,
+            # §4.1 ①（2026-09-22 落地）：**删除类工具要口头授权**。`memory_delete` 默认在模型
+            # 手里，而那条挂账写死的条件是「引入删除类工具时，确认是前置条件不是可选项」。
+            # 这里不弹确认框（那会打断流，也正是它当初被挂起来的原因），改成**不给它这只手**：
+            # 只有你这一轮明说要忘掉/删掉记忆，那个工具才会出现在这张表里。
+            # 形态照 W2b（结构化那一轮只是不给 `save_artifact`，读/搜/列照旧）。
+            allow_destructive=turn_quality.asked_to_forget(req.content),
+        )
+        if tools_on
+        else []
+    )
+    if agent is not None and tool_specs:
+        # A2：agent 的白名单是**上限**。空 = 不限制；`none` 上面已经把 `tools_on` 打成 False。
+        # 白名单一个都没匹配上 → 空表，`run_agentic_chat` 会退化成一次纯聊天（`use_tools=False`）——
+        # 这不是新分支，是它本来就有的行为；W2b 的结构化那一轮也照旧从这里取 `no_save`。
+        from app.core.mcp import filter_specs
+
+        tool_specs = filter_specs(tool_specs, agent.tool_whitelist)
 
     compare_resolved: ResolvedModel | None = None
     if req.compare_model:
@@ -532,10 +652,76 @@ async def _generate(req: ChatRequest):
         begin_turn(turn_budget)
         streamed_parts: list[str] = []
         final = ""
+        # 这一轮花掉的 token（模型的账）。**在 `one_pass` 之前建**：A1 的委托要把父的
+        # usage 交给子代理，好让它花的钱也记在这一轮头上（钱是用户付的）。
+        usage: dict = {}
         # 工具循环的账（W5）：轮数、每个工具的耗时与大小。对比模式两路各一份。
         turn_traces[uid] = {}
         quality: dict = {}
+        # A1：登记「这一轮的父是谁」——子代理的默认模型 / 轮数预算 / token 账都从这儿取。
+        # 按 uid 各调一次（对比模式两路并发在各自的 Task 上下文里，不会互相盖）。
+        delegate.set_parent(
+            provider=ProviderInfo(
+                kind=r.provider.kind, base_url=r.provider.base_url, api_key=r.provider.api_key
+            ),
+            # id 与名字**分开给**（A2）：`r.model` 是 provider 那边认的名字，子代理直接用它
+            # 发请求；只给 id 的话它得再解析一次（结果一样，多一次查询）。
+            model_id=f"{r.provider.name}/{r.model}",
+            model_name=r.model,
+            max_rounds=profile["max_rounds"] or MAX_TOOL_ROUNDS,
+            usage=usage,
+        )
+        if rag_gate is not None:
+            # 检索质量门的结论进台账（P2）。**挂在 `quality` 里是零新表零迁移的做法**：
+            # `turn_trace._write` 是逐字段映射列的，往 draft 里塞新键会被**静默丢掉**；
+            # 而 `quality_json` 本来就在落库。P3 给它开正式列时再搬过去。
+            quality["rag"] = {
+                "ok": rag_gate.ok,
+                "vec_top1": round(rag_gate.vec_top1, 4),
+                "both_frac": round(rag_gate.both_frac, 3),
+                "reason": rag_gate.reason,
+            }
+        if chan is not None:
+            # 通道预判的结论同样进台账：能看见「这一轮为什么没检索」是跳过检索能被信任的前提
+            quality["channel"] = {
+                "channel": chan.channel,
+                "level": chan.level,
+                "reason": chan.reason,
+            }
         quality_by_uid[uid] = quality
+
+        # ---- P3：引用验证（纯函数）→ 剥离伪引用 + 记账，**不重生成** ----
+        # 判据在 `core/citations.py` 一处（与离线 `core/turn_eval.py` 共用），这里只执行
+        # 它给的动作。形参是**这一次真正注入的条数**：`_build_rag_context` 就是按
+        # `enumerate(sources, 1)` 发的编号，所以合法区间是 1..len(sources)。
+        #
+        # **补跑会把正文整篇换掉**，所以走路的时候要再验一遍（`W2a` 之后又调一次）：
+        # `stripped` 是**累计**的，不是最后一次的结果——不然第一遍剥掉的那几个编号
+        # 会被第二遍「已经没有伪引用了」覆盖掉，账本上就看不出这一轮出过事。
+        stripped_fake: list[int] = []
+
+        def verify_citations(raw: str) -> str:
+            rep = citations.verify(raw, len(sources))
+            stripped_fake.extend(rep.fake)
+            quality["citations"] = {**rep.as_dict(), "stripped": sorted(set(stripped_fake))}
+            if not rep.fake:
+                return raw
+            cleaned, _removed = citations.strip_fake(raw, rep.injected)
+            # 那几个编号**已经流到屏幕上了**（模型边写边发），所以要回一帧带干净正文的：
+            # 库里剥了、屏幕上还留着，就是「两边不一致」——那比不剥更糟。
+            q.put_nowait(
+                (
+                    "citations",
+                    {
+                        "text": cleaned,
+                        "fake": list(rep.fake),
+                        "injected": rep.injected,
+                        "cited": list(rep.cited),
+                    },
+                    uid,
+                )
+            )
+            return cleaned
 
         def on_delta(t: str) -> None:
             q.put_nowait(("delta", t, uid))
@@ -548,29 +734,42 @@ async def _generate(req: ChatRequest):
         def on_tool_result(name: str, arguments: dict, meta: dict) -> None:
             # 工具的副产物（产出落盘路径…）→ 界面。正文不在这条路上：模型仍会把
             # 「已存为…」那句话写在回复里，这里给的是能点开的**链接**。
-            art = (meta or {}).get("artifact")
+            #
+            # A1：`artifacts`（复数）是**子代理**落的东西（`delegate` 那条把它自己的回执
+            # 一起带回来）。两者走**同一道白名单闸门**——不这么接的话，子代理存的文件
+            # 会落盘但界面上没有回执，用户拿不到那个链接（也没人校验它在不在盘上）。
+            meta = dict(meta or {})
+            arts = list(meta.get("artifacts") or [])
+            art = meta.get("artifact")
             if isinstance(art, dict):
+                arts.append(art)
+                meta.pop("artifact", None)
+            meta.pop("artifacts", None)
+            good: list[dict] = []
+            for a in arts:
+                if not isinstance(a, dict):
+                    continue
                 # W2a 的白名单闸门：回执路径必须在 vault 里、而且盘上真有这个文件。
                 # 过不去就不进这一轮的产出、也不给界面链接 —— 一个看起来可信、点开即
                 # 404 的链接比没有链接更伤（用户会以为东西存好了）。
                 # **不是静默丢掉**：原因写进这一轮的 quality，账本和界面都看得见。
-                why = turn_quality.receipt_problem(art)
+                why = turn_quality.receipt_problem(a)
                 if why:
-                    log.warning("产出回执不给出去（%s）：%s", why, art.get("path"))
+                    log.warning("产出回执不给出去（%s）：%s", why, a.get("path"))
                     quality.setdefault("dropped_receipts", []).append(
-                        {"path": str(art.get("path") or ""), "why": why}
+                        {"path": str(a.get("path") or ""), "why": why}
                     )
-                    meta = {k: v for k, v in (meta or {}).items() if k != "artifact"}
-                else:
-                    bucket = saved_by_uid.setdefault(uid, [])
-                    # 按 path 去重、留最后一条。同一个文件被存了两版时，界面上不能出现
-                    # 两条指向同一处的回执——用户点开都是一样的内容，多出来的那条是谎话。
-                    path = art.get("path")
-                    bucket[:] = [a for a in bucket if a.get("path") != path]
-                    bucket.append(art)
+                    continue
+                bucket = saved_by_uid.setdefault(uid, [])
+                # 按 path 去重、留最后一条。同一个文件被存了两版时，界面上不能出现
+                # 两条指向同一处的回执——用户点开都是一样的内容，多出来的那条是谎话。
+                path = a.get("path")
+                bucket[:] = [x for x in bucket if x.get("path") != path]
+                bucket.append(a)
+                good.append(a)
+            if good:
+                meta["artifacts"] = good  # 界面上按多条回执渲染
             q.put_nowait(("tool_result", {"name": name, "meta": meta}, uid))
-
-        usage: dict = {}
 
         async def one_pass(extra: str, tools: list | None = None) -> str:
             """跑一遍工具循环。`extra` 非空 = 这是修复那一轮，多带一句指名道姓的话。
@@ -658,6 +857,9 @@ async def _generate(req: ChatRequest):
         text = (final or "").strip()
         if not text and not saved_by_uid.get(uid):
             text = "".join(streamed_parts).strip()
+        # P3：在**任何判决之前**对一次账 —— 后面的判据里有数长度的（`long_body_…` 400 字），
+        # 剥掉标记之后正文短了几十个字符，两处口径就会对不上（账本写 435 字、落库正文 395）。
+        text = verify_citations(text)
 
         # ---- W2a：事后校验 → 有界修复（**只重试一次**）----
         # 判据在 `core/turn_quality.py` 一处（与 W1 评测同一份），这里只执行它给的动作。
@@ -679,7 +881,14 @@ async def _generate(req: ChatRequest):
             "confidence": route_decision.confidence,
             "reason": route_decision.reason,
         }
-        bad = turn_quality.findings(text, saved_by_uid.get(uid))
+        bad = turn_quality.findings(
+            text,
+            saved_by_uid.get(uid),
+            # 「嘴上删了」那一条要看的两件事：这一轮**真的调没调** `memory_delete`
+            # （按工具账数，与 W4 数 saves 同一处口径）、以及你这一轮有没有让它删。
+            tool_names=[c.get("name") for c in (turn_traces[uid].get("tool_calls") or [])],
+            ask=req.content or query_text,
+        )
         # W4：字数那一栏**记服务端数过的数**。没认预算就如实写 None（不编一个「不限」出来）。
         quality["length"] = _length_note(turn_budget, turn_traces[uid], saved_by_uid.get(uid))
         if turn_quality.should_retry(bad, req.content or query_text, route_decision.delivery):
@@ -727,7 +936,18 @@ async def _generate(req: ChatRequest):
                 text = kept_text
                 quality["repaired"] = False
                 log.warning("uid=%s 补跑之后仍然没有落盘", uid)
-            bad = turn_quality.findings(text, after)
+            # P3：补跑那一轮是新写的一篇正文，引用要重新对一次账（`stripped` 会累计，
+            # 第一遍剥掉的那几个编号不会被这一遍冲掉）。失败那一支用的是 `kept_text`，
+            # 它刚验过、这次验出来是空的——幂等，不会有副作用。
+            text = verify_citations(text)
+            bad = turn_quality.findings(
+                text,
+                after,
+                # 与上面那一处同一份事实（补跑那一轮可能真的调了 `memory_delete`，
+                # 所以这里必须重新按工具账数一次，不能沿用上一轮的结论）
+                tool_names=[c.get("name") for c in (turn_traces[uid].get("tool_calls") or [])],
+                ask=req.content or query_text,
+            )
         quality["findings"] = bad
         # 落库前再过一遍白名单：从「工具说存好了」到「把回执交给界面」中间隔了这一整轮，
         # 文件可能在半路被删/被移走（用户手动整理了 vault）。这一遍是**同一条判据的第二次
@@ -793,6 +1013,14 @@ async def _generate(req: ChatRequest):
                 if b is not None:
                     payload["uid"] = b
                 yield _sse("tool_result", payload)
+            elif kind == "citations":
+                # P3：正文里那几个编造的 `[来源 N]` 已经流到屏幕上了，这一帧带着**剥完
+                # 之后**的正文，界面拿它把气泡换掉（库里剥了、屏幕上还留着，就是两边
+                # 不一致——那比不剥更糟）。判定在服务端一处（`core/citations.py`）。
+                payload = dict(a)
+                if b is not None:
+                    payload["uid"] = b
+                yield _sse("citations", payload)
             elif kind == "quality":
                 # W2a 的两条底线校验结论。**判定在服务端一处**（`core/turn_quality.py`），
                 # 界面只负责显示 —— 让界面自己再算一遍「算不算该存没存」就是第二份实现，
@@ -1018,11 +1246,15 @@ async def _save_assistant_message(
     tokens_in: int | None = None,
     tokens_out: int | None = None,
     artifacts: list[dict] | None = None,
+    steps: list[dict] | None = None,
 ):
     """落一条助手消息，**返回新行的 id**。
 
     返回值是给界面用的：这一轮跑完时它手里那条气泡还没有后端 id，而「📄 存进产出」
     那条人工出口是按 id 存的（W2a 的兜底动作）。不把 id 给它，用户就得先刷新才能点。
+
+    `steps`（A2，2026-09-23 起）是协作那条路才有的**逐步账**：它原先只走流式事件，
+    刷新即丢；现在跟 `sources` / `artifacts` 一起落这一行，刷新后由会话接口原样送回。
     """
     async with SessionLocal() as db:
         msg = Message(
@@ -1031,6 +1263,7 @@ async def _save_assistant_message(
             content=content,
             sources_json=json.dumps(sources, ensure_ascii=False) if sources else None,
             artifacts_json=json.dumps(artifacts, ensure_ascii=False) if artifacts else None,
+            steps_json=json.dumps(steps, ensure_ascii=False) if steps else None,
             model_id=model_id,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
@@ -1047,6 +1280,22 @@ async def _save_assistant_message(
         await db.commit()
         await db.refresh(msg)
         return msg.id
+
+
+def _cite_count(quality: dict | None, key: str) -> int:
+    """从引用结论里取一个计数（P3）：`injected` 是数、`cited` 是编号列表。
+
+    **只读，不重算**：判据在 `core/citations.py` 一处。读不到就是 0 —— 这一轮没跑 RAG
+    的时候，它确实一条材料都没注入。
+    """
+    cite = (quality or {}).get("citations") or {}
+    val = cite.get(key)
+    if isinstance(val, list):
+        return len(val)
+    try:
+        return max(0, int(val or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _record_turn(
@@ -1091,6 +1340,11 @@ async def _record_turn(
                 # 重试次数从工具循环的账里来（W2a 的补跑记在这里），quality 是那两条
                 # 底线的结论。两者都是**事实**，不是评分。
                 "retried": int(trace.get("retried") or 0),
+                # P3：把引用结论从 `quality_json` 搬进正式列（`migrations._m015`）。
+                # **判据仍然只有 `citations.verify` 一处** —— 这里只是把它的两个计数
+                # 抄一遍，不重算（重算就是同一件事的第二份实现）。
+                "sources_injected": _cite_count(quality, "injected"),
+                "sources_cited": _cite_count(quality, "cited"),
                 "quality": quality or {},
             }
         )

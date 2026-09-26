@@ -163,3 +163,36 @@ async def test_router_podcast_parses_file_into_blocks(monkeypatch):
     assert out["ok"] is True
     assert seen["blocks"][0] == ("圆桌·苏格拉底老师", "先问一句")
     assert "圆桌讨论 · 圆桌播客话题" in seen["title"]
+
+
+# ---------- A2 的边界：圆桌**不给工具** ----------
+
+
+async def test_roundtable_never_reaches_the_delegate_channel(monkeypatch):
+    """A2 明文写死：**圆桌保持无工具**（`Agent升级.md` §2）。
+
+    为什么：圆桌的价值是「视角碰撞」，它自己的注释写着「圆桌是接话，不是演讲」；
+    给了工具（尤其能落盘/能委派）就变成一场小型执行，味道全变。
+
+    这条测试**行为上**钉住它：把 `delegate.run` 换成一颗地雷，圆桌照常跑完 —— 说明
+    它一步都没往委派通道走。另一半是结构性的：它的模型调用是
+    `stream_chat_fallback(candidates, messages)`，**签名里根本没有 tools**
+    （下面的替身也只接受这两个参数，多传一个就 TypeError）。
+    """
+    from app.core import delegate
+
+    _patch_dir(monkeypatch, "no-tools")
+    calls: list = []
+    monkeypatch.setattr("app.core.tasks._candidates", _fake_candidates)
+    monkeypatch.setattr(
+        "app.core.llm.stream_chat_fallback",
+        _scripted_llm(["先问一句", "说人话是", "给你个反例"], calls),
+    )
+
+    def mine(*_a, **_kw):
+        raise AssertionError("圆桌不该走 delegate 通道")
+
+    monkeypatch.setattr(delegate, "run", mine)
+    out = await core.run("不给工具的话题")
+    assert len(out["turns"]) == len(core.PERSONAS) * core.ROUNDS  # 两个人设轮次照旧跑满
+    assert all("tools" not in c for c in calls)

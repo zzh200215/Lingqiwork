@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+﻿import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
 import { api, type CardDraft, type CardKind, type CardSources, type MaterialHit } from './api'
 import { streamCardsGenerate, type CardGenStage } from './stream'
@@ -374,7 +374,7 @@ export default function CardMaker({
           )}
         </select>
         {all > shown && (
-          <p className="text-[10px] text-neutral-400">
+          <p className="text-xs text-neutral-400">
             显示 {shown} / 共 {all}，继续输入以缩小范围
           </p>
         )}
@@ -494,7 +494,7 @@ export default function CardMaker({
             className="w-full rounded-lg border border-violet-300 px-3 py-1.5 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
           >
             ＋ 添加到列表
-            <span className="ml-1.5 text-[10px] text-neutral-400">Ctrl+↵</span>
+            <span className="ml-1.5 text-xs text-neutral-400">Ctrl+↵</span>
           </button>
         </div>
       )}
@@ -527,7 +527,7 @@ export default function CardMaker({
             </button>
           </div>
           {busy && (
-            <p className="text-[10px] text-neutral-400">
+            <p className="text-xs text-neutral-400">
               首次检索要拉起向量与精排模型，约 6 秒
             </p>
           )}
@@ -541,26 +541,26 @@ export default function CardMaker({
                   {h.title}
                 </span>
                 {h.cards > 0 && (
-                  <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                  <span className="text-xs text-amber-600 dark:text-amber-400">
                     已有 {h.cards} 张
                   </span>
                 )}
-                {h.score != null && <span className="text-[10px] text-neutral-400">{h.score}</span>}
+                {h.score != null && <span className="text-xs text-neutral-400">{h.score}</span>}
               </div>
-              <p className="line-clamp-3 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+              <p className="line-clamp-3 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                 {h.text.slice(0, 160)}
               </p>
               <div className="mt-1.5 flex gap-2">
                 <button
                   onClick={() => void loadHit(h, false)}
-                  className="text-[11px] text-violet-600 hover:underline dark:text-violet-300"
+                  className="text-xs text-violet-600 hover:underline dark:text-violet-300"
                 >
                   载入片段
                 </button>
                 {h.spec && (
                   <button
                     onClick={() => void loadHit(h, true)}
-                    className="text-[11px] text-violet-600 hover:underline dark:text-violet-300"
+                    className="text-xs text-violet-600 hover:underline dark:text-violet-300"
                   >
                     载入整篇
                   </button>
@@ -573,7 +573,7 @@ export default function CardMaker({
 
       {(mode === 'clip' || mode === 'search') && clipText && (
         <>
-          <p className="truncate text-[10px] text-neutral-400" title={clipSource}>
+          <p className="truncate text-xs text-neutral-400" title={clipSource}>
             面板材料：{clipSource || '（无来源）'}
           </p>
           <pre
@@ -597,7 +597,7 @@ export default function CardMaker({
               {busy ? STAGE_TEXT[stage] || '处理中…' : '🤖 就这段出卡'}
             </button>
             {genLimit > 0 && clipText.length > genLimit && (
-              <span className="self-center text-[10px] text-amber-600 dark:text-amber-400">
+              <span className="self-center text-xs text-amber-600 dark:text-amber-400">
                 出卡只会用前 {genLimit} 字（挖空不受限）
               </span>
             )}
@@ -652,15 +652,15 @@ export default function CardMaker({
                   <div className="min-w-0 flex-1">
 
                     <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] ${KIND_CLS[c.kind]}`}>
+                      <span className={`rounded px-1.5 py-0.5 text-xs ${KIND_CLS[c.kind]}`}>
                         {KIND_LABEL[c.kind]}
                       </span>
                       {c.origin === 'manual' && (
-                        <span className="text-[10px] text-neutral-400">手工</span>
+                        <span className="text-xs text-neutral-400">手工</span>
                       )}
-                      {c.topic && <span className="text-[10px] text-neutral-400">#{c.topic}</span>}
+                      {c.topic && <span className="text-xs text-neutral-400">#{c.topic}</span>}
                       {c.duplicate_of != null && (
-                        <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                        <span className="text-xs text-amber-600 dark:text-amber-400">
                           疑似重复
                           {c.similarity != null ? `（${c.similarity}）` : ''}
                           {c.duplicate_of === -1 ? ' · 同批内' : ''}
@@ -668,7 +668,7 @@ export default function CardMaker({
                       )}
                       <button
                         onClick={() => setEditing(editing === i ? null : i)}
-                        className="ml-auto text-[10px] text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
+                        className="ml-auto text-xs text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
                       >
                         {editing === i ? '收起' : '编辑'}
                       </button>
@@ -692,7 +692,7 @@ export default function CardMaker({
                       <>
                         <p className="whitespace-pre-wrap text-[13px] leading-relaxed">{c.front}</p>
                         <details className="mt-1">
-                          <summary className="cursor-pointer text-[10px] text-neutral-400">
+                          <summary className="cursor-pointer text-xs text-neutral-400">
                             答案
                           </summary>
                           <p className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-600 dark:text-neutral-300">

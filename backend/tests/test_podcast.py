@@ -3,7 +3,6 @@ full generation flow over fake LLM/TTS seams. No network, no real voices.
 """
 import atexit
 import json
-import os
 import shutil
 import struct
 import sys
@@ -14,14 +13,6 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, ".")
-
-# 必须在 import app 之前绑到临时库：本模块以前从不设 env，靠套件里别的测试
-# 先导入 app 才碰巧没事——单独跑就会把引擎绑到默认库上去。
-_POD_TMP = Path(tempfile.mkdtemp(prefix="wb-podcast-", dir=Path(__file__).parent))
-atexit.register(lambda: shutil.rmtree(_POD_TMP, ignore_errors=True))
-os.environ["WB_DB_PATH"] = str(_POD_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_POD_TMP / "config.json")
-os.environ["WB_CHROMA_PATH"] = str(_POD_TMP / "chroma")
 
 from app.core import podcast
 

@@ -730,15 +730,20 @@ async def check(
     model_id: str = "",
     generate: Callable[[str, list[dict]], Awaitable[str]] | None = None,
     save: bool = True,
+    cancel_key: str = "",
 ) -> dict:
     """跑一次对照。
 
     `variant` 为空 = 重放**已登记的内容**（跑基线/回归）；给了就是拿一段候选内容比一比。
     候选内容不进配置、不进登记表——它只出现在这一次的 run 记录里，供复算与审阅。
+
+    `cancel_key` 非空 = 这一趟**可被取消**（合作式：每条用例之间查一次，见 `core/inflight`）。
+    HTTP 层传 `prompt-eval:<key>`；内部调用方不传，就不查——一次纯函数式的跑分不该
+    因为进程里别处的状态而半路停下。
     """
     import hashlib
 
-    from app.core import providers, tutor
+    from app.core import inflight, providers, tutor
 
     entry = _entry(key)
     fx = cases_for(key)
@@ -763,7 +768,13 @@ async def check(
 
     started = time.time()
     rows: list[dict] = []
+    stopped = False
     for case in cases:
+        # 每条用例之间查一次：一次生成动辄几十秒，所以停下来的粒度是「当前这条跑完」。
+        # 界面上因此写「正在停…（这一条跑完就停）」，不写「已停止」。
+        if cancel_key and inflight.cancel_requested(cancel_key):
+            stopped = True
+            break
         names = [str(n) for n in (case.get("checks") or [])]
         # 重放走产品自己那条路：同 build_messages、同 stream 缝，空上下文（无召回/材料/画像）。
         # 这条边界要写在报告里——上下文会显著改变行为（upgrade-plan 缺口五：0/4 vs 15/16）。
@@ -789,6 +800,40 @@ async def check(
                 "error": err,
             }
         )
+
+    if stopped:
+        # **半趟跑分不落记录、也不给区间。** 「跑分」这个数的全部意义是「这一版内容在
+        # 一整套用例上怎么样」；跑了一半的 k/n 会被读成「变差了」，而它只是被打断了
+        # ——那正是质量闭环最怕的污染。已经跑完的那几条照原样返回：点了停止的人该看见
+        # 「停在哪一条」，而不是一片空白。
+        done = len(rows)
+        return {
+            "key": key,
+            "module": entry.module,
+            "purpose": entry.purpose,
+            "kind": entry.kind,
+            "prompt_sha": entry.sha,
+            "variant_sha": variant_sha,
+            "variant_label": variant_label.strip()[:60],
+            "model_id": model_id,
+            "cases": rows,
+            "total": done,
+            "planned": len(cases),
+            "passed": sum(1 for r in rows if r["passed"]),
+            "rate": None,
+            "ci": None,
+            "tell": False,
+            "assertions": {
+                "total": sum(len(r["checks"]) for r in rows),
+                "failed": sum(len(r["failed"]) for r in rows),
+            },
+            "seconds": round(time.time() - started, 1),
+            "calls": done,
+            "baseline": None,
+            "flips": [],
+            "stopped": True,
+            "context": "空上下文（无召回 / 无材料 / 无画像）——上下文会显著改变行为",
+        }
 
     passed = sum(1 for r in rows if r["passed"])
     total = len(rows)

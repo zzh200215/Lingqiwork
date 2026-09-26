@@ -342,6 +342,237 @@ async def test_v14_renames_the_old_thread_kind_in_rows_already_written():
     assert [(k, r) for k, r in rows] == [("session", "7"), ("card", "9")]  # 只改那一个值
 
 
+async def test_v15_opens_the_two_citation_columns_on_an_old_ledger():
+    """v15（P3）：回合账本加 `sources_injected` / `sources_cited`。
+
+    这两个数原本挤在 `quality_json` 里（P2 的零迁移做法，那时就写明「P3 开正式列时再搬」）
+    —— 而它们是**要聚合的两个计数**，挂在 JSON 里只能一行行读出来自己数。这里盯的是：
+    老库补上这两列、**老行的默认值是 0 而不是 NULL**（`turn_trace._view` 会把它读成 int）。
+    """
+    await _reset_db()
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE turn_traces"))
+        await conn.execute(
+            text(
+                "CREATE TABLE turn_traces ("
+                "id INTEGER PRIMARY KEY, model_id TEXT, answer_chars INTEGER, error TEXT)"
+            )
+        )
+    out = await mig.run()
+    assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+    async with engine.begin() as conn:
+        await conn.execute(text("INSERT INTO turn_traces (model_id, answer_chars) VALUES ('m', 12)"))
+        cols = {
+            r["name"]: r
+            for r in (await conn.execute(text("PRAGMA table_info(turn_traces)"))).mappings()
+        }
+        row = (await conn.execute(text("SELECT sources_injected, sources_cited FROM turn_traces"))).first()
+    assert "sources_injected" in cols and "sources_cited" in cols
+    assert (row[0], row[1]) == (0, 0), "老行要落到 0（那时候确实没注入过），不是 NULL"
+    for col in ("sources_injected", "sources_cited"):
+        assert cols[col]["dflt_value"] == "0"
+
+
+async def test_v16_opens_the_sub_trace_column_on_an_old_ledger():
+    """v16（A1）：回合账本加 `sub_traces_json`（这一轮委托出去的子代理）。
+
+    **为什么它必须是列**：`turn_trace._write` 是逐字段映射列的，往草稿里塞新键会被**静默
+    丢掉**（P2 那轮记过这个坑）。A1 的验收要「sub_trace 抽查」，丢掉就等于没记。
+    老行补 `[]`：这个功能上线之前没有委托这件事，空数组是事实。
+    """
+    await _reset_db()
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE turn_traces"))
+        await conn.execute(
+            text("CREATE TABLE turn_traces (id INTEGER PRIMARY KEY, model_id TEXT, error TEXT)")
+        )
+    out = await mig.run()
+    assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+    async with engine.begin() as conn:
+        await conn.execute(text("INSERT INTO turn_traces (model_id) VALUES ('m')"))
+        cols = {
+            r["name"]: r
+            for r in (await conn.execute(text("PRAGMA table_info(turn_traces)"))).mappings()
+        }
+        row = (await conn.execute(text("SELECT sub_traces_json FROM turn_traces"))).first()
+    assert "sub_traces_json" in cols
+    assert (row[0] or "") in ("[]", ""), "老行要落到空数组（那时候确实没有委托）"
+
+
+async def test_v17_turns_the_agent_tool_switch_into_a_whitelist():
+    """v17（A2）：`agents.tools_enabled`（布尔）→ `agents.tool_whitelist`（文本白名单）。
+
+    **重建表是这一步唯一的路**（SQLite 没有 `ALTER COLUMN`），所以最该钉住的是
+    **旧值的映射**：`true`（用工具）→ `''`（不限制）、`false`（不用工具）→ `'none'`
+    （一个都不给）。映射反了，用户已经配好的「这个 agent 不许用工具」会**静默变成全开**。
+    另外钉住：表重建之后**数据一行都不许丢**（id / 名字 / 人设 / 模型 / 开关都在）。
+    """
+    await _reset_db()
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE agents"))
+        # 老表的样子**照实写**：agents 从来没有进过 v1 那张 `LEGACY_COLUMNS`（它是
+        # `create_all` 建的），所以 `created_at` 一直是 NOT NULL。测试夹具要是把它写成
+        # 可空，就会造出一个真库里不存在的场景，再拿它去要求迁移将就——那是自己骗自己。
+        await conn.execute(
+            text(
+                "CREATE TABLE agents ("
+                " id INTEGER NOT NULL PRIMARY KEY, name VARCHAR(50) NOT NULL UNIQUE,"
+                " avatar VARCHAR(8) NOT NULL, system_prompt TEXT NOT NULL,"
+                " model_id VARCHAR(100) NOT NULL, use_rag BOOLEAN NOT NULL,"
+                " tools_enabled BOOLEAN NOT NULL, enabled BOOLEAN NOT NULL,"
+                " created_at DATETIME NOT NULL)"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO agents (id, name, avatar, system_prompt, model_id, use_rag,"
+                " tools_enabled, enabled, created_at) VALUES"
+                " (1, '全开', '🤖', '你随便用', 'p/m', 1, 1, 1, '2026-09-01 10:00:00'),"
+                " (2, '纯写手', '✍️', '你只写字', '', 0, 0, 1, '2026-09-02 11:00:00')"
+            )
+        )
+    out = await mig.run()
+    assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+    async with engine.begin() as conn:
+        cols = {
+            r["name"] for r in (await conn.execute(text("PRAGMA table_info(agents)"))).mappings()
+        }
+        rows = (
+            await conn.execute(
+                text("SELECT id, name, avatar, system_prompt, model_id, use_rag, tool_whitelist, enabled"
+                     " FROM agents ORDER BY id")
+            )
+        ).all()
+    assert "tool_whitelist" in cols and "tools_enabled" not in cols
+    assert [tuple(r) for r in rows] == [
+        (1, "全开", "🤖", "你随便用", "p/m", 1, "", 1),
+        (2, "纯写手", "✍️", "你只写字", "", 0, "none", 1),
+    ], "旧布尔值要一一对应地搬过去：true → ''（不限制）、false → 'none'（一个都不给）"
+
+
+async def test_v17_is_a_no_op_on_a_fresh_db():
+    """新库走 `create_all` 时列已经是文本 —— 迁移必须**什么都不做**（幂等）。
+
+    这条是「重建表」最危险的地方：真库里若已经有 `tool_whitelist`，再重建一次就会把
+    列类型/默认值换掉，或者撞 `table agents_new already exists`。
+    """
+    await _reset_db()  # create_all 建的是新结构：已经有 tool_whitelist
+    out = await mig.run()
+    assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+    # 走 ORM 插一行（真实路径就是这样）：默认值由模型给，裸 SQL 得自己把每列都写上
+    from app.db import SessionLocal
+    from app.models import Agent
+
+    async with SessionLocal() as db:
+        db.add(Agent(name="新库的"))
+        await db.commit()
+        row = (await db.execute(text("SELECT tool_whitelist FROM agents WHERE name = '新库的'"))).first()
+    assert (row[0] or "") == ""  # 默认不限制
+
+
+def test_v18_adds_the_step_ledger_column_to_messages():
+    """v18（A2）：`messages.steps_json` —— 协作的逐步账进会话。
+
+    只加列（SQLite 的 `ADD COLUMN`），所以最该钉的是两件事：**老行原样还在**、
+    新列是 **NULL**。NULL 不是「空账」而是「那时候没有」——界面据此**不渲染那一栏**，
+    而不是画一个 0 步的空壳（同 `sources` / `artifacts` 的口径）。
+    """
+    async def run() -> tuple[set[str], object]:
+        await _reset_db()
+        async with engine.begin() as conn:
+            # 老表的样子**照实写**：那时没有 steps_json
+            await conn.execute(text("DROP TABLE messages"))
+            await conn.execute(
+                text(
+                    "CREATE TABLE messages ("
+                    " id INTEGER NOT NULL PRIMARY KEY, conversation_id INTEGER NOT NULL,"
+                    " role VARCHAR(20) NOT NULL, content TEXT NOT NULL,"
+                    " sources_json TEXT, artifacts_json TEXT, model_id VARCHAR(100),"
+                    " feedback VARCHAR(4), tokens_in INTEGER, tokens_out INTEGER,"
+                    " created_at DATETIME NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO messages (id, conversation_id, role, content, created_at)"
+                    " VALUES (1, 1, 'assistant', '老的一条', '2026-09-01 10:00:00')"
+                )
+            )
+        out = await mig.run()
+        assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+        async with engine.begin() as conn:
+            cols = {
+                r["name"]
+                for r in (await conn.execute(text("PRAGMA table_info(messages)"))).mappings()
+            }
+            row = (
+                await conn.execute(text("SELECT content, steps_json FROM messages WHERE id = 1"))
+            ).first()
+        return cols, row
+
+    cols, row = asyncio.run(run())
+    assert "steps_json" in cols, "迁移没把列加上"
+    assert row[0] == "老的一条", "老行没保住"
+    assert row[1] is None, "老行的新列该是 NULL（不是空账）"
+
+
+def test_v19_turns_the_prompt_table_into_a_library():
+    """v19（提示词模块）：`prompts` 扩成库，另加版本与使用两张表。
+
+    这个库最要紧的性质是**老行一条都不丢**——扩列是 SQLite 的 `ADD COLUMN`，
+    而对话页那个 `/` 唤起读的就是这些老行。同时钉住新列**不是 NULL**：
+    文本列用「空字符串 = 没填」，不让 NULL 同时表达「没填」和「迁移补的」——
+    两种含义混在一列里，界面就分不出「他没打标签」和「这列是后加的」。
+    """
+    async def run() -> tuple[set[str], object, set[str]]:
+        await _reset_db()
+        async with engine.begin() as conn:
+            # 老表的样子**照实写**：那时只有四列，两张新表也当作不存在
+            await conn.execute(text("DROP TABLE prompts"))
+            await conn.execute(text("DROP TABLE prompt_versions"))
+            await conn.execute(text("DROP TABLE prompt_usages"))
+            await conn.execute(
+                text(
+                    "CREATE TABLE prompts ("
+                    " id INTEGER NOT NULL PRIMARY KEY, title VARCHAR(100) NOT NULL,"
+                    " content TEXT NOT NULL, created_at DATETIME NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO prompts (id, title, content, created_at)"
+                    " VALUES (1, '老的一条', '你好 {名字}', '2026-09-01 10:00:00')"
+                )
+            )
+        out = await mig.run()
+        assert [m["version"] for m in out["applied"]] == [m.version for m in mig.MIGRATIONS]
+        async with engine.begin() as conn:
+            cols = {
+                r["name"]
+                for r in (await conn.execute(text("PRAGMA table_info(prompts)"))).mappings()
+            }
+            row = (
+                await conn.execute(
+                    text("SELECT title, content, tags, favorite, rating FROM prompts WHERE id = 1")
+                )
+            ).first()
+            tables = {
+                r[0]
+                for r in await conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table'")
+                )
+            }
+        return cols, row, tables
+
+    cols, row, tables = asyncio.run(run())
+    for col in ("updated_at", "tags", "category", "favorite", "rating", "source", "note"):
+        assert col in cols, f"迁移没把 {col} 加上"
+    assert row[0] == "老的一条" and row[1] == "你好 {名字}", "老行没保住（`/` 唤起读的就是它）"
+    assert row[2] == "", "新列 tags 该是空串，不是 NULL"
+    assert row[3] == 0 and row[4] == 0, "favorite / rating 该是 0，不是 NULL"
+    assert {"prompt_versions", "prompt_usages"} <= tables, "两张新表没建出来"
+
+
 def test_status_reports_where_the_db_is():
     async def run() -> dict:
         await _reset_db()

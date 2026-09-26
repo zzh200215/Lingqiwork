@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Brain, ChevronDown, Moon, Search, Sun } from 'lucide-react'
 
@@ -34,7 +34,7 @@ function ThemeToggle() {
 function Logo() {
   return (
     <Link to="/" title="回对话" className="flex items-center gap-2">
-      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
+      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
         <Brain className="h-[18px] w-[18px]" />
       </div>
       <span className="text-[15px] font-semibold tracking-tight">AI 工作台</span>
@@ -65,7 +65,7 @@ function Chevron({ open }: { open: boolean }) {
   return (
     <ChevronDown
       aria-hidden="true"
-      className={`h-3.5 w-3.5 transition-transform ${open ? '' : '-rotate-90'}`}
+      className={`h-4 w-4 transition-transform ${open ? '' : '-rotate-90'}`}
     />
   )
 }
@@ -122,17 +122,17 @@ function TopBar({ page, onOpenSearch }: { page: string; onOpenSearch: () => void
         onClick={onOpenSearch}
         data-topbar-search=""
         title="全局搜索（Ctrl+K）"
-        className="flex h-9 items-center gap-2 rounded-xl border border-neutral-200/80 bg-white/60 px-3 text-sm text-neutral-400 transition-colors hover:border-violet-300 hover:text-neutral-600 dark:border-neutral-700/70 dark:bg-neutral-800/40 dark:hover:border-violet-500/40 dark:hover:text-neutral-300"
+        className="flex h-9 items-center gap-2 rounded-md border border-neutral-200/80 bg-white/60 px-3 text-sm text-neutral-400 transition-colors hover:border-violet-300 hover:text-neutral-600 dark:border-neutral-700/70 dark:bg-neutral-800/40 dark:hover:border-violet-500/40 dark:hover:text-neutral-300"
       >
         <Search className="h-4 w-4" />
         <span className="hidden md:inline">搜索</span>
-        <kbd className="hidden rounded-md border border-neutral-200 px-1.5 py-0.5 text-[10px] dark:border-neutral-700 md:inline">
+        <kbd className="hidden rounded-md border border-neutral-200 px-1.5 py-0.5 text-xs dark:border-neutral-700 md:inline">
           Ctrl K
         </kbd>
       </button>
       <span
         data-topbar-page={page}
-        className="hidden text-[11px] tabular-nums text-neutral-300 sm:block dark:text-neutral-600"
+        className="hidden text-xs tabular-nums text-neutral-300 sm:block dark:text-neutral-600"
       >
         数据不出本机
       </span>
@@ -207,7 +207,7 @@ export default function Layout() {
               if (page === 'chat') window.dispatchEvent(new Event('workbench:new-chat'))
               else navigate('/?new=1')
             }}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 hover:brightness-110 dark:shadow-violet-900/60 dark:hover:shadow-violet-700/60"
+            className="flex w-full items-center justify-center gap-1.5 rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 hover:brightness-110 dark:shadow-violet-900/60 dark:hover:shadow-violet-700/60"
           >
             <span className="text-base leading-none">＋</span> 新对话
           </button>
@@ -223,17 +223,17 @@ export default function Layout() {
               const chip = GROUP_CHIP[g.key] ?? GROUP_CHIP.settings
               const GroupIcon = g.icon
               const groupCls = inGroup
-                ? 'bg-violet-50 font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
+                ? 'bg-neutral-100 font-medium text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
                 : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
               return (
                 <div key={g.key} className="relative">
                   {inGroup ? (
                     <span
                       aria-hidden="true"
-                      className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-violet-500"
+                      className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-neutral-400 dark:bg-neutral-500"
                     />
                   ) : null}
-                  <div className={`flex items-center rounded-xl ${groupCls}`}>
+                  <div className={`flex items-center rounded-md ${groupCls}`}>
                     <Link
                       to={g.href}
                       data-nav-group={g.key}
@@ -241,7 +241,7 @@ export default function Layout() {
                       className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-sm"
                     >
                       <span className={`wb-chip h-6 w-6 rounded-lg ${chip.bg} ${chip.fg}`}>
-                        <GroupIcon className="h-3.5 w-3.5" />
+                        <GroupIcon className="h-4 w-4" />
                       </span>
                       <span className="truncate">{g.label}</span>
                     </Link>
@@ -271,11 +271,11 @@ export default function Layout() {
                             data-nav-active={i.href === active.href ? '1' : undefined}
                             className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-[13px] transition-colors ${
                               i.href === active.href
-                                ? 'bg-violet-50 font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
+                                ? 'bg-neutral-100 font-medium text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
                                 : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
                             }`}
                           >
-                            <ItemIcon className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                            <ItemIcon className="h-4 w-4 shrink-0 text-neutral-400" />
                             <span className="truncate">{i.label}</span>
                           </Link>
                         )
@@ -289,7 +289,7 @@ export default function Layout() {
 
           {page !== 'chat' && conversations.length > 0 && (
             <div className="mt-4 border-t border-neutral-200/80 px-3 pt-3 dark:border-neutral-800/80">
-              <p className="px-3 pb-1.5 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+              <p className="px-3 pb-1.5 text-xs font-medium uppercase tracking-wider text-neutral-400">
                 最近对话
               </p>
               <nav className="flex flex-col gap-0.5">
@@ -314,7 +314,7 @@ export default function Layout() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">本地用户</p>
-              <p className="text-[11px] text-neutral-400">数据不出本机</p>
+              <p className="text-xs text-neutral-400">数据不出本机</p>
             </div>
           </div>
         </div>

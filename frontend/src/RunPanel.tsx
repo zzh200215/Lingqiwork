@@ -43,6 +43,7 @@ export default function RunPanel({
   actions,
   onCancel,
   onRetry,
+  cancelLabel = '停止',
   footer,
   children,
 }: {
@@ -58,15 +59,29 @@ export default function RunPanel({
   actions?: ReactNode
   onCancel?: () => void
   onRetry?: () => void
+  /** 「取消」那颗按钮的字。默认「停止」。
+   *
+   *  **为什么允许改**：不是每一次取消都是真停。流式接口上掐请求 = 服务端生成器被取消
+   *  （真停）；一次性 POST 上掐请求只是「我不等了」——**服务端照样跑完、照样花那份钱**。
+   *  给它也写「停止」就是撒谎，而这一页的规矩是「读不到就说读不到」。
+   *  真能停的（`prompt_eval` / `skill_eval` 那两条合作式取消的路）保持默认。 */
+  cancelLabel?: string
   /** 成品态的底部（反馈按钮等），与正文间有分隔线 */
   footer?: ReactNode
   children?: ReactNode
 }) {
   const running = phase === 'planning' || phase === 'progress' || phase === 'streaming'
   return (
-    <div className={`rounded-xl border p-4 ${TONES[tone]}`}>
+    <div
+      className={`rounded-md border p-4 ${TONES[tone]}`}
+      /* `data-phase`：**测试锚点**。对长任务的断言原来只能钉中文文案（「取材中…」
+         之类），改一句措辞就红一片，而红的理由看起来像功能坏了。
+         阶段是**状态**、文案是**表达**——断言钉在状态上，两边各自能改。 */
+      data-phase={phase}
+      data-run-panel={title}
+    >
       <div className="flex items-center justify-between gap-2 pb-1">
-        <p className={`text-[11px] font-medium uppercase tracking-wider ${TEXT[tone]}`}>
+        <p className={`text-xs font-medium uppercase tracking-wider ${TEXT[tone]}`}>
           {icon} {title}
         </p>
         <div className="flex items-center gap-1.5">
@@ -74,15 +89,15 @@ export default function RunPanel({
           {running && onCancel ? (
             <button
               onClick={onCancel}
-              className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-rose-300 hover:text-rose-600 dark:border-neutral-700 dark:hover:border-rose-500/40"
+              className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-rose-300 hover:text-rose-600 dark:border-neutral-700 dark:hover:border-rose-500/40"
             >
-              停止
+              {cancelLabel}
             </button>
           ) : null}
           {phase === 'error' && onRetry ? (
             <button
               onClick={onRetry}
-              className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${TEXT[tone]} border-current/30 hover:bg-white/60 dark:hover:bg-neutral-900/40`}
+              className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${TEXT[tone]} border-current/30 hover:bg-white/60 dark:hover:bg-neutral-900/40`}
             >
               重试
             </button>
@@ -91,10 +106,10 @@ export default function RunPanel({
       </div>
 
       {phase === 'error' && error ? (
-        <p className="text-[11px] text-rose-600 dark:text-rose-400">{error}</p>
+        <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>
       ) : null}
       {running && status ? (
-        <p className="text-[11px] text-neutral-500 dark:text-neutral-400">{status}</p>
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">{status}</p>
       ) : null}
 
       {children ? <div className={running ? 'pt-1' : ''}>{children}</div> : null}

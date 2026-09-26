@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+﻿import type { ReactNode } from 'react'
 
 /** 语义色，与 RunPanel 一套：坏 / 注意 / 好 / 中性。 */
 const TONE: Record<NonNullable<StatItem['tone']>, string> = {
@@ -32,7 +32,7 @@ export default function StatRow({
   className?: string
 }) {
   return (
-    <div className={`flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px] ${className ?? ''}`}>
+    <div className={`flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs ${className ?? ''}`}>
       {items.map((it, i) => (
         <span
           key={i}

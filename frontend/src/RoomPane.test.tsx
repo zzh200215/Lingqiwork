@@ -1,10 +1,10 @@
-// 小屋（P4）：屋里摆着什么、今天喂了它什么、架上那几份产出。
+﻿// 小屋（P4）：屋里摆着什么、今天喂了它什么、架上那几份产出。
 //
 // 两条最该被钉住的不是渲染，是**语气**：
 // 1. 每件东西标的是「到手那天」，不是「最近更新」；
 // 2. 屋里空着 / 今天没吃东西时，说的是实话，**没有「还差 N 件」「它饿了」这种欠账口吻**。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import RoomPane from './RoomPane'
@@ -377,7 +377,12 @@ describe('RoomPane · 屋里的零柒', () => {
     expect(await screen.findByText('刚写的')).toBeTruthy()
     expect(screen.getByText('2 分钟前')).toBeTruthy()
     expect(screen.getByText('2026-09-07')).toBeTruthy() // 旧的照旧写日期
-    expect(screen.queryByText('7 天前')).toBeNull()
+    // **断言只该管这一行**：原版写的是「整屏不该出现『7 天前』」，而这一页别处（技能卡）
+    // 渲染的是 `ago()`——它的夹具日期是写死的 ISO（`2026-09-15`），于是日历走过第 7 天
+    // 时这条断言自己变红（2026-09-22 撞到）。它要钉的是「**这条旧的**回到日期」。
+    const row = screen.getByText('上周的').closest('li')
+    expect(row).toBeTruthy()
+    expect(within(row as HTMLElement).queryByText(/天前|小时前|刚刚/)).toBeNull()
   })
 
   it('待在这一页的时候会自己重取：后台交出一份成品，屋里当场多一件', async () => {
@@ -551,7 +556,7 @@ describe('RoomPane · 它学会的技能', () => {
     expect(card.textContent).toContain('25%')
     expect(card.textContent).toContain('7–59%') // 区间照直写，不做四舍五入的美化
     // 点开就是那一条的对照台
-    expect(card.getAttribute('href')).toBe('/work?tab=lab&prompt=FEYNMAN_PROMPT')
+    expect(card.getAttribute('href')).toBe('/work?tab=prompt&prompt=FEYNMAN_PROMPT')
   })
 
   it('一张卡都没有时说清楚路径，不摆空位也不催', async () => {

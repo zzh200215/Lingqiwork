@@ -10,7 +10,6 @@ WB_* 环境变量在导入 app 前设置；vault/索引/记忆全部落在项目
 import asyncio
 import atexit
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -19,9 +18,6 @@ from pathlib import Path
 sys.path.insert(0, ".")
 
 _TMP = Path(tempfile.mkdtemp(prefix="wb-mcpserver-", dir=Path(__file__).parent))
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
-os.environ["WB_CHROMA_PATH"] = str(_TMP / "chroma")
 
 
 def _cleanup() -> None:

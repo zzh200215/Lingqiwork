@@ -3,20 +3,9 @@
 零柒真的能做事的那一半——工具声明从哪来、白名单怎么过滤、模型调它走的是不是和
 你在面板里点一下**同一条路**。不需要模型：`call_tool` 是纯后端行为。
 """
-import atexit
-import os
-import shutil
 import sys
-import tempfile
-from pathlib import Path
 
 sys.path.insert(0, ".")
-
-_TMP = Path(tempfile.mkdtemp(prefix="wb-pettools-", dir=Path(".").resolve()))
-atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
-
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 
 from app.core import pet_plugins as pp  # noqa: E402
 from app.core.mcp import mcp_manager, take_tool_meta  # noqa: E402
@@ -226,3 +215,24 @@ async def test_the_whitelist_also_filters_the_builtin_tools():
     await _tables()
     specs = await _pet_tools({"pet_tools": ["kb_search", "pet_water_drink"]})
     assert names(specs) == {"kb_search", "pet_water_drink"}
+
+
+# ---------- 破坏性工具：零柒与 chat 用**同一条**口头授权规则（§4.1 ①，2026-09-22） ----------
+
+
+async def test_zero_seven_only_gets_the_delete_tool_when_you_ask():
+    """默认那套白名单里本来就没有 `memory_delete`，但白名单是**用户可以自己改的**——
+    所以"能不能删"不能只靠默认值说话：明说了才给，没明说就算白名单里有也不给。
+
+    这条与 `test_destructive_gate.py` 里 chat 那条是**同一个判据的两条路**：分叉的那天，
+    两条路的行为会不一样而没人发现。
+    """
+    await _tables()
+    prefs = {"pet_tools": ["memory_list", "memory_delete"]}
+
+    plain = names(await _pet_tools(prefs, ask="今天心情不错"))
+    assert "memory_delete" not in plain, "没让我删，零柒手里不该有那只手"
+    assert "memory_list" in plain, "只拦破坏性的那一个"
+
+    asked = names(await _pet_tools(prefs, ask="忘掉那条关于早睡的偏好"))
+    assert "memory_delete" in asked, "明说了要忘掉，工具得给"

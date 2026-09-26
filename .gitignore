@@ -34,3 +34,6 @@ Thumbs.db
 # damaged git history kept as backup (not tracked)
 .git.corrupt*/
 .zcode/
+
+# 一次性探针残留（_p1.txt / _p2.txt …）
+_p*.txt

@@ -10,10 +10,8 @@ import {
   BookOpen,
   Bot,
   Brain,
-  Cpu,
   Database,
   FileOutput,
-  FlaskConical,
   FolderKanban,
   Gauge,
   GitBranch,
@@ -29,9 +27,9 @@ import {
   Plug,
   Podcast,
   School,
+  ScrollText,
   Settings,
   Settings2,
-  Shapes,
   Sprout,
   Sunrise,
   Target,
@@ -45,7 +43,7 @@ import {
 // 2026-09-18：从「五个平铺的大区」改成**可展开的分组**。上一版的毛病是
 // 「功能全藏在页面里的标签栏里」——工作页六个标签、零柒五个、设置七个，而侧栏只看得见五个字。
 // 现在每个模块的子功能就摆在它下面，**页面里那套标签栏已经删掉**（侧栏是唯一入口），
-// 但**地址一个都没改**：`?tab=` / `?section=` 照旧，旧书签、深链、`/threads` → `/work?tab=follow`
+// 但**地址一个都没改**：`?tab=` / `?section=` 照旧，旧书签、深链、`/threads` → `/work?tab=thread`
 // 那条重定向都不破。
 //
 // 标签与图标也**只写在这里**：页面从下面这几个常量里取自己的 key 与文案，
@@ -76,14 +74,56 @@ export const TUTOR_TABS = [
 export type TutorTab = (typeof TUTOR_TABS)[number]['key']
 
 export const WORK_TABS = [
-  { key: 'output', label: '产出', icon: FileOutput },
-  { key: 'engine', label: '引擎', icon: Cpu },
-  { key: 'lab', label: '实验室', icon: FlaskConical },
-  { key: 'form', label: '形态', icon: Shapes },
-  { key: 'dispatch', label: '调度台', icon: Workflow },
-  { key: 'follow', label: '跟进', icon: GitBranch },
+  // 四个**业务域**（2026-09-25 定稿方案 §一）：一个页面一个主题，名字一看就懂。
+  // 上一版是五个（产出/提示词/自动化/评测/事项），这一版把「评测」并进了「提示词」——
+  // 攒提示词、拿它对照、量它好不好，本来就是一件事的三步，分开摆反而要来回切。
+  { key: 'report', label: '报告', icon: FileOutput },
+  // 「提示词」= 你自己攒的提示词库（参照 AI Gist）。它**不是**「系统提示词登记表」
+  // ——那一份驱动本项目的行为、有 sha、改它要过验收；这一份是你的资产，随你改。
+  { key: 'prompt', label: '提示词', icon: ScrollText },
+  // 工作流 = 原「引擎」+「调度台」：链的**定义**与它的**运行**同屏，不再分两处。
+  { key: 'workflow', label: '工作流', icon: Workflow },
+  { key: 'thread', label: '事项', icon: GitBranch },
 ] as const
 export type WorkTab = (typeof WORK_TABS)[number]['key']
+
+/** 旧 `?tab=` key → 新域名。
+ *
+ *  **这是「地址兼容」那一层**，不是可有可无的别名表：`?tab=` 是老书签、深链、
+ *  跨模块外链的**唯一入口**，改了 key 而不管旧地址，等于把攒下的链接全废掉。
+ *
+ *  它与 `REDIRECTS` **不是一回事**：那个是**路径级**的（键是 `/threads` 这种路径），
+ *  而 `?tab=` 是**查询参数**——前端从来没有过查询级别的别名层，这一层是新建的。
+ *
+ *  **表里同时留着「上上版」和「上一版」两代旧名**：`output/engine/lab/form/dispatch/follow`
+ *  是最早的六个技术构件名，`deliver/automation/eval` 是 2026-09-24 那版五个业务域的名字。
+ *  两代都得认，否则 9-24 那天存下的书签会在 9-25 失效。 */
+export const WORK_TAB_ALIAS: Record<string, WorkTab> = {
+  // 最早那六个
+  output: 'report',
+  engine: 'workflow',
+  dispatch: 'workflow',
+  lab: 'prompt',
+  form: 'prompt',
+  follow: 'thread',
+  // 2026-09-24 那五个（deliver/automation/eval 本轮改名；prompt/thread 没动）
+  deliver: 'report',
+  automation: 'workflow',
+  eval: 'prompt',
+}
+
+/** 把 URL 上那个 tab 值认成新 key：认识就直接用，不认识查别名，都不认识就是 null。
+ *
+ *  **侧栏高亮与页面必须走同一个函数。** 各算一份的那天就会出现「侧栏亮着 A、
+ *  页面停在 B」——`routes.test.ts` 开头那段话点名的就是这个，而且没人会收到报错。 */
+export function resolveWorkTab(raw: string | null): WorkTab | null {
+  if (!raw) return null
+  return (
+    (WORK_TABS.find((t) => t.key === raw)?.key as WorkTab | undefined) ??
+    WORK_TAB_ALIAS[raw] ??
+    null
+  )
+}
 
 export const COMPANION_TABS = [
   { key: 'chat', label: '聊天', icon: MessageCircle },
@@ -125,7 +165,7 @@ export const ASSET_ITEMS: NavItem[] = [
 export const NAV: NavGroup[] = [
   { key: 'review', label: '今日', icon: Sunrise, href: '/review', items: [] },
   { key: 'tutor', label: '学', icon: GraduationCap, href: '/tutor?tab=learn', items: withTab('/tutor', TUTOR_TABS) },
-  { key: 'work', label: '工作', icon: FolderKanban, href: '/work?tab=output', items: withTab('/work', WORK_TABS) },
+  { key: 'work', label: '工作', icon: FolderKanban, href: '/work?tab=report', items: withTab('/work', WORK_TABS) },
   { key: 'assets', label: '资产', icon: Archive, href: '/assets', items: ASSET_ITEMS },
   {
     key: 'companion',
@@ -164,7 +204,7 @@ const GROUP_OF_PATH: Record<string, string> = {
 const GROUP_PARAM: Record<string, { key: string; value: string } | null> = {
   review: null,
   tutor: { key: 'tab', value: 'learn' },
-  work: { key: 'tab', value: 'output' },
+  work: { key: 'tab', value: 'report' },
   assets: null, // 子项是不同路径，不看参数
   companion: { key: 'tab', value: 'chat' },
   settings: { key: 'section', value: 'general' },
@@ -191,7 +231,10 @@ export function navState(pathname: string, search: string): { group: string; hre
 
   const q = new URLSearchParams(search)
   let value = q.get(spec.key) ?? ''
-  if (!value && group.key === 'work' && q.get('task')) value = 'engine'
+  if (!value && group.key === 'work' && q.get('task')) value = 'workflow'
+  // `?tab=` 认旧 key：不认的话，一条 `/work?tab=automation` 的旧链接会让侧栏**退回第一项**，
+  // 而页面已经解析成「工作流」了——正是本文件开头那段话说的「侧栏亮着 A、页面停在 B」。
+  if (group.key === 'work') value = resolveWorkTab(value) ?? value
   const hit = value
     ? group.items.find((i) => new URLSearchParams(i.href.split('?')[1] ?? '').get(spec.key) === value)
     : undefined
@@ -257,7 +300,7 @@ export const ROUTES: Record<string, Module> = {
  *  （成长本来就是宠物那条线的账）。
  */
 export const REDIRECTS: Record<string, string> = {
-  '/threads': '/work?tab=follow',
+  '/threads': '/work?tab=thread',
   '/growth': '/companion?tab=growth',
 }
 
@@ -313,9 +356,23 @@ export function titleFor(href: string): string {
  *
  *  两层：`.html` 别名先摆正成路由路径；再查 `REDIRECTS`（整页搬家的路径）。
  *  搬家目标自带 search 时两边合并——旧参数保留、新参数说了算
- *  （`/threads?thread=3` → `/work?tab=follow&thread=3`）。目标不带 search 时
+ *  （`/threads?thread=3` → `/work?tab=thread&thread=3`）。目标不带 search 时
  *  旧 search **一个字节都不动**（上面书签小工具那条测试钉死了这一点）。
  */
+/** 查询级别的别名：路径没搬、但 `?tab=` 是旧 key 时把参数摆正。
+ *  返回新的 search（含 `?`），不需要改就返回 null。 */
+function workTabAliased(pathname: string, search: string): string | null {
+  if (pathname !== '/work') return null
+  const q = new URLSearchParams(search)
+  const raw = q.get('tab')
+  if (!raw) return null
+  const resolved = resolveWorkTab(raw)
+  if (!resolved || resolved === raw) return null
+  q.set('tab', resolved)
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+
 export function legacyTarget(
   pathname: string,
   search: string,
@@ -325,19 +382,27 @@ export function legacyTarget(
   if (normalized === null) return null
 
   const moved = REDIRECTS[normalized]
-  if (moved === undefined) {
-    if (normalized === pathname) return null
-    return { pathname: normalized, search, hash }
+  let toPath = normalized
+  let toSearch = search
+  if (moved !== undefined) {
+    const q = moved.indexOf('?')
+    toPath = q === -1 ? moved : moved.slice(0, q)
+    if (q !== -1) {
+      const merged = new URLSearchParams(search)
+      for (const [k, v] of new URLSearchParams(moved.slice(q + 1))) merged.set(k, v)
+      const s = merged.toString()
+      toSearch = s ? `?${s}` : ''
+    }
   }
 
-  const q = moved.indexOf('?')
-  const toPath = q === -1 ? moved : moved.slice(0, q)
-  if (q === -1) return { pathname: toPath, search, hash }
+  // **第二层：查询参数**。`?tab=engine` 这种老 key 在这里摆正成新域名——
+  // `REDIRECTS` 只认路径，管不到参数，所以这一层是新建的。
+  // 地址栏因此**自愈**：旧书签点开一次就变成新地址，侧栏也就跟着对了。
+  const aliased = workTabAliased(toPath, toSearch)
+  if (aliased !== null) toSearch = aliased
 
-  const merged = new URLSearchParams(search)
-  for (const [k, v] of new URLSearchParams(moved.slice(q + 1))) merged.set(k, v)
-  const s = merged.toString()
-  return { pathname: toPath, search: s ? `?${s}` : '', hash }
+  if (toPath === pathname && toSearch === search) return null
+  return { pathname: toPath, search: toSearch, hash }
 }
 
 /** 当前路径对应的模块。Layout 用它决定高亮和埋点。 */

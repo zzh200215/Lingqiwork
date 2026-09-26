@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 
 import { api } from './api'
 
@@ -63,15 +63,15 @@ export default function FeedbackButtons({
   }
 
   if (sent === 'good') {
-    return <span className="text-[11px] text-emerald-600 dark:text-emerald-400">记下了 👍</span>
+    return <span className="text-xs text-emerald-600 dark:text-emerald-400">记下了 👍</span>
   }
   if (sent === 'bad') {
-    return <span className="text-[11px] text-neutral-400">记下了 👎</span>
+    return <span className="text-xs text-neutral-400">记下了 👎</span>
   }
 
   if (badOpen) {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px]">
+      <span className="inline-flex items-center gap-1 text-xs">
         <input
           autoFocus
           value={reason}
@@ -81,7 +81,7 @@ export default function FeedbackButtons({
             if (e.key === 'Escape') setBadOpen(false)
           }}
           placeholder="哪里不好？（可留空）"
-          className="w-44 rounded border border-neutral-200 bg-transparent px-1.5 py-0.5 text-[11px] outline-none focus:border-violet-400 dark:border-neutral-700"
+          className="w-44 rounded border border-neutral-200 bg-transparent px-1.5 py-0.5 text-xs outline-none focus:border-violet-400 dark:border-neutral-700"
         />
         <button
           disabled={busy}
@@ -95,7 +95,7 @@ export default function FeedbackButtons({
   }
 
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] text-neutral-400">
+    <span className="inline-flex items-center gap-1 text-xs text-neutral-400">
       <span>这篇怎么样？</span>
       <button
         disabled={busy}

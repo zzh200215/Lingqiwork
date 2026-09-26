@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { api, type SelfCheck } from './api'
@@ -35,7 +35,7 @@ export default function SelfCheckLine() {
   const failing = check.jobs_failing
 
   return (
-    <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2 text-xs ${CLS[t]}`}>
+    <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-3 py-2 text-xs ${CLS[t]}`}>
       <span>⚙️ 后台</span>
       {t === 'bad' ? (
         check.default_model_broken ? (

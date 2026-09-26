@@ -12,7 +12,6 @@ WB_* 环境变量在导入 app 前设置；vault 落在项目内临时目录。
 import asyncio
 import atexit
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -25,9 +24,6 @@ from sqlalchemy import select
 sys.path.insert(0, ".")
 
 _TMP = Path(tempfile.mkdtemp(prefix="wb-artifacts-", dir=Path(__file__).parent))
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
-os.environ["WB_VAULT_DIR"] = str(_TMP / "vault")
 
 
 def _cleanup() -> None:
@@ -663,14 +659,17 @@ def test_the_output_rule_rides_in_the_system_layer(monkeypatch):
 
 
 def test_the_output_rule_is_not_sent_when_tools_are_off(monkeypatch):
-    """工具关掉的 agent 上不能说这条——那是指使模型去调一个它没有的工具。"""
+    """工具关掉的 agent 上不能说这条——那是指使模型去调一个它没有的工具。
+
+    A2 起「关掉」是白名单里的保留字 `none`（原来是布尔 `False`）。
+    """
     asyncio.run(_prepare_db(9010))
 
     async def seed_agent():
         from app.models import Agent
 
         async with SessionLocal() as db:
-            db.add(Agent(id=77, name="no-tools", tools_enabled=False))
+            db.add(Agent(id=77, name="no-tools", tool_whitelist="none"))
             await db.commit()
 
     asyncio.run(seed_agent())

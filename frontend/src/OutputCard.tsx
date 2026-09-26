@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+﻿import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { WorkOutput } from './api'
@@ -50,7 +50,7 @@ export default function OutputCard({
     <div className={`group flex items-center gap-3 py-2.5 ${className ?? ''}`}>
       {label !== undefined ? (
         <span
-          className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
+          className={`shrink-0 rounded border px-1.5 py-0.5 text-xs ${
             kind ? KIND_BADGE[kind] : 'border-neutral-300 text-neutral-600 dark:border-neutral-600 dark:text-neutral-300'
           }`}
         >
@@ -69,7 +69,7 @@ export default function OutputCard({
         ) : (
           <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">{title}</span>
         )}
-        {meta ? <div className="truncate text-[11px] text-neutral-400">{meta}</div> : null}
+        {meta ? <div className="truncate text-xs text-neutral-400">{meta}</div> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </div>

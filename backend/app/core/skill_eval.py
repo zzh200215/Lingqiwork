@@ -275,13 +275,17 @@ async def run(
     save: bool = True,
     generate=None,
     judge=None,
+    cancel_key: str = "",
 ) -> dict:
     """给一份技能跑一遍：每条用例问两次（没它 / 有它），逐条比对。
 
     `generate` / `judge` 可注入（测试用：不碰网络）。
     **一次跑分 = 用例数 × 2 次生成 + 有它那一侧各有一次判分** —— 成本要写在报告里。
+
+    `cancel_key` 非空 = 这一趟**可被取消**（合作式，见 `core/inflight`）。这里比评测那边
+    更值得有：一条用例要问两次 + 判分，用例一多就是好几分钟，而「停下来」是按条生效的。
     """
-    from app.core import prompt_eval, providers, usage_ledger
+    from app.core import inflight, prompt_eval, providers, usage_ledger
 
     try:
         method = _skill_text(name)
@@ -303,8 +307,13 @@ async def run(
 
     started = time.time()
     rows: list[dict] = []
+    stopped = False
     async with usage_ledger.span("skill_eval", name):
         for case in cases:
+            # 每条用例之间查一次（一条 = 两次生成 + 一次判分，所以粒度就是「当前这条跑完」）
+            if cancel_key and inflight.cancel_requested(cancel_key):
+                stopped = True
+                break
             ask = str(case["ask"])
             names = [str(n) for n in (case.get("checks") or [DEFAULT_CHECK])]
             row: dict = {"id": str(case.get("id") or ask[:24]), "intent": str(case.get("intent") or ""), "ask": ask}
@@ -349,6 +358,34 @@ async def run(
             row["delta"] = int(bool(row["with_ok"])) - int(bool(row["without_ok"]))
             row["seconds"] = round(time.time() - t0, 2)
             rows.append(row)
+
+    if stopped:
+        # **半趟不落库、也不给区间与 delta 汇总**：跑了一半的「过了 k/n」会被读成
+        # 「这份技能变差了」，而它只是被打断了——那正是质量闭环最怕的污染。
+        # 已经跑完的那几条照原样带回去，停在哪一条看得见。
+        done = len(rows)
+        return {
+            "skill": name,
+            "sha": sha,
+            "model_id": model,
+            "cases": rows,
+            "total": done,
+            "planned": len(cases),
+            "with_passed": sum(1 for r in rows if r["with_ok"]),
+            "rate": None,
+            "ci": None,
+            "tell": False,
+            "deltas": {
+                "helped": sum(1 for r in rows if r["delta"] > 0),
+                "hurt": sum(1 for r in rows if r["delta"] < 0),
+                "same": sum(1 for r in rows if r["delta"] == 0),
+            },
+            "follows_method": None,
+            "seconds": round(time.time() - started, 1),
+            "calls": done * 2,
+            "cases_needed": max(0, MIN_CASES - done),
+            "stopped": True,
+        }
 
     total = len(rows)
     helped = sum(1 for r in rows if r["delta"] > 0)

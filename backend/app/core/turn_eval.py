@@ -49,6 +49,35 @@ BODY_OVERLAP_CHARS = 120  # 回复里出现这么长一段正文 = 正文被回�
 # 临时向量库的目录名前缀。清索引前先认这个标记 —— 认不出来就绝不下手（见 `_reset_index`）。
 SCRATCH_CHROMA_MARK = "wb-turn-eval-chroma-"
 
+# ---------- 「答里有没有这个事实」那把尺子（**两个评测共用**） ----------
+#
+# 比 marker 之前先把标点与空白抹掉。**这是一条规则，不是给某条用例开的后门**：
+# 2026-09-20 第一次真跑协作臂时 `review-note-with-critique` 被判 `missing_marker`，而纪要里
+# 明明白白写着「5 胜，23 平，6 负」——材料写的是「5 胜 23 平 6 负」。说对了、只换了标点，
+# 尺子不该判它错：**逐字子串**是最脆的一种匹配，它量的是排版不是事实。
+# （口径与 A0 那次「体裁在 deliver/compose/recap 之间不稳定 → 三者都算对」同族：
+#   落在噪声上的差别，不要读成「没守住」。）
+#
+# **放在这里而不是各尺子一份**：A2 的 `collab_eval` 与 A4 的 `agent_eval` 都要比 marker，
+# 各写一份的那天两份就会漂（「同一个词在两处必须指同一批东西」这条在这个仓库里是硬要求，
+# 已经栽过好几次：`threads.is_product` / `pet.is_output_path` 是同一个先例）。
+# `tests/test_agent_eval.py` 里有一条钉住「两个尺子引的是同一个函数」。
+_PUNCT = "　 \t\r\n，。、；：！？（）【】《》“”‘’·—…～,.;:!?()[]{}<>\"'-_/\\|"
+
+
+def normalize(text: str) -> str:
+    """抹掉标点与空白（给 marker 比对用）。Pure。"""
+    return "".join(ch for ch in str(text or "") if ch not in _PUNCT)
+
+
+def has_marker(transcript: str, marker: str) -> bool:
+    """这段文字里有没有这个事实（**忽略标点与空白**）。Pure。
+
+    空 marker 恒 False：没写判据不等于「随便什么都算对」。
+    """
+    m = normalize(marker)
+    return bool(m) and m in normalize(transcript)
+
 
 # ---------- golden set ----------
 
@@ -178,6 +207,18 @@ def check_turn(record: dict, expect: dict) -> list[dict]:
                 "detail": f"正文 {len(reply.strip())} 字却没有落盘（成品只活在对话里）",
             }
         )
+
+    # 6c) §4.1 ① 的另一半：嘴上删了、其实一次 `memory_delete` 都没调。**与线上同一份判据**
+    # （`core/turn_quality.py`，那里收窄了三条：你明说要删才判 / 只认过去式口吻 / 真没调才算）。
+    if expect.get("claims_a_delete_without_one") and turn_quality.claims_a_delete_without_one(
+        reply, record.get("tool_names"), record.get("ask") or ""
+    ):
+        findings.append(
+            {
+                "code": "claims_a_delete_without_one",
+                "detail": "回复里说删了/忘了，但这一轮一次 memory_delete 都没调",
+            }
+        )
     if expect.get("no_invented_path"):
         invented = turn_quality.invented_path_in_reply(reply, arts)
         if invented:
@@ -185,6 +226,27 @@ def check_turn(record: dict, expect: dict) -> list[dict]:
                 {
                     "code": "invented_path",
                     "detail": f"回复里报了一个不在回执里的路径：{invented}",
+                }
+            )
+
+    # 6c) P3：不许留下编造的 `[来源 N]` —— **与线上同一份判据**（`core/citations.py`）。
+    #
+    # 离线这条断言考的不是「有没有抓到」（线上抓到了就当场剥掉，答复里本来就不该有），
+    # 而是**接线有没有断**：这条路上任何一处（注入条数没传下来、剥的动作没执行、补跑那轮
+    # 漏验）失守，正文里就会留下一个 `[来源 7]`；判据本身在 `tests/test_citations.py` 里
+    # 单独钉着。所以这里断言的是**结果**：答复里每一个编号都真的存在。
+    if expect.get("no_fake_citation"):
+        from app.core import citations
+
+        rep = citations.verify(reply, int(record.get("sources_injected") or 0))
+        if rep.fake:
+            findings.append(
+                {
+                    "code": "fake_citation",
+                    "detail": (
+                        f"答复里标注了不存在的 [来源 {rep.fake[0]}]"
+                        f"（这一轮注入了 {rep.injected} 条）——线上那条验证没生效"
+                    ),
                 }
             )
 
@@ -607,21 +669,28 @@ def _scratch_vault():
     缝是实测出来的：`core/mcp.py` 在**调用时**读模块级的 `VAULT_DIR` 与 `_VAULT_ROOT`
     （保存落盘、路径越界校验走的就是这两个），所以临时换掉有效；跑完还原、临时目录删掉。
     不这么做的话，一次评测会在你的 vault 里留下一堆名为「周报」的文件。
+
+    **`threads.VAULT_DIR` 也要换**（2026-09-20，A4）：`core/threads.py` 自己持一份常量，
+    它解析「一件事」挂着的引用时读的是那一份。只换 `mcp` 那一份的后果很隐蔽——
+    A4 种下的事指向临时 vault 里的材料，而解析跑到**真 vault** 里找一个不存在的路径，
+    于是那条引用被标成「已不存在」、**安静地**从注入段里消失，报告上一点异常都没有。
+    （同款先例：`tests/test_agent_orchestration._point_vault` 那句「两边一旦分叉，
+    挂接会安静地什么都不做」。）
     """
     import shutil
     import tempfile
 
-    from app.core import mcp
+    from app.core import mcp, threads
 
     tmp = Path(tempfile.mkdtemp(prefix="wb-turn-eval-"))
     for dir_name, _label in mcp._ARTIFACT_KINDS.values():
         (tmp / dir_name).mkdir(parents=True, exist_ok=True)
-    old = (mcp.VAULT_DIR, mcp._VAULT_ROOT)
-    mcp.VAULT_DIR, mcp._VAULT_ROOT = tmp, tmp.resolve()
+    old = (mcp.VAULT_DIR, mcp._VAULT_ROOT, threads.VAULT_DIR)
+    mcp.VAULT_DIR, mcp._VAULT_ROOT, threads.VAULT_DIR = tmp, tmp.resolve(), tmp
     try:
         yield tmp
     finally:
-        mcp.VAULT_DIR, mcp._VAULT_ROOT = old
+        mcp.VAULT_DIR, mcp._VAULT_ROOT, threads.VAULT_DIR = old
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -682,9 +751,20 @@ async def _one_case(
                 "error": got.get("error") or "",
                 "rounds": int(trace.get("rounds") or 0),
                 "tools": len(trace.get("tool_calls") or []),
+                # 「嘴上删了」那条判据要看的两件事（§4.1 ① 的另一半）：这一轮**调了哪些工具**
+                # 与你那一句**原话**。`tools` 只有一个数，判据要的是名字，所以两个都记。
+                "tool_names": [
+                    str(c.get("name") or "") for c in (trace.get("tool_calls") or [])
+                ],
+                "ask": str(case.get("ask") or ""),
                 # W4 的尺子：这一轮**落盘了几次**（不是回执条数 —— 回执按 path 去重）
                 "saves": sum(
                     1 for c in (trace.get("tool_calls") or []) if c.get("name") == "save_artifact"
+                ),
+                # P3：这一轮注入了几条材料（引用验证的分母，与线上记在正式列里的是同一个数）。
+                # 读的是账本，不重算 —— 判据只有 `citations.verify` 一处。
+                "sources_injected": int(
+                    ((trace.get("quality") or {}).get("citations") or {}).get("injected") or 0
                 ),
                 "tokens_out": int(trace.get("tokens_out") or 0),
                 "seconds": round(time.time() - t0, 1),

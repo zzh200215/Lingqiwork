@@ -113,7 +113,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
         key: `out:${o.path}`,
         label: o.title,
         sub: `产出物 · ${o.date}`,
-        href: o.path.startsWith('notes/') ? `/notes?path=${encodeURIComponent(o.path)}` : '/work?tab=output',
+        href: o.path.startsWith('notes/') ? `/notes?path=${encodeURIComponent(o.path)}` : '/work?tab=report',
         icon: FileOutput,
       }))
     const searchHits: PaletteItem[] = hits.map((h) => ({
@@ -172,7 +172,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       onKeyDown={onKeyDown}
     >
       <div
-        className="wb-card mx-auto flex max-w-xl flex-col overflow-hidden rounded-2xl !shadow-2xl"
+        className="wb-card mx-auto flex max-w-xl flex-col overflow-hidden rounded-lg !shadow-2xl"
         role="dialog"
         aria-label="全局搜索"
         onClick={(e) => e.stopPropagation()}
@@ -187,7 +187,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             placeholder="搜会话、笔记、产出物，或直接去某页…"
             className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
           />
-          <kbd className="rounded-md border border-neutral-200 px-1.5 py-0.5 text-[10px] text-neutral-400 dark:border-neutral-700">
+          <kbd className="rounded-md border border-neutral-200 px-1.5 py-0.5 text-xs text-neutral-400 dark:border-neutral-700">
             Esc
           </kbd>
         </div>
@@ -200,7 +200,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
           ) : (
             groups.map((g) => (
               <div key={g.key} className="mb-1">
-                <p className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                <p className="px-2 pb-1 pt-2 text-xs font-medium uppercase tracking-wider text-neutral-400">
                   {g.label}
                 </p>
                 {g.items.map((item) => {
@@ -213,7 +213,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                       data-cmd-item={item.href}
                       onMouseEnter={() => setIndex(myIndex)}
                       onClick={() => pick(item)}
-                      className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors ${
+                      className={`flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors ${
                         on
                           ? 'bg-violet-100 text-violet-900 dark:bg-violet-500/15 dark:text-violet-100'
                           : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800/70'
@@ -224,7 +224,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                       {item.sub ? (
                         <span className="max-w-40 shrink-0 truncate text-xs text-neutral-400">{item.sub}</span>
                       ) : null}
-                      {on ? <CornerDownLeft className="h-3.5 w-3.5 shrink-0 text-violet-400" /> : null}
+                      {on ? <CornerDownLeft className="h-4 w-4 shrink-0 text-violet-400" /> : null}
                     </button>
                   )
                 })}

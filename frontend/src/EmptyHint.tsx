@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+﻿import type { ReactNode } from 'react'
 
 const PAD = {
   sm: 'px-4 py-6',
@@ -28,7 +28,7 @@ export default function EmptyHint({
 }) {
   return (
     <div
-      className={`rounded-xl border border-dashed border-neutral-300 text-center dark:border-neutral-700 ${PAD[pad]} ${className ?? ''}`}
+      className={`rounded-md border border-dashed border-neutral-300 text-center dark:border-neutral-700 ${PAD[pad]} ${className ?? ''}`}
     >
       <p className="text-sm text-neutral-500 dark:text-neutral-400">{title}</p>
       {hint ? (

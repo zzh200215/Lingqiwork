@@ -81,7 +81,7 @@ function RecentPulse() {
                   <span className="min-w-0 flex-1 truncate text-xs text-neutral-600 dark:text-neutral-300">
                     {e.text}
                   </span>
-                  <span className="shrink-0 text-[10px] text-neutral-400">
+                  <span className="shrink-0 text-xs text-neutral-400">
                     {ago(Date.parse(e.created_at) / 1000)}
                   </span>
                 </li>
@@ -108,7 +108,7 @@ function RecentPulse() {
                     className="flex items-baseline gap-2 py-2 text-xs text-neutral-600 transition-colors hover:text-violet-600 dark:text-neutral-300 dark:hover:text-violet-300"
                   >
                     <span className="min-w-0 flex-1 truncate">{c.title || '（没起名）'}</span>
-                    <span className="shrink-0 text-[10px] text-neutral-400">
+                    <span className="shrink-0 text-xs text-neutral-400">
                       {c.updated_at ? ago(Date.parse(c.updated_at) / 1000) : ''}
                     </span>
                   </Link>
@@ -539,7 +539,7 @@ export default function ReviewPage() {
               className="rounded-lg border border-neutral-200 px-2.5 py-1 text-neutral-600 transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500"
             >
               🎴 建卡
-              <kbd className="ml-1 text-[10px] text-neutral-400">N</kbd>
+              <kbd className="ml-1 text-xs text-neutral-400">N</kbd>
             </button>
             <button
               onClick={() => setHelpOpen((v) => !v)}
@@ -572,7 +572,7 @@ export default function ReviewPage() {
         )}
 
         {helpOpen && (
-          <section className="mb-5 rounded-2xl border border-neutral-200 bg-neutral-50/60 p-4 text-xs dark:border-neutral-800 dark:bg-neutral-900/40">
+          <section className="mb-5 rounded-lg border border-neutral-200 bg-neutral-50/60 p-4 text-xs dark:border-neutral-800 dark:bg-neutral-900/40">
             <div className="grid gap-1.5 sm:grid-cols-2">
               {[
                 ['⏎ / 空格', '概览：开始复习；复习中：翻面 / 按「良好」'],
@@ -588,7 +588,7 @@ export default function ReviewPage() {
                 ['Esc', '结束本轮 / 关闭面板'],
               ].map(([k, v]) => (
                 <div key={k} className="flex gap-2">
-                  <kbd className="min-w-[104px] rounded bg-white px-1.5 py-0.5 text-[10px] text-neutral-600 shadow-sm dark:bg-neutral-800 dark:text-neutral-300">
+                  <kbd className="min-w-[104px] rounded bg-white px-1.5 py-0.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
                     {k}
                   </kbd>
                   <span className="text-neutral-500 dark:text-neutral-400">{v}</span>
@@ -608,7 +608,7 @@ export default function ReviewPage() {
                 daily 没数据时 hero 独占整行，不留一块空洞。 */}
             <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
               <section
-                className={`wb-card-hero rounded-2xl p-4 ${
+                className={`wb-card-hero rounded-lg p-4 ${
                   stats && stats.daily?.length > 0 ? 'xl:col-span-7' : 'xl:col-span-12'
                 }`}
               >
@@ -627,7 +627,7 @@ export default function ReviewPage() {
                         onClick={start}
                         className="ml-auto rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
                       >
-                        开始复习 <kbd className="ml-1 text-[10px] opacity-80">⏎</kbd>
+                        开始复习 <kbd className="ml-1 text-xs opacity-80">⏎</kbd>
                       </button>
                     </>
                   ) : (
@@ -658,7 +658,7 @@ export default function ReviewPage() {
                         onClick={() => setMakerOpen(true)}
                         className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
                       >
-                        建第一张卡 <kbd className="ml-1 text-[10px] opacity-80">N</kbd>
+                        建第一张卡 <kbd className="ml-1 text-xs opacity-80">N</kbd>
                       </button>
                       <Link
                         to="/notes"
@@ -678,7 +678,7 @@ export default function ReviewPage() {
                   <h2 className="pb-1 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
                     近 7 天复习
                   </h2>
-                  <p className="pb-2 text-[11px] text-neutral-400">
+                  <p className="pb-2 text-xs text-neutral-400">
                     每天过的卡数 · 7 天正确率 {stats.accuracy_7d != null ? `${stats.accuracy_7d}%` : '—'}
                   </p>
                   <EChart
@@ -721,7 +721,7 @@ export default function ReviewPage() {
                       return (
                         <li key={r.key} className="flex items-center gap-3 py-2">
                           <span
-                            className={`w-20 shrink-0 text-[11px] font-medium ${
+                            className={`w-20 shrink-0 text-xs font-medium ${
                               r.tone === 'bad'
                                 ? 'text-rose-600 dark:text-rose-400'
                                 : r.tone === 'warn'
@@ -748,7 +748,7 @@ export default function ReviewPage() {
                           </span>
                           <Link
                             to={r.href}
-                            className="ml-auto shrink-0 rounded-lg border border-neutral-300 px-2.5 py-0.5 text-[11px] text-neutral-600 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800 sm:ml-3"
+                            className="ml-auto shrink-0 rounded-lg border border-neutral-300 px-2.5 py-0.5 text-xs text-neutral-600 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800 sm:ml-3"
                           >
                             去处理 →
                           </Link>
@@ -825,7 +825,7 @@ export default function ReviewPage() {
                       onClick={() => void saveEdit()}
                       className="rounded-lg bg-violet-600 px-3 py-1.5 font-medium text-white hover:brightness-110"
                     >
-                      保存 <kbd className="text-[10px] opacity-70">Ctrl+Enter</kbd>
+                      保存 <kbd className="text-xs opacity-70">Ctrl+Enter</kbd>
                     </button>
                     <button
                       onClick={() => setEditing(null)}
@@ -858,7 +858,7 @@ export default function ReviewPage() {
               <p
                 data-crosscheck
                 title="两边的事实摆在一起，它不判谁对：哪个算数、要不要改判定，是你的事。"
-                className="mt-3 text-[11px] leading-relaxed text-violet-600 dark:text-violet-300"
+                className="mt-3 text-xs leading-relaxed text-violet-600 dark:text-violet-300"
               >
                 「{crosscheck.concept}」你说通过 {crosscheck.said_n} 次，可它的卡这周重来{' '}
                 {crosscheck.again_7d} 回——讲一遍试试？
@@ -870,7 +870,7 @@ export default function ReviewPage() {
             {verdict && (
               <div
                 data-retell-verdict
-                className={`mt-3 rounded-xl border px-3 py-2 text-xs leading-relaxed ${
+                className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
                   verdict.ok
                     ? 'border-violet-200 bg-violet-50/60 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200'
                     : 'border-amber-200 bg-amber-50/60 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
@@ -899,9 +899,9 @@ export default function ReviewPage() {
                 <>
                   <button
                     onClick={() => setPhase('answer')}
-                    className="rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-5 py-2.5 text-sm font-medium text-white transition-all hover:brightness-110"
+                    className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-5 py-2.5 text-sm font-medium text-white transition-all hover:brightness-110"
                   >
-                    显示答案 <kbd className="ml-1 text-[10px] opacity-70">空格</kbd>
+                    显示答案 <kbd className="ml-1 text-xs opacity-70">空格</kbd>
                   </button>
                   {/* M1：第二作答方式。**在揭示答案之前**——讲得出来才算数，
                       链到的是同一条复习记录（判分自己写，界面不再调 reviewCard）。 */}
@@ -910,7 +910,7 @@ export default function ReviewPage() {
                     onClick={() => setRetellOpen((v) => !v)}
                     disabled={busy}
                     title="用你自己的话把它讲一遍，它对照卡片答案判一档（一次模型调用，成本就是这一次）"
-                    className={`rounded-xl border px-4 py-2.5 text-sm transition-colors disabled:opacity-50 ${
+                    className={`rounded-lg border px-4 py-2.5 text-sm transition-colors disabled:opacity-50 ${
                       retellOpen
                         ? 'border-violet-400 bg-violet-50 text-violet-700 dark:border-violet-500 dark:bg-violet-500/10 dark:text-violet-200'
                         : 'border-neutral-300 text-neutral-600 hover:border-violet-300 hover:text-violet-600 dark:border-neutral-600 dark:text-neutral-300 dark:hover:border-violet-500/50 dark:hover:text-violet-300'
@@ -925,9 +925,9 @@ export default function ReviewPage() {
                     key={g.g}
                     onClick={() => void grade(g.g)}
                     disabled={busy}
-                    className={`rounded-xl border px-4 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 ${g.cls}`}
+                    className={`rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 ${g.cls}`}
                   >
-                    {g.label} <kbd className="ml-0.5 text-[10px] opacity-60">{g.key}</kbd>
+                    {g.label} <kbd className="ml-0.5 text-xs opacity-60">{g.key}</kbd>
                   </button>
                 ))
               )}
@@ -941,7 +941,7 @@ export default function ReviewPage() {
                       className="hover:text-violet-600 dark:hover:text-violet-300"
                       title={card.source}
                     >
-                      ↗ 原文 <kbd className="text-[10px]">O</kbd>
+                      ↗ 原文 <kbd className="text-xs">O</kbd>
                     </button>
                   ) : (
                     <button
@@ -949,7 +949,7 @@ export default function ReviewPage() {
                       className="hover:text-violet-600 dark:hover:text-violet-300"
                       title={`${card.source}（vault 外，点击复制路径）`}
                     >
-                      ⧉ {card.source.split('/').pop()} <kbd className="text-[10px]">O</kbd>
+                      ⧉ {card.source.split('/').pop()} <kbd className="text-xs">O</kbd>
                     </button>
                   )
                 ) : (
@@ -966,14 +966,14 @@ export default function ReviewPage() {
                     onClick={() => void undo()}
                     className="hover:text-violet-600 dark:hover:text-violet-300"
                   >
-                    ↩ 撤销 <kbd className="text-[10px]">U</kbd>
+                    ↩ 撤销 <kbd className="text-xs">U</kbd>
                   </button>
                 )}
                 <button
                   onClick={() => void suspend()}
                   className="hover:text-rose-600 dark:hover:text-rose-300"
                 >
-                  搁置 <kbd className="text-[10px]">S</kbd>
+                  搁置 <kbd className="text-xs">S</kbd>
                 </button>
               </div>
             </div>
@@ -983,7 +983,7 @@ export default function ReviewPage() {
             {phase === 'question' && retellOpen && (
               <div
                 data-retell-panel
-                className="mt-3 rounded-xl border border-violet-200 bg-violet-50/40 p-3 dark:border-violet-500/30 dark:bg-violet-500/5"
+                className="mt-3 rounded-lg border border-violet-200 bg-violet-50/40 p-3 dark:border-violet-500/30 dark:bg-violet-500/5"
               >
                 <textarea
                   data-retell-text
@@ -1018,7 +1018,7 @@ export default function ReviewPage() {
                   >
                     收起
                   </button>
-                  <span className="text-[11px] text-neutral-400">
+                  <span className="text-xs text-neutral-400">
                     判完就走，和按一个数字一样；判不了会退回来让你自己定
                   </span>
                 </div>

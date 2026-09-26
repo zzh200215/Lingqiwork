@@ -26,18 +26,25 @@ body {
  * （Robot Admin）是 full-width + 栅格，这一点抄了。
  *
  * **底色改回原样**（用户看过之后说的：「这个颜色还没原来的好看」）：
- * 页面就保持原来的白 / neutral-950，卡片的分层靠阴影，不靠底色差。
- * 这一版只留阴影与圆角。
+ * 页面就保持原来的白 / neutral-950；分层靠**边框**，不靠阴影。
+ *
+ * **2026-09-24 改**：卡片从「白底 + 淡边 + 软阴影」改成**有边框、无阴影**，照的是参考
+ * 项目那份设计契约：
+ *   - "The desktop design language is tinted surfaces with restrained boundary borders
+ *      and **no persistent shadows**."
+ *   - "Shadows are allowed only for modals, drawers, dropdowns, popovers, tooltips,
+ *      or active drag feedback."
+ *   - 禁止项里明写 "Persistent shadows on cards, settings panels, tables, toolbars,
+ *      or navigation."
+ *
+ * **一处改，全站 wb-card 一起变**——这正是把它放在这里而不是逐页改的理由：
+ * 分层靠边框，阴影留给真正浮在上面的东西（模态/下拉）。
  */
 :root {
   --page-bg: #ffffff;
-  --card-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px -14px rgba(16, 24, 40, 0.18);
-  --card-shadow-hover: 0 2px 4px rgba(16, 24, 40, 0.05), 0 18px 36px -18px rgba(16, 24, 40, 0.24);
 }
 .dark {
   --page-bg: #0a0a0a;
-  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px -14px rgba(0, 0, 0, 0.6);
-  --card-shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 18px 36px -18px rgba(0, 0, 0, 0.7);
 }
 
 /* 页面底：非会话页的 `main`（会话页自己管滚动与底色，不套这个） */
@@ -45,28 +52,18 @@ body {
   background-color: var(--page-bg);
 }
 
-/* 卡片：白底 + 一圈很淡的边 + 软阴影。**边框留着**（阴影单独撑不住深色模式下的分层），
- *  只是把它调淡——原来那种 1px 实边是「线框图」感的来源。 */
+/* 卡片：白底 + 一圈边。**没有常驻阴影。** */
 .wb-card {
-  @apply rounded-2xl border border-neutral-200/70 bg-white dark:border-neutral-800 dark:bg-neutral-900/70;
-  box-shadow: var(--card-shadow);
+  @apply rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900/70;
 }
 
-/* 可点的卡片：hover 抬 2px + 阴影加深。曲线与时长照参考项目那套（0.2s / cubic-bezier）。 */
+/* 可点的卡片：hover **强化边框、不抬升、不加阴影**
+ * （契约："Do not lift cards or add shadows"）。 */
 .wb-card-hover {
-  transition:
-    box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-    border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .wb-card-hover:hover {
-  box-shadow: var(--card-shadow-hover);
-  transform: translateY(-2px);
-}
-@media (prefers-reduced-motion: reduce) {
-  .wb-card-hover:hover {
-    transform: none;
-  }
+  @apply border-neutral-300 dark:border-neutral-700;
 }
 
 /* ---------- scrollbars ---------- */
@@ -90,11 +87,10 @@ body {
  *   EChart.tsx 启动时读 CSS 变量——图表配色跟主题走，不写死在 JS 里
  */
 .wb-chip {
-  @apply flex shrink-0 items-center justify-center rounded-xl;
+  @apply flex shrink-0 items-center justify-center rounded-md;
 }
 .wb-card-hero {
   @apply border border-violet-200/60 bg-gradient-to-r from-violet-50 via-white to-fuchsia-50 dark:border-violet-500/20 dark:from-violet-950/40 dark:via-neutral-900/70 dark:to-fuchsia-950/30;
-  box-shadow: var(--card-shadow);
 }
 :root {
   --wb-chart-0: #7c5cff;
@@ -120,8 +116,8 @@ body {
 /* 调度台 pipeline 节点：running 的那颗呼吸（脉的是外圈光晕，不是节点本身，
    避免跟 wb-card-hover 那种位移动画打架） */
 @keyframes wb-node-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(124, 92, 255, 0.35); }
-  50% { box-shadow: 0 0 0 6px rgba(124, 92, 255, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(14, 165, 233, 0); }
 }
 .wb-node-running {
   animation: wb-node-pulse 1.6s ease-in-out infinite;
@@ -176,7 +172,7 @@ body {
   @apply block overflow-x-auto;
 }
 .prose img {
-  @apply max-h-[420px] w-auto rounded-xl border border-neutral-200 shadow-sm dark:border-neutral-800;
+  @apply max-h-[420px] w-auto rounded-lg border border-neutral-200 dark:border-neutral-800;
 }
 
 /* thinking cursor while streaming */

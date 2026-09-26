@@ -60,6 +60,26 @@ export function injectSplit(g: QualityGroup): string {
   return bits.length ? `这份产出吃着技能生成的没有 —— ${bits.join(' · ')}` : ''
 }
 
+/** A3 那一栏的**成本读数**（2026-09-22：A3 改成症状驱动，不再是「工具数 > 20」）。
+ *
+ *  工具定义每一轮都要重发一遍——这段话把「重发多少」念出来：总字数 + 最占地方的三个，
+ *  再给一句**提示**（到 20 个工具就复看一遍）。**是提示不是及格线**：这行字里不许出现
+ *  「到线 / 没到线」这种判词，`review_hint` 是提醒你看一眼，不是判你合不合格。
+ *
+ *  **读不到就明说读不到**（§4-8）：`undefined` 走「没拿到」，绝不当成 0 印出来——
+ *  「0 字」是在说「工具定义不要钱」，而事实是这一格没读到。
+ *
+ *  纯函数，所以只钉它（`SettingsPage.tools.test.tsx`）：整页要拉一堆端点，
+ *  而这一行的规矩只有三条——照实念、最占地方的排前面、读不到不许印 0。 */
+export function toolCostLine(tools: McpView['tools']): string {
+  if (!tools) return '工具定义的字数没拿到——这一格不编一个 0 出来。'
+  const top = (tools.biggest ?? []).slice(0, 3)
+  const body = top.map((t) => `${t.name} ${t.chars} 字`).join('、')
+  // 只有一条时不能写成「最占地方的是 X」（读起来像半句话），用「是」而不是「是…的」
+  const biggest = body ? `最占地方的是 ${body}。` : ''
+  return `${tools.count} 个工具的说明合起来 ${tools.chars} 字：这些每一轮都重发一遍。${biggest}到 ${tools.review_hint} 个工具就复看一遍——这是提示，不是及格线。`
+}
+
 const EMPTY = { name: '', kind: 'openai' as 'openai' | 'anthropic', base_url: '', api_key: '', models: '', enabled: true }
 const EMPTY_MCP: McpServer = { name: '', type: 'stdio', command: '', args: [], url: '', enabled: true }
 const EMPTY_AGENT = {
@@ -68,7 +88,9 @@ const EMPTY_AGENT = {
   system_prompt: '',
   model_id: '',
   use_rag: false,
-  tools_enabled: true,
+  /** A2：**工具白名单**（原来是个布尔开关 `tools_enabled`）。空 = 不限制，`none` = 一个都不给。
+   *  语义在后端 `mcp.filter_specs` 一处——界面只负责把这一串原样发过去。 */
+  tool_whitelist: '',
   enabled: true,
 }
 
@@ -130,6 +152,30 @@ export default function SettingsPage() {
   const [draft, setDraft] = useState({ ...EMPTY })
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState('')
+  /** **取数失败**（不是「你填错了」）。这一页挂载时并发拉十几样东西，各自 catch——
+   *  原来全是 `.catch(() => {})`，于是拉不到就摆一个空区，看起来像「你还没配」。
+   *  「读不到」与「没有」是两件事（工作页那条纪律，这一页此前没跟上）。
+   *
+   *  存**列表**而不是一个字符串：11 个请求可能一起挂，合成一句话才看得清。 */
+  const [loadErrs, setLoadErrs] = useState<string[]>([])
+  /** 一条取数失败记下来（**去重**：同一件事只记一次，重试成功也不会留陈旧的）。
+   *  `what` 是给人看的名字（「记忆」「备份」…），`e` 是抛出来的东西。 */
+  const failLoad = useCallback((what: string, e: unknown) => {
+    const raw = e instanceof Error ? e.message : String(e)
+    // 后端那句人话在 `503: {"detail":"…"}` 里——与 `workData.humanErr` 同一条规矩
+    const m = raw.match(/\{"detail":"([\s\S]*?)"\}/)
+    let msg = raw
+    if (m) {
+      try {
+        msg = JSON.parse(`"${m[1]}"`) as string
+      } catch {
+        msg = m[1]
+      }
+    }
+    const line = `${what}：${msg}`
+    setLoadErrs((cur) => (cur.includes(line) ? cur : [...cur, line]))
+  }, [])
+
   const [prefs, setPrefs] = useState<{
     system_prompt: string
     rag_top_k: number
@@ -296,25 +342,27 @@ export default function SettingsPage() {
         cards_review_per_day: p.cards_review_per_day ?? 200,
       })
       setMcpView(await api.getMcp())
-      api.listMemories().then(setMemories).catch(() => {})
-      api.tutorProfile().then(setTutorProfile).catch(() => {})
-      api.getMemoryTidy().then((s) => setTidyReport(s.report)).catch(() => {})
-      api.ttsVoices().then((r) => setTtsVoices(r.voices)).catch(() => {})
-      api.listAgents().then(setAgents).catch(() => {})
-      api.listPrompts().then(setPrompts).catch(() => {})
-      api.listBackups().then(setBackups).catch(() => {})
-      api.listTasks().then(setTasks).catch(() => {})
-      api.listTaskTools().then(setTaskTools).catch(() => {})
-      api.listSkills().then((r) => setSkillItems(r.skills)).catch(() => {})
-      api.listImages().then((r) => setImages(r.images)).catch(() => {})
+      // 这一批是**并发拉、各自坏**的取数。原来全是 `.catch(() => {})`——拉不到就摆一个空区，
+      // 看起来像「你还没配」。现在每一样都报自己的名字，页级失败条汇总。
+      api.listMemories().then(setMemories).catch((e) => failLoad('记忆', e))
+      api.tutorProfile().then(setTutorProfile).catch((e) => failLoad('教学画像', e))
+      api.getMemoryTidy().then((s) => setTidyReport(s.report)).catch((e) => failLoad('记忆整理', e))
+      api.ttsVoices().then((r) => setTtsVoices(r.voices)).catch((e) => failLoad('音色', e))
+      api.listAgents().then(setAgents).catch((e) => failLoad('智能体', e))
+      api.listPrompts().then(setPrompts).catch((e) => failLoad('系统提示词', e))
+      api.listBackups().then(setBackups).catch((e) => failLoad('备份', e))
+      api.listTasks().then(setTasks).catch((e) => failLoad('定时任务', e))
+      api.listTaskTools().then(setTaskTools).catch((e) => failLoad('任务工具', e))
+      api.listSkills().then((r) => setSkillItems(r.skills)).catch((e) => failLoad('技能', e))
+      api.listImages().then((r) => setImages(r.images)).catch((e) => failLoad('图片', e))
       api.listFeeds().then((r) => {
         setFeeds(r.feeds)
         setFeedsNextRun(r.next_run)
-      }).catch(() => {})
+      }).catch((e) => failLoad('订阅', e))
     } catch (e) {
       setError(String(e))
     }
-  }, [])
+  }, [failLoad])
 
   useEffect(() => {
     refresh()
@@ -385,8 +433,8 @@ export default function SettingsPage() {
     })
     setPrefsSaved(true)
     setTimeout(() => setPrefsSaved(false), 1500)
-    api.listBackups().then(setBackups).catch(() => {})
-    api.listFeeds().then((r) => setFeeds(r.feeds)).catch(() => {})
+    api.listBackups().then(setBackups).catch((e) => failLoad('备份', e))
+    api.listFeeds().then((r) => setFeeds(r.feeds)).catch((e) => failLoad('订阅', e))
   }
 
   // ---- RSS feeds + e-mail ----
@@ -876,7 +924,7 @@ export default function SettingsPage() {
       system_prompt: a.system_prompt,
       model_id: a.model_id,
       use_rag: a.use_rag,
-      tools_enabled: a.tools_enabled,
+      tool_whitelist: a.tool_whitelist ?? '',
       enabled: a.enabled,
     })
   }
@@ -995,14 +1043,14 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (section !== 'agents' || health) return
-    api.healthReport().then(setHealth).catch(() => {})
+    api.healthReport().then(setHealth).catch((e) => failLoad('体检报告', e))
   }, [section, health])
 
   const [quality, setQuality] = useState<QualitySummary | null>(null)
 
   useEffect(() => {
     if (section !== 'agents' || quality) return
-    api.qualitySummary().then(setQuality).catch(() => {})
+    api.qualitySummary().then(setQuality).catch((e) => failLoad('质量统计', e))
   }, [section, quality])
 
   // 自动标尺：四个引擎的 golden set 得分。它和上面的满意率共用同一个 prompt_sha，
@@ -1013,7 +1061,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (section !== 'agents' || engineEval) return
-    api.engineEvalLatest().then(setEngineEval).catch(() => {})
+    api.engineEvalLatest().then(setEngineEval).catch((e) => failLoad('引擎评测', e))
   }, [section, engineEval])
 
   // 用量与成本：以前只有聊天与定时任务记账，其余路径一点都看不见
@@ -1021,7 +1069,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (section !== 'models' || cost) return
-    api.costSummary(30).then(setCost).catch(() => {})
+    api.costSummary(30).then(setCost).catch((e) => failLoad('用量与成本', e))
   }, [section, cost])
 
   async function runEngineEval() {
@@ -1079,6 +1127,34 @@ export default function SettingsPage() {
           同一件事不留两个入口。当前分区仍然走 `?section=`，旧书签照用。
           版面因此从「页内两栏」变成整幅——所以下面那层 flex 一起去掉。 */}
       <main className="min-w-0">
+      {/* 页级取数失败条（**不按分区门控**：这一页挂载时拉十几样东西，
+          任何一样挂了都该说一句，而不是在别的分区里悄悄摆一个空区）。
+          「读不到」与「没有」是两件事——这一页此前把前者讲成了后者。 */}
+      {loadErrs.length ? (
+        <div
+          data-settings-err
+          className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 dark:border-rose-900 dark:bg-rose-950/40"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <span className="min-w-0 text-sm text-rose-700 dark:text-rose-300">
+              有 {loadErrs.length} 样没读出来 —— 下面那些区里空着的地方，可能是这个原因：
+            </span>
+            <button
+              onClick={() => setLoadErrs([])}
+              className="shrink-0 text-xs text-rose-500 underline hover:text-rose-700 dark:hover:text-rose-200"
+            >
+              知道了
+            </button>
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {loadErrs.map((e) => (
+              <li key={e} className="break-words text-xs text-rose-600 dark:text-rose-400">
+                {e}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {/* General preferences */}
       {section === 'general' && !prefs && (
         <p className="py-8 text-sm text-neutral-400">加载中…</p>
@@ -1501,11 +1577,11 @@ export default function SettingsPage() {
                       <button
                         onClick={() => removeImage(im.name)}
                         aria-label={`删除 ${im.name}`}
-                        className="absolute -right-1.5 -top-1.5 hidden h-5 w-5 rounded-full bg-red-500 text-xs leading-5 text-white group-hover:block"
+                        className="absolute -right-1.5 -top-1.5 h-5 w-5 rounded-full bg-red-500 text-xs leading-5 text-white opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
                       >
                         ×
                       </button>
-                      <span className="mt-1 block w-24 truncate text-[10px] text-neutral-400">
+                      <span className="mt-1 block w-24 truncate text-xs text-neutral-400">
                         {fmtSize(im.bytes)}
                       </span>
                     </div>
@@ -1639,7 +1715,7 @@ export default function SettingsPage() {
               />
             </label>
           </div>
-          <div className="mb-3 rounded-xl bg-neutral-100 px-3 py-2 text-xs leading-relaxed text-neutral-500 dark:bg-neutral-800/60 dark:text-neutral-400">
+          <div className="mb-3 rounded-lg bg-neutral-100 px-3 py-2 text-xs leading-relaxed text-neutral-500 dark:bg-neutral-800/60 dark:text-neutral-400">
             复习已封存：不再有每日到期提醒，也不再有每周补讲。
             页面还在导航里的「今日」，你自己想开就开；它不会再主动找你。
           </div>
@@ -2461,7 +2537,7 @@ export default function SettingsPage() {
                     >
                       {r.ok ? '可用' : r.code || '打不通'}
                     </span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs">
                       {r.model_id.split('/').slice(1).join('/')}
                     </span>
                     {r.ok && <span className="text-neutral-400">{r.ms}ms</span>}
@@ -2473,7 +2549,7 @@ export default function SettingsPage() {
                   </div>
                 ))}
                 {defaultModel && (
-                  <p className="pt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                  <p className="pt-1 text-xs text-neutral-500 dark:text-neutral-400">
                     自动化功能将使用：
                     <span className="font-mono text-neutral-700 dark:text-neutral-200">
                       {defaultModel}
@@ -2578,13 +2654,13 @@ export default function SettingsPage() {
           value={arenaPrompt}
           onChange={(e) => setArenaPrompt(e.target.value)}
           rows={2}
-          className="w-full resize-y rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+          className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
         />
         <div>
           <button
             onClick={() => void runArena()}
             disabled={arenaBusy || !arenaPrompt.trim()}
-            className="rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+            className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
           >
             {arenaBusy ? '各家思考中…' : '开始对比'}
           </button>
@@ -2593,7 +2669,7 @@ export default function SettingsPage() {
         {arenaResults && arenaResults.length > 0 && (
           <div className="grid gap-3 md:grid-cols-2">
             {arenaResults.map((r) => (
-              <div key={r.label} className={`rounded-xl border p-3 text-xs leading-relaxed ${
+              <div key={r.label} className={`rounded-lg border p-3 text-xs leading-relaxed ${
                 r.ok
                   ? 'border-neutral-200 dark:border-neutral-800'
                   : 'border-rose-300 bg-rose-50 dark:border-rose-500/40 dark:bg-rose-500/10'
@@ -2649,7 +2725,7 @@ export default function SettingsPage() {
                     <Fragment key={`${g.kind}-${g.prompt_sha}-${g.model_id}`}>
                       <tr className="border-t border-neutral-100 dark:border-neutral-800">
                         <td className="py-1 pr-3">{g.kind}</td>
-                        <td className="py-1 pr-3 font-mono text-[10px] text-neutral-400">{g.prompt_sha || '—'}</td>
+                        <td className="py-1 pr-3 font-mono text-xs text-neutral-400">{g.prompt_sha || '—'}</td>
                         <td className="max-w-[14rem] truncate py-1 pr-3" title={g.model_id}>{g.model_id || '—'}</td>
                         <td className={`py-1 pr-3 ${g.rate >= 0.7 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
                           {Math.round(g.rate * 100)}%
@@ -2659,7 +2735,7 @@ export default function SettingsPage() {
                       {injectSplit(g) ? (
                         // S1：**单独一行**摆「有注入 / 没注入 / 不知道」——上面那几个数一个没动
                         <tr className="border-t border-dashed border-neutral-100 dark:border-neutral-800">
-                          <td colSpan={5} data-inject-split className="pb-1.5 text-[10px] leading-relaxed text-neutral-400">
+                          <td colSpan={5} data-inject-split className="pb-1.5 text-xs leading-relaxed text-neutral-400">
                             {injectSplit(g)}
                           </td>
                         </tr>
@@ -2690,22 +2766,22 @@ export default function SettingsPage() {
             结构判分是确定性的（不花模型钱，秒级），接地判分要模型。 */}
         <div className="mt-1 border-t border-neutral-100 pt-3 dark:border-neutral-800">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+            <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">
               自动标尺（golden set）
             </p>
             <button
               onClick={() => void runEngineEval()}
               disabled={engineEvalBusy}
               title="在真模型上跑一遍四个引擎的 golden set：结构判分 + 接地判分"
-              className="rounded-full border border-neutral-200 px-2.5 py-0.5 text-[11px] text-neutral-600 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500 dark:hover:text-violet-300"
+              className="rounded-full border border-neutral-200 px-2.5 py-0.5 text-xs text-neutral-600 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500 dark:hover:text-violet-300"
             >
               {engineEvalBusy ? '跑着…' : '跑一遍'}
             </button>
           </div>
-          <p className="mt-1 text-[11px] text-neutral-400">
+          <p className="mt-1 text-xs text-neutral-400">
             四个引擎共用一条脊梁，提示词一改同时打穿四个——这是接住回归的那张网。结构判分不花模型钱。
           </p>
-          {engineEvalMsg ? <p className="mt-1 text-[11px] text-neutral-500">{engineEvalMsg}</p> : null}
+          {engineEvalMsg ? <p className="mt-1 text-xs text-neutral-500">{engineEvalMsg}</p> : null}
           {engineEval ? (
             <table className="mt-2 w-full text-left text-xs">
               <thead className="text-neutral-400">
@@ -2738,7 +2814,7 @@ export default function SettingsPage() {
                       >
                         {r?.grounded == null ? '—' : `${r.grounded.toFixed(1)}/5`}
                       </td>
-                      <td className="py-1 font-mono text-[10px] text-neutral-400">
+                      <td className="py-1 font-mono text-xs text-neutral-400">
                         {r?.prompt_sha || '—'}
                       </td>
                     </tr>
@@ -2750,7 +2826,7 @@ export default function SettingsPage() {
           {engineEval?.warnings?.length ? (
             <ul className="mt-1.5 space-y-0.5">
               {engineEval.warnings.map((w, i) => (
-                <li key={i} className="text-[11px] text-amber-600 dark:text-amber-400">
+                <li key={i} className="text-xs text-amber-600 dark:text-amber-400">
                   {w}
                 </li>
               ))}
@@ -2843,7 +2919,7 @@ export default function SettingsPage() {
                             ? '周期性习惯：决定何时别打扰'
                             : '夜间反思合成的跨条目观察'
                       }
-                      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
                         m.kind === 'insight'
                           ? 'bg-violet-100 text-violet-600 dark:bg-violet-950 dark:text-violet-300'
                           : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
@@ -2855,7 +2931,7 @@ export default function SettingsPage() {
                   {m.source === 'auto' && (
                     <span
                       title="由自动记忆从对话中提取"
-                      className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-600 dark:bg-violet-950 dark:text-violet-300"
+                      className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-600 dark:bg-violet-950 dark:text-violet-300"
                     >
                       🤖 自动
                     </span>
@@ -2882,7 +2958,7 @@ export default function SettingsPage() {
             </div>
             {/* 证据链（DeepTutor 参考项）：洞察/合并行不是凭空的——原句依据就地展开 */}
             {m.evidence && m.evidence.length > 0 ? (
-              <p className="-mt-1.5 px-4 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+              <p className="-mt-1.5 px-4 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
                 依据 {m.evidence.length} 条：
                 {m.evidence.slice(0, 3).map((ev) => ev.text).join(' · ')}
                 {m.evidence.length > 3 ? ` 等 ${m.evidence.length} 条` : ''}
@@ -2949,7 +3025,7 @@ export default function SettingsPage() {
           className="rounded-lg border border-neutral-200 p-3 dark:border-neutral-800"
           onToggle={(e) => {
             if ((e.target as HTMLDetailsElement).open && !memExpose) {
-              api.getMemoryExpose().then(setMemExpose).catch(() => {})
+              api.getMemoryExpose().then(setMemExpose).catch((e) => failLoad('记忆开放', e))
             }
           }}
         >
@@ -2998,7 +3074,7 @@ export default function SettingsPage() {
                 {a.system_prompt || '(无人设提示词)'}
                 {a.model_id && ` · 模型 ${a.model_id}`}
                 {a.use_rag && ' · RAG'}
-                {!a.tools_enabled && ' · 无工具'}
+                {a.tool_whitelist === 'none' ? ' · 无工具' : a.tool_whitelist ? ` · 工具 ${a.tool_whitelist}` : ''}
               </div>
             </div>
             <div className="flex shrink-0 gap-2 text-sm">
@@ -3076,14 +3152,6 @@ export default function SettingsPage() {
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={agentDraft.tools_enabled}
-                  onChange={(e) => setAgentDraft({ ...agentDraft, tools_enabled: e.target.checked })}
-                />
-                允许使用工具
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
                   checked={agentDraft.enabled}
                   onChange={(e) => setAgentDraft({ ...agentDraft, enabled: e.target.checked })}
                 />
@@ -3091,6 +3159,23 @@ export default function SettingsPage() {
               </label>
             </div>
           </div>
+          {/* A2：这一栏原来是「允许使用工具」那个布尔开关。后端已经换成**白名单**了
+              （`AgentPreset.tool_whitelist`，语义在 `mcp.filter_specs` 一处），
+              界面照旧只发一个布尔的话，用户勾掉之后根本说不清"到底禁了哪些"。
+              所以这里给字符串本身：空 = 不限制，`none` = 一个都不给。 */}
+          <label className="mt-3 block text-xs text-neutral-500">
+            工具白名单
+            <input
+              placeholder="空 = 不限制；none = 一个都不给；例：vault_*, kb_search"
+              value={agentDraft.tool_whitelist}
+              onChange={(e) => setAgentDraft({ ...agentDraft, tool_whitelist: e.target.value })}
+              className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            />
+            <span className="mt-1 block text-xs text-neutral-400">
+              按 fnmatch 匹配：<code className="text-neutral-500">vault_*</code> 这类前缀，
+              或 <code className="text-neutral-500">server__*</code> 指某个 MCP 服务的全部工具。
+            </span>
+          </label>
           <div className="mt-4 flex justify-end gap-2">
             {agentEditId != null && (
               <button
@@ -3382,6 +3467,7 @@ export default function SettingsPage() {
           <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Plug className="h-3.5 w-3.5" /></span></h2>
           <span className="text-xs text-neutral-400">{activeToolCount} 个可用工具</span>
         </div>
+        <p className="-mt-1 text-xs leading-relaxed text-neutral-400">{toolCostLine(mcpView?.tools)}</p>
         <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
           内置工具始终可用：<code className="text-neutral-500">vault_read_file</code> /{' '}
           <code className="text-neutral-500">vault_list_files</code> /{' '}

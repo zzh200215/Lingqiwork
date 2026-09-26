@@ -760,12 +760,12 @@ export default function NotesPage() {
                 </>
               )}
             </button>
-            <p className="pt-1 text-[10px] leading-relaxed text-neutral-400">
+            <p className="pt-1 text-xs leading-relaxed text-neutral-400">
               {composeMsg || 'vault 全部 .md · 自动进 RAG 索引'}
             </p>
           </div>
           {briefing && (
-            <p className="mx-3 mb-2 rounded-lg bg-violet-50/80 px-2.5 py-2 text-[11px] leading-relaxed text-violet-700 dark:bg-violet-500/10 dark:text-violet-300">
+            <p className="mx-3 mb-2 rounded-lg bg-violet-50/80 px-2.5 py-2 text-xs leading-relaxed text-violet-700 dark:bg-violet-500/10 dark:text-violet-300">
               {briefing}
             </p>
           )}
@@ -784,7 +784,7 @@ export default function NotesPage() {
             )}
             {searchQ.trim() ? (
               <>
-                <p className="px-2 pb-1 text-[10px] uppercase tracking-wider text-neutral-400">
+                <p className="px-2 pb-1 text-xs uppercase tracking-wider text-neutral-400">
                   {searchHits.length} 个命中
                 </p>
                 {searchHits.map((h) => (
@@ -796,9 +796,9 @@ export default function NotesPage() {
                     <span className="block truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
                       <FileText className="mr-1 inline h-3 w-3 text-neutral-400" />
                       {h.path}
-                      <span className="ml-1 text-[10px] text-violet-500">×{h.count}</span>
+                      <span className="ml-1 text-xs text-violet-500">×{h.count}</span>
                     </span>
-                    <span className="mt-0.5 line-clamp-2 block text-[11px] leading-snug text-neutral-400">
+                    <span className="mt-0.5 line-clamp-2 block text-xs leading-snug text-neutral-400">
                       {h.excerpt}
                     </span>
                   </button>
@@ -811,7 +811,7 @@ export default function NotesPage() {
               <>
                 {groupedFiles.map((g) => (
                   <div key={g.label} className="mb-1">
-                    <p className="px-2 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wider text-neutral-400">
+                    <p className="px-2 pb-0.5 pt-2 text-xs font-medium uppercase tracking-wider text-neutral-400">
                       {g.label}
                     </p>
                     {g.items.map((f) => (
@@ -827,10 +827,10 @@ export default function NotesPage() {
                           <FileText className="h-3 w-3 shrink-0 text-neutral-400" />
                           <span className="truncate">{f.path}</span>
                         </button>
-                        <span className="ml-1 shrink-0 text-[10px] text-neutral-400">{relTime(f.mtime)}</span>
+                        <span className="ml-1 shrink-0 text-xs text-neutral-400">{relTime(f.mtime)}</span>
                         <button
                           onClick={() => removeNote(f.path)}
-                          className="ml-1 hidden shrink-0 text-neutral-400 hover:text-red-500 group-hover:block"
+                          className="ml-1 shrink-0 text-neutral-400 opacity-60 transition-[color,opacity] hover:text-red-500 hover:opacity-100 focus-visible:opacity-100"
                           title="删除"
                         >
                           ×
@@ -869,7 +869,7 @@ export default function NotesPage() {
                       : 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200'
                   }`}
                 >
-                  {m === 'edit' ? <Pencil className="h-3.5 w-3.5" /> : m === 'split' ? <Columns2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  {m === 'edit' ? <Pencil className="h-4 w-4" /> : m === 'split' ? <Columns2 className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               ))}
             </div>
@@ -889,7 +889,7 @@ export default function NotesPage() {
               <>
                 <InjectedLine
                   names={composeInjected}
-                  className="shrink-0 text-[11px] text-teal-700 dark:text-teal-300"
+                  className="shrink-0 text-xs text-teal-700 dark:text-teal-300"
                 />
                 <FeedbackButtons
                   kind="compose"
@@ -900,7 +900,7 @@ export default function NotesPage() {
                 />
               </>
             ) : null}
-            <span className="ml-auto shrink-0 text-[11px] text-neutral-400">
+            <span className="ml-auto shrink-0 text-xs text-neutral-400">
               {flash ? (
                 <span className="text-sky-600 dark:text-sky-300">{flash}</span>
               ) : aiBusy ? (
@@ -1004,19 +1004,19 @@ export default function NotesPage() {
           <div className="relative flex min-w-0 flex-1 flex-col">
             {selRange && !aiBusy && !rewrite && !cloze && (
               <div className="absolute left-1/2 top-3 z-10 flex max-w-[95%] -translate-x-1/2 flex-wrap items-center justify-center gap-1.5 rounded-full border border-violet-200 bg-white/95 px-3 py-1.5 shadow-md backdrop-blur dark:border-violet-500/40 dark:bg-neutral-900/95">
-                <span className="text-[11px] text-neutral-500">已选 {selRange.text.length} 字</span>
+                <span className="text-xs text-neutral-500">已选 {selRange.text.length} 字</span>
                 {REWRITE_PRESETS.map((p) => (
                   <button
                     key={p.label}
                     onClick={() => runRewrite(p.instruction)}
-                    className="rounded-full border border-violet-200 px-2 py-0.5 text-[11px] text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                    className="rounded-full border border-violet-200 px-2 py-0.5 text-xs text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
                   >
                     {p.label}
                   </button>
                 ))}
                 <button
                   onClick={customRewrite}
-                  className="rounded-full border border-violet-200 px-2 py-0.5 text-[11px] text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                  className="rounded-full border border-violet-200 px-2 py-0.5 text-xs text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
                 >
                   自定义…
                 </button>
@@ -1024,14 +1024,14 @@ export default function NotesPage() {
                   onClick={() => void makeCloze()}
                   disabled={clozeBusy}
                   title="把选中的部分挖成填空卡（不调模型）"
-                  className="rounded-full border border-sky-300 px-2 py-0.5 text-[11px] text-sky-600 transition-colors hover:bg-sky-50 disabled:opacity-50 dark:border-sky-500/50 dark:text-sky-300 dark:hover:bg-sky-500/10"
+                  className="rounded-full border border-sky-300 px-2 py-0.5 text-xs text-sky-600 transition-colors hover:bg-sky-50 disabled:opacity-50 dark:border-sky-500/50 dark:text-sky-300 dark:hover:bg-sky-500/10"
                 >
                   <Layers className="mr-1 inline h-3 w-3" />
                   挖空
                 </button>
                 <button
                   onClick={() => setSelRange(null)}
-                  className="text-[11px] text-neutral-400 hover:text-neutral-600"
+                  className="text-xs text-neutral-400 hover:text-neutral-600"
                   title="取消选择"
                 >
                   ×
@@ -1044,8 +1044,8 @@ export default function NotesPage() {
                 Every character here is your own note text, and the blanked front is
                 shown in full below, so a second review step is pure friction. */}
             {cloze && (
-              <div className="absolute left-1/2 top-3 z-10 w-[min(560px,95%)] -translate-x-1/2 rounded-xl border border-sky-200 bg-white/95 p-3 shadow-lg backdrop-blur dark:border-sky-500/40 dark:bg-neutral-900/95">
-                <div className="mb-1.5 flex items-center gap-2 text-[11px] text-neutral-500">
+              <div className="absolute left-1/2 top-3 z-10 w-[min(560px,95%)] -translate-x-1/2 rounded-md border border-sky-200 bg-white/95 p-3 shadow-lg backdrop-blur dark:border-sky-500/40 dark:bg-neutral-900/95">
+                <div className="mb-1.5 flex items-center gap-2 text-xs text-neutral-500">
                   <span className="rounded bg-sky-100 px-1.5 py-0.5 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300">
                     填空
                   </span>
@@ -1055,7 +1055,7 @@ export default function NotesPage() {
                 <p className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-neutral-50 p-2 font-mono text-[12px] leading-relaxed dark:bg-neutral-800/60">
                   {cloze.front}
                 </p>
-                <p className="mt-1.5 truncate text-[11px] text-neutral-500">
+                <p className="mt-1.5 truncate text-xs text-neutral-500">
                   答案：<span className="text-neutral-700 dark:text-neutral-200">{cloze.back}</span>
                 </p>
                 <div className="mt-2 flex items-center gap-2">
@@ -1077,8 +1077,8 @@ export default function NotesPage() {
             )}
 
             {outlineOpen && (
-              <div className="absolute right-4 top-3 z-10 max-h-[70%] w-60 overflow-y-auto rounded-xl border border-neutral-200 bg-white/95 p-2 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95">
-                <div className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wider text-neutral-400">
+              <div className="absolute right-4 top-3 z-10 max-h-[70%] w-60 overflow-y-auto rounded-md border border-neutral-200 bg-white/95 p-2 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95">
+                <div className="px-2 pb-1 pt-0.5 text-xs font-medium uppercase tracking-wider text-neutral-400">
                   大纲 · {outline.length} 个标题
                 </div>
                 {outline.length ? (
@@ -1174,7 +1174,7 @@ export default function NotesPage() {
 
             {/* 字数底栏 */}
             {activePath && (
-              <div className="flex items-center gap-3 border-t border-neutral-200/60 px-4 py-1 text-[11px] text-neutral-400 dark:border-neutral-800/60">
+              <div className="flex items-center gap-3 border-t border-neutral-200/60 px-4 py-1 text-xs text-neutral-400 dark:border-neutral-800/60">
                 <span>{charCount} 字符</span>
                 <span>·</span>
                 <span>{wordCount} 字</span>
@@ -1197,14 +1197,14 @@ export default function NotesPage() {
           <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
             <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
               <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-                <MessageSquare className="h-3.5 w-3.5" />
+                <MessageSquare className="h-4 w-4" />
                 笔记对话
               </h2>
               <div className="flex items-center gap-2">
                 {chatMsgs.length > 0 && !chatBusy && (
                   <button
                     onClick={() => setChatMsgs([])}
-                    className="text-[11px] text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
+                    className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
                   >
                     清空
                   </button>
@@ -1230,7 +1230,7 @@ export default function NotesPage() {
                     {m.content || (chatBusy && i === chatMsgs.length - 1 ? '…' : '')}
                   </div>
                   {m.role === 'assistant' && m.content && !chatBusy && (
-                    <div className="mt-1 flex gap-2 text-[10px] text-neutral-400">
+                    <div className="mt-1 flex gap-2 text-xs text-neutral-400">
                       <button
                         onClick={() => insertAtCaret(m.content)}
                         className="hover:text-violet-600 dark:hover:text-violet-300"
@@ -1297,7 +1297,7 @@ export default function NotesPage() {
           <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
             <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
               <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-                <Podcast className="h-3.5 w-3.5" />
+                <Podcast className="h-4 w-4" />
                 双人播客
               </h2>
               <button
@@ -1308,12 +1308,12 @@ export default function NotesPage() {
               </button>
             </div>
             <div className="border-b border-neutral-200/80 px-3 py-3 dark:border-neutral-800/80">
-              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">来源笔记（可合并，最多 5 篇）：</p>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">来源笔记（可合并，最多 5 篇）：</p>
               <div className="mt-1.5 flex flex-wrap items-center gap-1">
                 {podSources.map((s) => (
                   <span
                     key={s}
-                    className="inline-flex max-w-full items-center gap-1 rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-[11px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
+                    className="inline-flex max-w-full items-center gap-1 rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
                   >
                     <span className="max-w-[180px] truncate">{s}</span>
                     <button
@@ -1329,7 +1329,7 @@ export default function NotesPage() {
                   <select
                     value=""
                     onChange={(e) => addPodSource(e.target.value)}
-                    className="rounded-full border border-dashed border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 outline-none dark:border-neutral-600 dark:text-neutral-400"
+                    className="rounded-full border border-dashed border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 outline-none dark:border-neutral-600 dark:text-neutral-400"
                   >
                     <option value="">＋ 添加笔记…</option>
                     {files
@@ -1343,7 +1343,7 @@ export default function NotesPage() {
                 )}
               </div>
               <div className="mt-2 grid grid-cols-2 gap-2">
-                <label className="block text-[10px] text-neutral-400">
+                <label className="block text-xs text-neutral-400">
                   主持人音色
                   <select
                     value={podHost}
@@ -1358,7 +1358,7 @@ export default function NotesPage() {
                     ))}
                   </select>
                 </label>
-                <label className="block text-[10px] text-neutral-400">
+                <label className="block text-xs text-neutral-400">
                   嘉宾音色
                   <select
                     value={podGuest}
@@ -1391,7 +1391,7 @@ export default function NotesPage() {
                   </>
                 )}
               </button>
-              {podMsg && <p className="mt-2 text-[11px] text-red-500">{podMsg}</p>}
+              {podMsg && <p className="mt-2 text-xs text-red-500">{podMsg}</p>}
             </div>
             <div className="flex-1 space-y-3 overflow-y-auto px-3 py-3">
               {podList.map((p) => (
@@ -1405,7 +1405,7 @@ export default function NotesPage() {
                         <Headphones className="h-3 w-3 shrink-0 text-neutral-400" />
                         {p.title}
                       </p>
-                      <p className="mt-0.5 text-[10px] text-neutral-400">
+                      <p className="mt-0.5 text-xs text-neutral-400">
                         {p.turns} 轮 · {Math.floor(p.duration_sec / 60)}分{Math.round(p.duration_sec % 60)}秒 ·{' '}
                         {p.created_at.replace('T', ' ').slice(5, 16)}
                       </p>
@@ -1421,14 +1421,14 @@ export default function NotesPage() {
                   <audio controls preload="none" src={`/api/podcast/audio/${p.file}`} className="mt-2 h-8 w-full" />
                   <button
                     onClick={() => setPodScriptId((s) => (s === p.id ? null : p.id))}
-                    className="mt-1.5 text-[10px] text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
+                    className="mt-1.5 text-xs text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
                   >
                     {podScriptId === p.id ? '收起文稿' : '查看文稿'}
                   </button>
                   {podScriptId === p.id && (
                     <div className="mt-1.5 max-h-60 space-y-1.5 overflow-y-auto">
                       {p.script.map((t, i) => (
-                        <p key={i} className="text-[11px] leading-snug">
+                        <p key={i} className="text-xs leading-snug">
                           <span
                             className={`mr-1 font-medium ${
                               t.speaker === 'host' ? 'text-amber-600 dark:text-amber-400' : 'text-sky-600 dark:text-sky-400'
@@ -1458,7 +1458,7 @@ export default function NotesPage() {
           <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
             <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2 dark:border-neutral-800/80">
               <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-                <Layers className="h-3.5 w-3.5" />
+                <Layers className="h-4 w-4" />
                 出复习卡
               </h2>
               <button
@@ -1477,7 +1477,7 @@ export default function NotesPage() {
               />
               <Link
                 to="/review"
-                className="mt-3 block text-center text-[11px] text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
+                className="mt-3 block text-center text-xs text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
               >
                 去复习页 →
               </Link>

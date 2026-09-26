@@ -8,7 +8,6 @@
 
 Env 必须在 import 前设好（`app.config` 在 import 时就读）。
 """
-import atexit
 import asyncio
 import json
 import os
@@ -22,13 +21,6 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, ".")
-
-# project-local scratch（系统 temp 在沙箱下可能不可写）
-_TMP = Path(tempfile.mkdtemp(prefix="wb-petstate-", dir=Path(".").resolve()))
-atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
-
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 
 from app.core import pet  # noqa: E402
 from app.core import pet_state as ps  # noqa: E402
@@ -46,6 +38,25 @@ def scratch(monkeypatch):
     (d / "vault").mkdir(parents=True, exist_ok=True)
     yield d
     shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture
+def noon_clock(monkeypatch):
+    """把 `pet_state` 眼里的「现在」钉在 `NOON`。
+
+    **为什么需要它**（2026-09-20 晚跑全量时撞的）：文件顶上就写着「让断言不受跑测试的钟点
+    影响」，但**过路由的那两条**没有注入 `now`——`pet_state` 那条路走的是真实时钟，
+    于是 `hour >= LATE_HOUR` 在 23 点后先把 mode 判成 `sleepy`，两条用例
+    （`mode == "working"` / `== "learning"`）在深夜必红。**白天绿、深夜红**是最难查的那种
+    flake，所以在这儿钉住钟，而不是把断言放宽（放宽就把「path 决定 mode」这件事测没了）。
+    """
+    class _Noon(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ARG003 - 与 datetime.now 的签名一致
+            return NOON
+
+    monkeypatch.setattr(ps, "datetime", _Noon)
+    return NOON
 
 
 def _mk_messages(scratch, stamps: list[str]) -> None:
@@ -603,7 +614,7 @@ def test_an_output_wins_the_celebration_line(scratch):
 # ---------- 路由：参数真的接上了 ----------
 
 
-def test_state_route_returns_the_documented_shape(scratch):
+def test_state_route_returns_the_documented_shape(scratch, noon_clock):
     from app.routers import pet as pet_router
 
     out = asyncio.run(pet_router.pet_state(idle_sec=None, path="/work"))
@@ -625,11 +636,12 @@ def test_state_route_does_not_echo_a_path_it_was_not_given(scratch):
     assert asyncio.run(pet_router.pet_state(idle_sec=None, path=""))["path"] == ""
 
 
-def test_state_endpoint_is_served_over_http(scratch, monkeypatch):
+def test_state_endpoint_is_served_over_http(scratch, monkeypatch, noon_clock):
     """真的挂上了路由、真的解析了查询参数——**直接调函数验不出注册这一层**。
 
     照 `test_auth.py` 的路子：不进 TestClient 的上下文管理器（那会跑 lifespan：
     模型预热、watcher、调度器，这里一样都不需要），但请求仍然过鉴权中间件。
+    钟也钉住（`noon_clock`）：`/tutor` 在深夜会被 `sleepy` 抢先判掉。
     """
     from fastapi.testclient import TestClient
 

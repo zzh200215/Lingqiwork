@@ -7,7 +7,6 @@ Env must be set before app imports.
 """
 import asyncio
 import atexit
-import os
 import shutil
 import sys
 import tempfile
@@ -32,8 +31,6 @@ def _cleanup() -> None:
 
 atexit.register(_cleanup)
 
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 
 from app.core import memory, memory_tidy  # noqa: E402
 from app.core import scheduler as sched  # noqa: E402

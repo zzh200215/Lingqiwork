@@ -1,4 +1,4 @@
-/** 最近回合（W5）—— 聊天那条路上每一轮发生了什么。
+﻿/** 最近回合（W5）—— 聊天那条路上每一轮发生了什么。
  *
  *  **它补的是缺口二。** 界面上一直看得到调了哪些工具，但**什么都不落盘**：没有工具耗时、
  *  没有轮数、没有「这一轮为什么没存」。升级计划那一轮的每个结论都是临时脚本量出来的，
@@ -59,26 +59,37 @@ export function TurnRow({ t, now, labels }: { t: TurnTrace; now: number; labels:
           // 这里只显示 —— 界面自己再算一遍就是第二份实现。
           <span
             data-turn-route={route}
-            className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+            className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
             title={t.quality?.route?.reason || '确定性路由（W3）'}
           >
             {route}
           </span>
         ) : null}
         {t.retried > 0 ? <span className="text-amber-600 dark:text-amber-400">重试 {t.retried}</span> : null}
+        {/* P3：这一轮注入了几条材料、真被引用了几条。**「没注入」不摆** —— 那一格
+            摆 0 会被读成「检索了但没人用」，而它多半只是没检索（闲聊跳过 / RAG 关）。 */}
+        {t.sources_injected > 0 ? (
+          <span
+            data-turn-sources={`${t.sources_injected}/${t.sources_cited}`}
+            className="text-neutral-400 tabular-nums"
+            title="这一轮注入了几条材料 / 正文真引用到了几条"
+          >
+            材料 {t.sources_injected} · 引用 {t.sources_cited}
+          </span>
+        ) : null}
         {/* 毛病：标签与筛选项同一份文案（后端的 FILTERS），这里不另立说法 */}
         {t.flags.map((f) => (
           <span
             key={f}
             data-turn-flag={f}
-            className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
+            className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
           >
             {labels[f] ?? f}
           </span>
         ))}
       </div>
       {t.error ? (
-        <p className="truncate text-[11px] text-rose-600 dark:text-rose-400" title={t.error}>
+        <p className="truncate text-xs text-rose-600 dark:text-rose-400" title={t.error}>
           {t.error}
         </p>
       ) : null}
@@ -111,12 +122,12 @@ export default function TurnLedger() {
   return (
     <div data-turn-ledger className="mt-1 border-t border-neutral-100 pt-3 dark:border-neutral-800">
       <div className="flex flex-wrap items-center gap-1.5">
-        <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">最近回合</p>
+        <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">最近回合</p>
         <div className="flex-1" />
         <button
           data-turn-filter=""
           onClick={() => setOnly('')}
-          className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+          className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
             only === ''
               ? 'border-neutral-400 text-neutral-700 dark:border-neutral-500 dark:text-neutral-200'
               : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
@@ -130,7 +141,7 @@ export default function TurnLedger() {
             data-turn-filter={f.key}
             onClick={() => setOnly(f.key)}
             title={f.hint}
-            className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+            className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
               only === f.key
                 ? 'border-violet-400 text-violet-700 dark:border-violet-500 dark:text-violet-300'
                 : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
@@ -141,14 +152,14 @@ export default function TurnLedger() {
         ))}
       </div>
       {/* 语气与整个仓库一致：它是诊断，不是考核 */}
-      <p className="mt-1 text-[11px] text-neutral-400">
+      <p className="mt-1 text-xs text-neutral-400">
         聊天那条路上每一轮的真实开销与结果。这是诊断，不是考核 —— 没有目标、没有排行榜。
       </p>
-      {err ? <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">读回合账本出错：{err}</p> : null}
+      {err ? <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">读回合账本出错：{err}</p> : null}
       {!data ? (
-        <p className="mt-1 text-[11px] text-neutral-400">正在读…</p>
+        <p className="mt-1 text-xs text-neutral-400">正在读…</p>
       ) : data.traces.length === 0 ? (
-        <p className="mt-1 text-[11px] text-neutral-400">
+        <p className="mt-1 text-xs text-neutral-400">
           {only ? '这一类目前一个都没有。' : '还没有回合记录 —— 聊一句就有了。'}
         </p>
       ) : (

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 
-import { NAV, navState, legacyTarget, parseRoute } from './routes'
+import { NAV, navState, legacyTarget, parseRoute, resolveWorkTab } from './routes'
 
 // ---------- 侧栏导航（2026-09-18 改版：平铺五区 → 可展开的分组）----------
 //
@@ -9,24 +9,24 @@ import { NAV, navState, legacyTarget, parseRoute } from './routes'
 
 describe('navState', () => {
   it('没写参数 → 这一组的第一个子项（与页面的默认值是同一个）', () => {
-    expect(navState('/work', '')).toEqual({ group: 'work', href: '/work?tab=output' })
+    expect(navState('/work', '')).toEqual({ group: 'work', href: '/work?tab=report' })
     expect(navState('/tutor', '')).toEqual({ group: 'tutor', href: '/tutor?tab=learn' })
     expect(navState('/companion', '')).toEqual({ group: 'companion', href: '/companion?tab=chat' })
     expect(navState('/settings', '')).toEqual({ group: 'settings', href: '/settings?section=general' })
   })
 
   it('写了参数 → 就是那一个子项', () => {
-    expect(navState('/work', '?tab=dispatch').href).toBe('/work?tab=dispatch')
+    expect(navState('/work', '?tab=dispatch').href).toBe('/work?tab=workflow')
     expect(navState('/tutor', '?tab=record').href).toBe('/tutor?tab=record')
     expect(navState('/settings', '?section=mcp').href).toBe('/settings?section=mcp')
   })
 
-  it('工作流深链 `?task=7` 没写 tab → 落「引擎」（与工作页自己的默认一致）', () => {
-    expect(navState('/work', '?task=7').href).toBe('/work?tab=engine')
+  it('工作流深链 `?task=7` 没写 tab → 落「工作流」（与工作页自己的默认一致）', () => {
+    expect(navState('/work', '?task=7').href).toBe('/work?tab=workflow')
   })
 
   it('认不出的参数 → 退回第一个子项（页面也会退回默认，两边一致）', () => {
-    expect(navState('/work', '?tab=nonsense').href).toBe('/work?tab=output')
+    expect(navState('/work', '?tab=nonsense').href).toBe('/work?tab=report')
     expect(navState('/settings', '?section=nope').href).toBe('/settings?section=general')
   })
 
@@ -66,8 +66,8 @@ describe('NAV 这份表本身', () => {
   it('页面里的每一档都在这张表上（子项地址不重复）', () => {
     const hrefs = NAV.flatMap((g) => g.items.map((i) => i.href))
     expect(new Set(hrefs).size).toBe(hrefs.length)
-    // 工作页六档、零柒五档、学三档、设置七档、资产四项
-    expect(NAV.find((g) => g.key === 'work')!.items).toHaveLength(6)
+    // 工作页七档、零柒五档、学三档、设置七档、资产四项
+    expect(NAV.find((g) => g.key === 'work')!.items).toHaveLength(4)
     expect(NAV.find((g) => g.key === 'companion')!.items).toHaveLength(5)
     expect(NAV.find((g) => g.key === 'settings')!.items).toHaveLength(7)
   })
@@ -136,22 +136,22 @@ describe('P2 导航收缩', () => {
     expect(parseRoute('/assets.html')).toBe('assets')
   })
 
-  it('/threads 整页搬进工作 · 跟进，redirect 带上 query', () => {
+  it('/threads 整页搬进工作 · 事项，redirect 带上 query', () => {
     expect(legacyTarget('/threads', '', '')).toEqual({
       pathname: '/work',
-      search: '?tab=follow',
+      search: '?tab=thread',
       hash: '',
     })
     // 从「一件事」深链过来的 ?thread=3 不能丢
     expect(legacyTarget('/threads', '?thread=3', '')).toEqual({
       pathname: '/work',
-      search: '?thread=3&tab=follow',
+      search: '?thread=3&tab=thread',
       hash: '',
     })
-    // 新家的参数说了算：旧链接自带的 tab 不会盖掉 follow
+    // 新家的参数说了算：旧链接自带的 tab 不会盖掉 thread
     expect(legacyTarget('/threads', '?tab=output', '')).toEqual({
       pathname: '/work',
-      search: '?tab=follow',
+      search: '?tab=thread',
       hash: '',
     })
   })
@@ -169,5 +169,80 @@ describe('P2 导航收缩', () => {
       search: '?tab=growth',
       hash: '',
     })
+  })
+})
+
+// ---------- P3：六个旧 tab key → 四个业务域 ----------
+//
+// 这一组守的是方案 §六 那条验收指标：**旧 `?tab=` 书签/深链存活率 100%**。
+// 它和上面「整页搬家」（`/threads` 那种**路径**级重定向）不是一回事：
+// `REDIRECTS` 只认路径，管不到查询参数——`?tab=` 这一层是新建的。
+
+describe('P3 · 旧 tab key 的别名层', () => {
+  it('四个新 key 原样认', () => {
+    for (const k of ['report', 'prompt', 'workflow', 'thread'] as const) {
+      expect(resolveWorkTab(k)).toBe(k)
+    }
+  })
+
+  it('**两代旧 key 都认**：最早那六个技术构件名，以及 2026-09-24 那版五个业务域名', () => {
+    // 最早那六个（用户看名字猜不出东西在哪，所以改了）
+    expect(resolveWorkTab('output')).toBe('report')
+    expect(resolveWorkTab('engine')).toBe('workflow')
+    expect(resolveWorkTab('dispatch')).toBe('workflow') // 两个视角合成一域
+    expect(resolveWorkTab('lab')).toBe('prompt')
+    expect(resolveWorkTab('form')).toBe('prompt') // 同属评测族
+    expect(resolveWorkTab('follow')).toBe('thread')
+    // 2026-09-24 那五个（本轮把 deliver/automation/eval 改成了新名）
+    expect(resolveWorkTab('deliver')).toBe('report')
+    expect(resolveWorkTab('automation')).toBe('workflow')
+    expect(resolveWorkTab('eval')).toBe('prompt')
+    // 这三个上一版就是新名，没动过
+    expect(resolveWorkTab('prompt')).toBe('prompt')
+    expect(resolveWorkTab('thread')).toBe('thread')
+  })
+
+  it('不认识的就是不认识——不硬塞一个默认档', () => {
+    expect(resolveWorkTab('nonsense')).toBeNull()
+    expect(resolveWorkTab('')).toBeNull()
+    expect(resolveWorkTab(null)).toBeNull()
+  })
+
+  it('`/work?tab=engine` 这种旧地址**在 URL 那一层就摆正**（地址栏自愈）', () => {
+    expect(legacyTarget('/work', '?tab=engine', '')).toEqual({
+      pathname: '/work',
+      search: '?tab=workflow',
+      hash: '',
+    })
+    // 别的参数一个都不能丢
+    expect(legacyTarget('/work', '?tab=lab&prompt=FEYNMAN_PROMPT', '')).toEqual({
+      pathname: '/work',
+      search: '?tab=prompt&prompt=FEYNMAN_PROMPT',
+      hash: '',
+    })
+  })
+
+  it('已经是新 key 的 /work 地址**不动**——别每次进工作页都多一次跳转', () => {
+    expect(legacyTarget('/work', '?tab=report', '')).toBeNull()
+    expect(legacyTarget('/work', '?tab=prompt&prompt=X', '')).toBeNull()
+    expect(legacyTarget('/work', '', '')).toBeNull()
+    expect(legacyTarget('/work', '?task=7', '')).toBeNull() // 没有 tab，不关这一层的事
+  })
+
+  it('别名只认 `/work`——别的页面同名参数不该被它改', () => {
+    expect(legacyTarget('/tutor', '?tab=engine', '')).toBeNull()
+    expect(legacyTarget('/companion', '?tab=form', '')).toBeNull()
+  })
+
+  it('**侧栏与页面认同一个函数**：两代旧链接下侧栏都亮对', () => {
+    // 各算一份的那天会出现「侧栏亮着 A、页面停在 B」，而且没人收到报错
+    expect(navState('/work', '?tab=engine').href).toBe('/work?tab=workflow')
+    expect(navState('/work', '?tab=automation').href).toBe('/work?tab=workflow')
+    expect(navState('/work', '?tab=lab').href).toBe('/work?tab=prompt')
+    expect(navState('/work', '?tab=eval').href).toBe('/work?tab=prompt')
+    expect(navState('/work', '?tab=deliver').href).toBe('/work?tab=report')
+    expect(navState('/work', '?tab=follow').href).toBe('/work?tab=thread')
+    // 工作流深链没写 tab：落「工作流」（链在那儿）
+    expect(navState('/work', '?task=7').href).toBe('/work?tab=workflow')
   })
 })

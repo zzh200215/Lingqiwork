@@ -10,7 +10,7 @@
  *  - 红线（照 `quality.py`）：这是看板不是考核 —— 不设目标、不催、不排名。
  *
  *  2026-09-19 画法升级：步骤从「一行行列表」改成**流水线节点图**——每步一颗
- *  状态色节点（在跑=品牌色呼吸、等人=琥珀、跑完=绿、出错=红），步与步之间连线，
+ *  状态色节点（在跑=天空蓝呼吸、等人=琥珀、跑完=绿、出错=红），步与步之间连线，
  *  上一步跑完线就变绿。数据还是那一份，只是把「第 2 步在等第 1 步」这件事
  *  画成人一眼能读的形状。
  */
@@ -31,7 +31,10 @@ const TONE: Record<string, string> = {
 }
 
 const DOT: Record<string, string> = {
-  running: 'bg-violet-500 wb-node-running',
+  // **sky = 运行**（全站语义色约定）。这里原来是品牌紫，与同一屏里
+  // 标签色（`TONE.running`）和计数 chip 的 sky 分岔——同一个「在跑」三种颜色。
+  // 光晕的色在 `index.css` 的 `wb-node-pulse` 里，已一并改成 sky。
+  running: 'bg-sky-500 wb-node-running',
   awaiting: 'bg-amber-400',
   ok: 'bg-emerald-500',
   error: 'bg-rose-500',
@@ -79,21 +82,21 @@ function StepNode({
 
       <div className="mt-2.5 flex flex-col items-start gap-1.5 pr-4">
         <p className="flex w-full items-baseline gap-1.5 text-sm text-neutral-700 dark:text-neutral-200">
-          <span className="shrink-0 text-[11px] tabular-nums text-neutral-400">{step.index}</span>
+          <span className="shrink-0 text-xs tabular-nums text-neutral-400">{step.index}</span>
           <span className="min-w-0 truncate" title={step.name}>
             {step.name}
           </span>
         </p>
-        <p className="w-full truncate text-[11px] text-neutral-400" title={step.who}>
+        <p className="w-full truncate text-xs text-neutral-400" title={step.who}>
           {step.who}
         </p>
         {step.state === 'blocked' && step.blocked_by ? (
-          <p className="text-[10px] text-neutral-400">等第 {step.index - 1} 步</p>
+          <p className="text-xs text-neutral-400">等第 {step.index - 1} 步</p>
         ) : null}
         <div className="flex flex-wrap items-center gap-1.5">
           <span
             data-dispatch-label={step.state}
-            className={`shrink-0 rounded border px-1.5 py-0.5 text-[11px] ${TONE[step.state] ?? TONE.idle}`}
+            className={`shrink-0 rounded border px-1.5 py-0.5 text-xs ${TONE[step.state] ?? TONE.idle}`}
           >
             {step.state_label}
           </span>
@@ -104,7 +107,7 @@ function StepNode({
               data-dispatch-target={a.run_id ?? a.task_id}
               disabled={busy}
               onClick={() => onAction(step, a.kind, a.label)}
-              className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:opacity-40 ${
+              className={`shrink-0 rounded-md border px-2 py-0.5 text-xs transition-colors disabled:opacity-40 ${
                 a.kind === 'reject'
                   ? 'border-neutral-300 text-neutral-500 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800'
                   : 'border-violet-300 text-violet-700 hover:bg-violet-50 dark:border-violet-500/50 dark:text-violet-300 dark:hover:bg-violet-500/10'
@@ -187,7 +190,7 @@ export default function DispatchPanel() {
       {/* 宠物那一句：只说事实（谁在跑、谁在等），不催不排名 */}
       <p
         data-dispatch-broadcast
-        className="rounded-xl border border-violet-200 bg-violet-50/60 px-3 py-2 text-sm text-violet-800 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200"
+        className="rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2 text-sm text-violet-800 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200"
       >
         🐾 {board.broadcast}
       </p>
@@ -206,7 +209,7 @@ export default function DispatchPanel() {
       {note ? <p className="text-xs text-emerald-600 dark:text-emerald-400">{note}</p> : null}
 
       {board.chains.length === 0 ? (
-        <p data-dispatch-empty className="rounded-xl border border-dashed border-neutral-300 px-3 py-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
+        <p data-dispatch-empty className="rounded-md border border-dashed border-neutral-300 px-3 py-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
           还没有任务链。工作流页建两条、用「链到下一个」串起来，这里就会出现一条流水线。
         </p>
       ) : (
@@ -221,7 +224,7 @@ export default function DispatchPanel() {
             >
               <header className="mb-3 flex items-baseline gap-2">
                 <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-200">{c.name}</h3>
-                <span className="text-[11px] text-neutral-400">
+                <span className="text-xs text-neutral-400">
                   {c.length} 步
                   {c.needs_attention && c.stuck_at ? ` · 卡在「${c.stuck_at.name}」` : ' · 没有在等人的环节'}
                 </span>

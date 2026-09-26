@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+﻿import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,7 +18,7 @@ import { api } from './api'
 
 function mount(open = true) {
   return render(
-    <MemoryRouter initialEntries={['/work?tab=output']}>
+    <MemoryRouter initialEntries={['/work?tab=deliver']}>
       <CommandPalette open={open} onClose={() => {}} />
     </MemoryRouter>
   )

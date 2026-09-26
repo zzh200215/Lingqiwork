@@ -29,6 +29,7 @@ import {
   type PromptRegistryEntryDetail,
 } from './api'
 import EmptyHint from './EmptyHint'
+import RunPanel from './RunPanel'
 
 /** 判分型金标集（P2-1）的四档 + 一个「不判」。**0 不是一档**：它是「人工也认为
  *  这时候该判不了」（卡上没有答案）——与 `retell.read_card` 里那个 `grade: 0` 同义。 */
@@ -55,19 +56,19 @@ function when(iso: string): string {
 /** 一条提示词在列表里的状态徽章——只有三种事实，没有第四种「加油」。 */
 function Status({ p }: { p: PromptRegistryEntry }) {
   if (p.drifted) {
-    return <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-600 dark:bg-rose-950/50 dark:text-rose-300">登记漂移</span>
+    return <span className="rounded bg-rose-50 px-1.5 py-0.5 text-xs text-rose-600 dark:bg-rose-950/50 dark:text-rose-300">登记漂移</span>
   }
   if (!p.cases) {
-    return <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">没有用例</span>
+    return <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">没有用例</span>
   }
   if (!p.baseline) {
-    return <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">没有基线</span>
+    return <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">没有基线</span>
   }
   if (p.baseline.stale) {
-    return <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">基线过期</span>
+    return <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">基线过期</span>
   }
   return (
-    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
       {p.baseline.passed}/{p.baseline.cases} · {pct(p.baseline.rate)}
     </span>
   )
@@ -80,11 +81,13 @@ export default function PromptLab() {
   const [detail, setDetail] = useState<PromptRegistryEntryDetail | null>(null)
   const [report, setReport] = useState<PromptCheckReport | null>(null)
   const [busy, setBusy] = useState(false)
+  /** 已经点了「停止」、但这一条还没跑完（合作式取消的中间态）。 */
+  const [stopping, setStopping] = useState(false)
   const [variant, setVariant] = useState('')
   const [label, setLabel] = useState('')
   const [showContent, setShowContent] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  // 喂食：把小屋技能卡 / 别的页面指过来的那一条直接打开（`/work?tab=lab&prompt=FEYNMAN_PROMPT`）
+  // 喂食：把小屋技能卡 / 别的页面指过来的那一条直接打开（`/work?tab=prompt&prompt=FEYNMAN_PROMPT`）
   const [params] = useSearchParams()
   const wantKey = params.get('prompt') ?? ''
   // 喂食表单：从哪来（报告里那一条的输入原样带过来）+ 意图 + 勾的断言
@@ -191,6 +194,7 @@ export default function PromptLab() {
   const run = useCallback(async () => {
     if (!key || busy) return
     setBusy(true)
+    setStopping(false)
     setErr(null)
     try {
       const body: { variant?: string; variant_label?: string } = {}
@@ -206,8 +210,26 @@ export default function PromptLab() {
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+      setStopping(false)
     }
   }, [key, busy, variant, label, load])
+
+  /** 请这一趟停下。**合作式**：后端在每条用例之间查一次，所以当前那条会跑完才停
+   *  ——按钮上写的因此是「正在停…（这一条跑完就停）」，不是「已停止」。
+   *
+   *  `stopped: false` = 后端那边没有在跑的（比如刚好已经跑完了）。那时什么都不用改：
+   *  原来那一趟的响应马上就到。 */
+  const cancel = useCallback(async () => {
+    if (!key) return
+    setStopping(true)
+    try {
+      const r = await api.cancelPromptCheck(key)
+      if (!r.stopped) setStopping(false)
+    } catch (e) {
+      setStopping(false)
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [key])
 
   const grouped = useMemo(() => {
     const out = new Map<string, PromptRegistryEntry[]>()
@@ -229,20 +251,20 @@ export default function PromptLab() {
   return (
     <div data-lab-root className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
       {/* 左：32 条登记提示词 */}
-      <div className="rounded-xl border border-neutral-200 dark:border-neutral-800">
+      <div className="rounded-md border border-neutral-200 dark:border-neutral-800">
         <div className="flex items-baseline gap-2 border-b border-neutral-100 px-3 py-2 dark:border-neutral-800">
           <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
             登记表 {list.length} 条
           </span>
           <div className="flex-1" />
-          <span className="text-[10px] text-neutral-400">
+          <span className="text-xs text-neutral-400">
             有用例的 {withCases.length}
           </span>
         </div>
         <div className="max-h-[560px] overflow-y-auto p-1.5">
           {grouped.map(([mod, items]) => (
             <div key={mod} className="mb-1">
-              <div className="px-2 py-1 text-[10px] text-neutral-400">{mod}</div>
+              <div className="px-2 py-1 text-xs text-neutral-400">{mod}</div>
               {items.map((p) => (
                 <button
                   key={p.name}
@@ -260,7 +282,7 @@ export default function PromptLab() {
                     </div>
                     <div className="mt-0.5 flex items-center gap-1.5">
                       <Status p={p} />
-                      <span className="truncate text-[10px] text-neutral-400">{p.sha}</span>
+                      <span className="truncate text-xs text-neutral-400">{p.sha}</span>
                     </div>
                   </div>
                 </button>
@@ -281,19 +303,19 @@ export default function PromptLab() {
           <div className="text-sm text-neutral-400">正在读这一条…</div>
         ) : (
           <div className="space-y-4">
-            <div className="rounded-xl border border-neutral-200 p-3 dark:border-neutral-800">
+            <div className="rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
               <div className="flex flex-wrap items-baseline gap-2">
                 <span className="font-mono text-sm text-neutral-800 dark:text-neutral-100">
                   {detail.name}
                 </span>
-                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
                   {detail.kind}
                 </span>
-                <span className="font-mono text-[10px] text-neutral-400">{detail.sha}</span>
+                <span className="font-mono text-xs text-neutral-400">{detail.sha}</span>
                 <div className="flex-1" />
                 <button
                   onClick={() => setShowContent((v) => !v)}
-                  className="text-[11px] text-neutral-400 hover:text-violet-500"
+                  className="text-xs text-neutral-400 hover:text-violet-500"
                 >
                   {showContent ? '收起内容' : '看内容（只读）'}
                 </button>
@@ -301,16 +323,16 @@ export default function PromptLab() {
               <p className="mt-1.5 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                 {detail.purpose}
               </p>
-              <div className="mt-1 text-[10px] text-neutral-400">{detail.module}</div>
+              <div className="mt-1 text-xs text-neutral-400">{detail.module}</div>
               {showContent && (
-                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-neutral-50 p-2 text-[11px] leading-relaxed text-neutral-600 dark:bg-neutral-900 dark:text-neutral-300">
+                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-neutral-50 p-2 text-xs leading-relaxed text-neutral-600 dark:bg-neutral-900 dark:text-neutral-300">
                   {detail.content}
                 </pre>
               )}
             </div>
 
             {/* golden set：用例 + 断言（每条断言引提示词的原句） */}
-            <div className="rounded-xl border border-neutral-200 dark:border-neutral-800">
+            <div className="rounded-md border border-neutral-200 dark:border-neutral-800">
               <div className="flex items-baseline gap-2 border-b border-neutral-100 px-3 py-2 dark:border-neutral-800">
                 <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
                   golden set {detail.cases.length} 条
@@ -327,15 +349,15 @@ export default function PromptLab() {
                   }}
                   placeholder="领域"
                   title="这套用例测的是哪个领域。形态（工作页「形态」标签）按它把这套用例算进对应的枝——空 = 还没归类。同一个领域要写同一个词。"
-                  className="w-20 rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-[10px] text-neutral-600 outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
+                  className="w-20 rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-xs text-neutral-600 outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
                 />
                 {domainMsg ? (
-                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                  <span className="text-xs text-emerald-600 dark:text-emerald-400">
                     {domainMsg}
                   </span>
                 ) : null}
                 <div className="flex-1" />
-                <span className="text-[10px] text-neutral-400">{detail.fixture}</span>
+                <span className="text-xs text-neutral-400">{detail.fixture}</span>
                 {/* 判分型的金标集不从界面喂：它的用例是「卡三样 + 重讲 + 人工档位」，
                     没有断言可勾（后端也当场拒绝）。要加一条就去改那个 JSON。 */}
                 {detail.case_kind === 'grade' ? null : (
@@ -344,7 +366,7 @@ export default function PromptLab() {
                     onClick={() =>
                       setFeed({ open: !feed.open, user: '', intent: '', checks: [] })
                     }
-                    className="text-[11px] text-violet-500 hover:underline"
+                    className="text-xs text-violet-500 hover:underline"
                   >
                     {feed.open ? '收起' : '喂一条进来'}
                   </button>
@@ -357,7 +379,7 @@ export default function PromptLab() {
                   data-lab-feed
                   className="space-y-2 border-b border-neutral-100 bg-violet-50/40 px-3 py-2.5 dark:border-neutral-800 dark:bg-violet-500/5"
                 >
-                  <p className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                  <p className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                     喂的是用例：一次真实输入 + 一句「它当时应该怎样」+ 它必须满足的断言。
                     改动写进 <span className="font-mono">{detail.fixture}</span>（进 git，可审可回滚）
                     ——提示词本身一个字节都不动。
@@ -367,14 +389,14 @@ export default function PromptLab() {
                     value={feed.user}
                     onChange={(e) => setFeed((f) => ({ ...f, user: e.target.value }))}
                     placeholder="那次的真实输入（把它原样抄进来）"
-                    className="h-16 w-full rounded-lg border border-neutral-300 bg-white p-2 text-[11px] text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+                    className="h-16 w-full rounded-lg border border-neutral-300 bg-white p-2 text-xs text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
                   />
                   <input
                     data-lab-feed-intent
                     value={feed.intent}
                     onChange={(e) => setFeed((f) => ({ ...f, intent: e.target.value }))}
                     placeholder="它当时应该怎样（一句话——没有这句的用例日后没人看得懂）"
-                    className="w-full rounded-lg border border-neutral-300 bg-white px-2 py-1.5 text-[11px] text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+                    className="w-full rounded-lg border border-neutral-300 bg-white px-2 py-1.5 text-xs text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
                   />
                   <div className="flex flex-wrap gap-1.5">
                     {detail.checks.map((c) => {
@@ -392,7 +414,7 @@ export default function PromptLab() {
                                 : [...f.checks, c.name],
                             }))
                           }
-                          className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+                          className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
                             on
                               ? 'border-violet-400 bg-violet-100 text-violet-700 dark:border-violet-500/60 dark:bg-violet-500/20 dark:text-violet-200'
                               : 'border-neutral-300 text-neutral-500 hover:border-violet-300 dark:border-neutral-700 dark:text-neutral-400'
@@ -417,7 +439,7 @@ export default function PromptLab() {
               {feedMsg && (
                 <div
                   data-lab-feed-msg
-                  className="border-b border-neutral-100 bg-emerald-50/60 px-3 py-1.5 text-[11px] text-emerald-700 dark:border-neutral-800 dark:bg-emerald-950/30 dark:text-emerald-300"
+                  className="border-b border-neutral-100 bg-emerald-50/60 px-3 py-1.5 text-xs text-emerald-700 dark:border-neutral-800 dark:bg-emerald-950/30 dark:text-emerald-300"
                 >
                   {feedMsg}
                 </div>
@@ -427,7 +449,7 @@ export default function PromptLab() {
                 {detail.cases.map((c) => (
                   <li key={c.id} data-lab-case={c.id} className="px-3 py-2 text-xs">
                     <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400">
+                      <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">
                         {c.id}
                       </span>
                       <span className="text-neutral-400 dark:text-neutral-500">{c.intent}</span>
@@ -435,7 +457,7 @@ export default function PromptLab() {
                       {c.grade != null ? (
                         <span
                           data-lab-case-grade={c.id}
-                          className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${
+                          className={`shrink-0 rounded px-1 py-0.5 text-xs ${
                             c.contested
                               ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
                               : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
@@ -457,7 +479,7 @@ export default function PromptLab() {
                           data-lab-case-drop={c.id}
                           onClick={() => void dropCase(c.id)}
                           title="从金标集里删掉这条（坏用例会污染指标）"
-                          className="shrink-0 text-[10px] text-neutral-400 hover:text-rose-500"
+                          className="shrink-0 text-xs text-neutral-400 hover:text-rose-500"
                         >
                           删
                         </button>
@@ -483,7 +505,7 @@ export default function PromptLab() {
                         <span
                           key={n}
                           title={detail.checks.find((x) => x.name === n)?.why ?? ''}
-                          className="rounded bg-neutral-100 px-1 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+                          className="rounded bg-neutral-100 px-1 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
                         >
                           {n}
                         </span>
@@ -492,7 +514,7 @@ export default function PromptLab() {
                   </li>
                 ))}
               </ul>
-              <p className="border-t border-neutral-100 px-3 py-2 text-[10px] leading-relaxed text-neutral-400 dark:border-neutral-800">
+              <p className="border-t border-neutral-100 px-3 py-2 text-xs leading-relaxed text-neutral-400 dark:border-neutral-800">
                 {detail.case_kind === 'grade'
                   ? '判分型的用例：卡三样 + 重讲原文 + 人工档位。判据是人工档位（这套集合的基准，不是真理）——每条 intent 写着为什么是这一档，人要能审。'
                   : '每条断言都对应提示词自己的一句话（鼠标停在断言上看是哪句）。断言写错名字会**当场算不过**，不会静默放过。'}
@@ -500,7 +522,7 @@ export default function PromptLab() {
             </div>
 
             {/* 跑一次 */}
-            <div className="rounded-xl border border-violet-200 bg-violet-50/40 p-3 dark:border-violet-500/40 dark:bg-violet-500/5">
+            <div className="rounded-md border border-violet-200 bg-violet-50/40 p-3 dark:border-violet-500/40 dark:bg-violet-500/5">
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   data-lab-run
@@ -510,25 +532,46 @@ export default function PromptLab() {
                 >
                   {busy ? '正在跑…' : variant.trim() ? '跑候选变体' : '跑一次对照（已登记内容）'}
                 </button>
-                <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                <span className="text-xs text-neutral-500 dark:text-neutral-400">
                   {detail.cases.length} 条用例 = {detail.cases.length} 次模型调用
                 </span>
               </div>
+
+              {/* 长任务走 RunPanel 六态（方案 §六）。
+                  **这条不是流式的**：只有 progress → done/error 三个态是真的，
+                  planning/streaming 编不出来，也不该编。停止是真停（后端合作式取消）。 */}
+              {busy ? (
+                <div className="mt-2">
+                  <RunPanel
+                    phase="progress"
+                    tone="violet"
+                    icon="🧪"
+                    title="跑一次对照"
+                    status={
+                      stopping
+                        ? '正在停…（这一条跑完就停）'
+                        : `正在跑 ${detail.cases.length} 条用例——每条一次模型调用，可能要几分钟`
+                    }
+                    onCancel={() => void cancel()}
+                  />
+                </div>
+              ) : null}
+
               <details className="mt-2">
-                <summary className="cursor-pointer text-[11px] text-neutral-500 hover:text-violet-500 dark:text-neutral-400">
+                <summary className="cursor-pointer text-xs text-neutral-500 hover:text-violet-500 dark:text-neutral-400">
                   拿一段候选变体比一比（它不会进登记表）
                 </summary>
                 <textarea
                   value={variant}
                   onChange={(e) => setVariant(e.target.value)}
                   placeholder="把想试的那版提示词贴在这里。跑完报告会告诉你比基线好还是坏——要采纳仍然得去改代码。"
-                  className="mt-2 h-28 w-full rounded-lg border border-neutral-300 bg-white p-2 text-[11px] text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+                  className="mt-2 h-28 w-full rounded-lg border border-neutral-300 bg-white p-2 text-xs text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
                 />
                 <input
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
                   placeholder="给它起个名字（例如：试·加一句别用术语）"
-                  className="mt-1.5 w-full rounded-lg border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+                  className="mt-1.5 w-full rounded-lg border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
                 />
               </details>
             </div>
@@ -542,29 +585,49 @@ export default function PromptLab() {
             {/* 报告 */}
             {report && (
               <div data-lab-report className="space-y-3">
-                <div className="rounded-xl border border-neutral-200 p-3 dark:border-neutral-800">
+                {/* 半趟：**这不是一次跑分**。说清「没落库、没区间」，并且给一颗重跑。
+                    不写「失败」——它没失败，是被人停下的。 */}
+                {report.stopped ? (
+                  <div
+                    data-lab-stopped
+                    className="rounded-md border border-amber-200 bg-amber-50/60 p-3 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+                  >
+                    停在第 {report.total}/{report.planned ?? report.total} 条——**这不算一次跑分**：
+                    跑了一半的 k/n 会被读成「变差了」，所以既没落库、也没有区间。
+                    <button
+                      onClick={() => void run()}
+                      className="ml-2 rounded-full border border-amber-300 px-2 py-0.5 transition-colors hover:bg-amber-100 dark:border-amber-600 dark:hover:bg-amber-500/20"
+                    >
+                      重跑
+                    </button>
+                  </div>
+                ) : null}
+                <div className="rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
                   <div className="flex flex-wrap items-baseline gap-2">
                     <span className="text-2xl font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
                       {report.passed}/{report.total}
                     </span>
-                    <span className="text-sm text-neutral-500 dark:text-neutral-400">
-                      Wilson {ciText(report.ci[0], report.ci[1])}
-                    </span>
+                    {/* `ci` 为 null = 半趟（上面那条横幅解释了为什么） */}
+                    {report.ci ? (
+                      <span className="text-sm text-neutral-500 dark:text-neutral-400">
+                        Wilson {ciText(report.ci[0], report.ci[1])}
+                      </span>
+                    ) : null}
                     {report.variant_sha ? (
-                      <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">
+                      <span className="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">
                         候选 {report.variant_label}
                       </span>
                     ) : (
-                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
                         已登记内容
                       </span>
                     )}
                     <div className="flex-1" />
-                    <span className="text-[11px] tabular-nums text-neutral-400">
+                    <span className="text-xs tabular-nums text-neutral-400">
                       {report.calls} 次调用 · {report.seconds}s
                     </span>
                   </div>
-                  <div className="mt-1 text-[11px] text-neutral-400">
+                  <div className="mt-1 text-xs text-neutral-400">
                     {report.report_kind === 'grade' ? (
                       <>
                         档位一致 {report.passed}/{report.total}
@@ -598,7 +661,7 @@ export default function PromptLab() {
                     {report.tell ? ' · 样本量够分辨' : ' · ⚠️ 区间太宽，这个 n 下不了结论'}
                   </div>
                   {report.report_kind === 'grade' && report.matrix && (
-                    <div className="mt-1.5 text-[10px] tabular-nums text-neutral-400">
+                    <div className="mt-1.5 text-xs tabular-nums text-neutral-400">
                       <span title="行 = 人工档位，列 = 它判的档位">
                         矩阵（行=人工，列=它判 0–4）：
                       </span>
@@ -611,7 +674,7 @@ export default function PromptLab() {
                     </div>
                   )}
                   {report.report_kind === 'grade' && (report.contested?.length ?? 0) > 0 && (
-                    <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                    <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">
                       有争议、不计分：
                       {report.contested?.map((c) => (
                         <span key={c.id} className="ml-1 font-mono" title={c.why}>
@@ -624,7 +687,7 @@ export default function PromptLab() {
                     </div>
                   )}
                   {report.flips.length > 0 && (
-                    <div className="mt-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                    <div className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">
                       翻面：
                       {report.flips.map((f) => (
                         <span key={f.id} className="ml-1 font-mono">
@@ -634,10 +697,10 @@ export default function PromptLab() {
                       ))}
                     </div>
                   )}
-                  <div className="mt-1 text-[10px] text-neutral-400">{report.context}</div>
+                  <div className="mt-1 text-xs text-neutral-400">{report.context}</div>
                 </div>
 
-                <ul className="divide-y divide-neutral-100 rounded-xl border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+                <ul className="divide-y divide-neutral-100 rounded-md border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
                   {report.cases.map((c) => (
                     <li key={c.id} data-lab-result={c.id} className="px-3 py-2 text-xs">
                       <div className="flex items-baseline gap-2">
@@ -652,11 +715,11 @@ export default function PromptLab() {
                         >
                           {c.passed ? '✓' : c.contested ? '~' : c.near ? '≈' : '✗'}
                         </span>
-                        <span className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400">
+                        <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">
                           {c.id}
                         </span>
                         {c.expect != null ? (
-                          <span className="shrink-0 text-[10px] text-neutral-400">
+                          <span className="shrink-0 text-xs text-neutral-400">
                             人工 {GRADE_LABEL[c.expect] ?? c.expect} · 它判{' '}
                             {c.fallback ? '不判' : (GRADE_LABEL[c.got ?? 0] ?? c.got)}
                           </span>
@@ -685,12 +748,12 @@ export default function PromptLab() {
                             setFeedMsg('')
                           }}
                           title="把它喂进金标集（写一句「它当时应该怎样」）"
-                          className="shrink-0 text-[11px] text-violet-500 hover:underline"
+                          className="shrink-0 text-xs text-violet-500 hover:underline"
                         >
                           喂进金标集
                         </button>
                         )}
-                        <span className="text-[10px] tabular-nums text-neutral-400">
+                        <span className="text-xs tabular-nums text-neutral-400">
                           {c.chars ? `${c.chars} 字 · ` : ''}
                           {c.seconds}s
                         </span>
@@ -698,13 +761,13 @@ export default function PromptLab() {
                       {c.failed.length > 0 && (
                         <ul className="mt-1 space-y-0.5">
                           {c.failed.map((f) => (
-                            <li key={f.name} className="text-[11px] text-rose-500">
+                            <li key={f.name} className="text-xs text-rose-500">
                               {f.name}：{f.why}
                             </li>
                           ))}
                         </ul>
                       )}
-                      <div className="mt-1 whitespace-pre-wrap rounded-lg bg-neutral-50 px-2 py-1 text-[11px] leading-relaxed text-neutral-600 dark:bg-neutral-900 dark:text-neutral-300">
+                      <div className="mt-1 whitespace-pre-wrap rounded-lg bg-neutral-50 px-2 py-1 text-xs leading-relaxed text-neutral-600 dark:bg-neutral-900 dark:text-neutral-300">
                         {c.error ? `调用出错：${c.error}` : c.reply || '（空回复）'}
                       </div>
                     </li>
@@ -715,13 +778,13 @@ export default function PromptLab() {
 
             {/* 历史 */}
             {detail.runs.length > 0 && (
-              <div className="rounded-xl border border-neutral-200 dark:border-neutral-800">
+              <div className="rounded-md border border-neutral-200 dark:border-neutral-800">
                 <div className="border-b border-neutral-100 px-3 py-2 text-xs font-medium text-neutral-600 dark:border-neutral-800 dark:text-neutral-300">
                   跑分历史
                 </div>
                 <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
                   {detail.runs.map((r) => (
-                    <li key={r.id} className="flex items-baseline gap-2 px-3 py-1.5 text-[11px]">
+                    <li key={r.id} className="flex items-baseline gap-2 px-3 py-1.5 text-xs">
                       <span className="tabular-nums text-neutral-400">{when(r.at)}</span>
                       <span className="tabular-nums text-neutral-600 dark:text-neutral-300">
                         {r.passed}/{r.cases}
@@ -729,11 +792,11 @@ export default function PromptLab() {
                       <span className="text-neutral-400">
                         {ciText(r.ci_low, r.ci_high)}
                       </span>
-                      <span className="truncate font-mono text-[10px] text-neutral-400">
+                      <span className="truncate font-mono text-xs text-neutral-400">
                         {r.variant_sha ? r.variant_sha : r.prompt_sha}
                       </span>
                       {r.variant_label && (
-                        <span className="truncate text-[10px] text-violet-500">
+                        <span className="truncate text-xs text-violet-500">
                           {r.variant_label}
                         </span>
                       )}

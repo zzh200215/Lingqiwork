@@ -119,6 +119,23 @@ def test_the_two_new_checks_share_one_implementation_with_the_live_path():
     assert long_rec[0]["code"] == turn_quality.findings(LONG_REPLY, [])[0]["code"]
 
 
+def test_the_false_delete_check_runs_only_when_the_case_asks_for_it():
+    """§4.1 ① 的另一半进 W1 的方式：**用例自己声明要不要判这一条**（与其它 expect 一样）。
+
+    三点都要钉：① 声明了 + 嘴上删了 → 报；② 声明了 + 真调过 `memory_delete` → 不报；
+    ③ **没声明就不判**——老用例（比如「把这份周报压到 300 字」里它说「那段冗余删掉了」）
+    不该被这条新判据牵连。
+    """
+    lied = _rec(reply="已经帮你删掉了。", tool_names=[], ask="忘掉那条关于早睡的偏好")
+    got = te.check_turn(lied, {"claims_a_delete_without_one": True})
+    assert _codes(got) == {"claims_a_delete_without_one"}
+
+    honest = _rec(reply="已经帮你删掉了。", tool_names=["memory_delete"], ask="忘掉那条偏好")
+    assert te.check_turn(honest, {"claims_a_delete_without_one": True}) == []
+
+    assert te.check_turn(_rec(reply="已经帮你删掉了。"), {}) == []
+
+
 def test_too_many_per_kind_catches_the_length_induced_loop():
     """缺口四：带「300 字左右」时 20 轮里 5 轮 save ≥2 次，最坏一轮 4 次。"""
     arts = [

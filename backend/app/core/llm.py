@@ -266,6 +266,13 @@ def _append_tool_round(
 
 # ---------- public entry points ----------
 
+# 轮数用光时返回的**占位符**。它必须是一个**有名字的常量**（2026-09-20 A2）：
+# 尺子要能认出「这段文字不是答案」，而靠 `in` 一个硬编码的句子去认，改一个字就悄悄失效。
+# 两边引用同一个常量，改这里就是改全部。`trace["rounds_exhausted"]` 是同一件事的机器可读版本
+# （新记录用那个；老报告只能靠这段文字补判）。
+ROUNDS_EXHAUSTED_TEXT = "(工具调用轮次过多，未能生成最终回答。请简化指令或关闭工具后重试。)"
+
+
 async def run_agentic_chat(
     provider: ProviderInfo,
     model: str,
@@ -314,6 +321,11 @@ async def run_agentic_chat(
     if trace is not None:
         trace.setdefault("tool_calls", [])
         trace["rounds"] = 0
+        # 「轮数烧光了没有」**必须记下来**（2026-09-20 A2）：烧光时这一轮返回的是一句
+        # **占位符**（下面那句「工具调用轮次过多…」），而它长得像一段正常回答 ——
+        # 尺子拿它当「答完了」，于是「一步都没产出」会被读成「办成了」。
+        # 先写成 False，让「没触发」与「读不到」也是两件事。
+        trace["rounds_exhausted"] = False
 
     # 跟踪本轮是否已经吐过字：降级重试只在「第一轮、且一个字没吐」时允许。
     # 已开始输出再报错（网络中断等）不能当成「不支持工具」从零重试——会重复输出。
@@ -404,7 +416,10 @@ async def run_agentic_chat(
 
         msgs = _append_tool_round(msgs, provider.kind, text, outputs)
 
-    return "(工具调用轮次过多，未能生成最终回答。请简化指令或关闭工具后重试。)"
+    if trace is not None:
+        # 轮数用完了：**这是一个事实，要落进账本**（见上面那段）。
+        trace["rounds_exhausted"] = True
+    return ROUNDS_EXHAUSTED_TEXT
 
 
 async def stream_chat(

@@ -26,8 +26,6 @@ def _cleanup() -> None:
 
 atexit.register(_cleanup)
 
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 # SAPI fallback writes its text file via tempfile.mkstemp — point it at the
 # writable scratch dir (system temp may be sandboxed under pytest)
 os.environ["TEMP"] = str(_TMP)

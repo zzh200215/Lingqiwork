@@ -103,8 +103,8 @@ export function pointCardBody(
 export function RecallChip({ hits }: { hits: TutorRecallHit[] }) {
   if (hits.length === 0) return null // 自防护：空命中不该留下一个空壳标题
   return (
-    <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-500/30 dark:bg-violet-500/10">
-      <p className="pb-1 text-[11px] font-medium uppercase tracking-wider text-violet-500 dark:text-violet-300">
+    <div className="rounded-md border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-500/30 dark:bg-violet-500/10">
+      <p className="pb-1 text-xs font-medium uppercase tracking-wider text-violet-500 dark:text-violet-300">
         接上了以前的记录
       </p>
       {hits.map((h) => (
@@ -132,7 +132,7 @@ export function RepeatChip({ c }: { c: TutorConceptRow | null }) {
     <span
       data-concept-repeat={c.concept}
       title={`接住过你卡在哪 ${c.recalled} 次，最近一次还是半懂——零柒那句「又卡住了」说的就是这一批`}
-      className="shrink-0 rounded-full bg-amber-50 px-1.5 text-[10px] text-amber-600 dark:bg-amber-500/10 dark:text-amber-300"
+      className="shrink-0 rounded-full bg-amber-50 px-1.5 text-xs text-amber-600 dark:bg-amber-500/10 dark:text-amber-300"
     >
       又卡住
     </span>
@@ -198,10 +198,10 @@ export function InterviewRow({
   return (
     <div data-interview-row className="space-y-2 pb-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+        <span className="text-xs font-medium uppercase tracking-wider text-neutral-400">
           面试
         </span>
-        <span className="text-[11px] text-neutral-400">
+        <span className="text-xs text-neutral-400">
           问过 {asked} 题{asked > 0 && asked < 5 ? '（5–8 题一场）' : ''}
         </span>
         <button
@@ -213,20 +213,20 @@ export function InterviewRow({
         >
           {busyReport ? '写报告中…' : rep ? '再出一份' : '出复盘报告'}
         </button>
-        {msg ? <span className="text-[11px] text-amber-600 dark:text-amber-400">{msg}</span> : null}
+        {msg ? <span className="text-xs text-amber-600 dark:text-amber-400">{msg}</span> : null}
       </div>
 
       {s ? (
         <div
           data-interview-report-body
-          className="space-y-2 rounded-xl border border-violet-200 bg-violet-50/40 p-3 text-xs dark:border-violet-500/30 dark:bg-violet-500/5"
+          className="space-y-2 rounded-md border border-violet-200 bg-violet-50/40 p-3 text-xs dark:border-violet-500/30 dark:bg-violet-500/5"
         >
           {s.summary ? (
             <p className="text-neutral-700 dark:text-neutral-200">{s.summary}</p>
           ) : null}
           {reportGroups(s).map((g) => (
             <div key={g.label}>
-              <p className="pb-0.5 text-[11px] font-medium text-neutral-500 dark:text-neutral-400">
+              <p className="pb-0.5 text-xs font-medium text-neutral-500 dark:text-neutral-400">
                 {g.label}
               </p>
               <ul className="space-y-0.5">
@@ -242,7 +242,7 @@ export function InterviewRow({
                         data-teach={x}
                         onClick={() => onTeach(x)}
                         title="开一场教学专门搞懂它（卡点会进卡点清单）"
-                        className="shrink-0 text-[11px] text-violet-600 hover:underline dark:text-violet-300"
+                        className="shrink-0 text-xs text-violet-600 hover:underline dark:text-violet-300"
                       >
                         去搞懂 →
                       </button>
@@ -253,7 +253,7 @@ export function InterviewRow({
             </div>
           ))}
           {rep?.path ? (
-            <p className="pt-0.5 text-[11px] text-neutral-400">
+            <p className="pt-0.5 text-xs text-neutral-400">
               报告已落{' '}
               <a
                 href={`/notes?path=${encodeURIComponent(rep.path)}`}
@@ -283,7 +283,7 @@ export function shortSource(source: string): string {
 
 export function MaterialLine({ sources }: { sources: TutorMaterialSource[] }) {
   return (
-    <p className="text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+    <p className="text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
       取材：
       {sources.map((s, i) => (
         <span key={i} className="ml-1.5 rounded bg-neutral-200/70 px-1.5 py-0.5 dark:bg-neutral-700/60">
@@ -298,14 +298,14 @@ function Bubble({ turn }: { turn: Turn }) {
   if (turn.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-violet-600 px-4 py-2.5 text-sm text-white">
+        <div className="max-w-[85%] whitespace-pre-wrap rounded-lg rounded-br-md bg-violet-600 px-4 py-2.5 text-sm text-white">
           {turn.content}
         </div>
       </div>
     )
   }
   return (
-    <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-neutral-100 px-4 py-3 dark:bg-neutral-800/70">
+    <div className="max-w-[92%] rounded-lg rounded-bl-md bg-neutral-100 px-4 py-3 dark:bg-neutral-800/70">
       <Markdown>{turn.content}</Markdown>
       {turn.sources && turn.sources.length > 0 ? (
         <div className="mt-2 border-t border-neutral-200/70 pt-1.5 dark:border-neutral-700/70">
@@ -364,7 +364,7 @@ export function ConceptMerge({
           setQ('')
         }}
         title="同一个领域的相邻概念，机器分不开（实测比某些该并的还近）——这一条得你来指认"
-        className="pt-1 block text-[10px] text-neutral-400 transition-colors hover:text-violet-600 dark:hover:text-violet-300"
+        className="pt-1 block text-xs text-neutral-400 transition-colors hover:text-violet-600 dark:hover:text-violet-300"
       >
         这一条其实是别的概念？并到…
       </button>
@@ -379,11 +379,11 @@ export function ConceptMerge({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="并到哪个概念？"
-          className="min-w-0 flex-1 rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-[10px] outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+          className="min-w-0 flex-1 rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-xs outline-none placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
         />
         <button
           onClick={() => setOpen(false)}
-          className="shrink-0 text-[10px] text-neutral-400 hover:text-neutral-600"
+          className="shrink-0 text-xs text-neutral-400 hover:text-neutral-600"
         >
           取消
         </button>
@@ -396,13 +396,13 @@ export function ConceptMerge({
             disabled={busy}
             onClick={() => onMerge(concept, t)}
             title={`把「${concept}」的历次记录并到「${t}」（留下来的是「${t}」这个名字）`}
-            className="max-w-full truncate rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600 transition-colors hover:bg-violet-100 hover:text-violet-700 disabled:opacity-40 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+            className="max-w-full truncate rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-600 transition-colors hover:bg-violet-100 hover:text-violet-700 disabled:opacity-40 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
           >
             {t}
           </button>
         ))}
         {candidates.length === 0 ? (
-          <span className="text-[10px] text-neutral-400">
+          <span className="text-xs text-neutral-400">
             没有别的概念可以并 —— 只有一条的时候，没得挑。
           </span>
         ) : null}
@@ -1341,7 +1341,7 @@ export default function TutorPage() {
               {rs ? (
                 <button
                   onClick={() => setRsOpen((v) => !v)}
-                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
+                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
                 >
                   {rsOpen ? '收起' : '读全文'}
                 </button>
@@ -1349,13 +1349,13 @@ export default function TutorPage() {
               <button
                 onClick={() => void saveResearch()}
                 disabled={rsBusy || !!rsSaved}
-                className="rounded-full border border-sky-300 px-2 py-0.5 text-[10px] text-sky-700 transition-colors hover:bg-sky-100 disabled:opacity-40 dark:border-sky-500/40 dark:text-sky-300 dark:hover:bg-sky-500/20"
+                className="rounded-full border border-sky-300 px-2 py-0.5 text-xs text-sky-700 transition-colors hover:bg-sky-100 disabled:opacity-40 dark:border-sky-500/40 dark:text-sky-300 dark:hover:bg-sky-500/20"
               >
                 {rsSaved ? '已存进知识库' : rsBusy ? '保存中…' : '存进知识库'}
               </button>
               <InjectedLine
                 names={rsInjected}
-                className="rounded-full border border-sky-200 px-2 py-0.5 text-[10px] text-sky-700 dark:border-sky-500/30 dark:text-sky-300"
+                className="rounded-full border border-sky-200 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-500/30 dark:text-sky-300"
               />
             </>
           }
@@ -1398,7 +1398,7 @@ export default function TutorPage() {
                     }
                   />
                   {rsSaved ? (
-                    <p className="mt-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                    <p className="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400">
                       已存到 {rsSaved}，已进索引——下次相关话题的取材会先捞到它
                     </p>
                   ) : null}
@@ -1425,7 +1425,7 @@ export default function TutorPage() {
               {dc ? (
                 <button
                   onClick={() => setDcOpen((v) => !v)}
-                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
+                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
                 >
                   {dcOpen ? '收起' : '读全文'}
                 </button>
@@ -1434,14 +1434,14 @@ export default function TutorPage() {
                 <button
                   onClick={() => void saveDecide()}
                   disabled={dcBusy || !!dcSaved}
-                  className="rounded-full border border-violet-300 px-2 py-0.5 text-[10px] text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/20"
+                  className="rounded-full border border-violet-300 px-2 py-0.5 text-xs text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/20"
                 >
                   {dcSaved ? '已存进知识库' : dcBusy ? '保存中…' : '存进知识库'}
                 </button>
               ) : null}
               <InjectedLine
                 names={dcInjected}
-                className="rounded-full border border-violet-200 px-2 py-0.5 text-[10px] text-violet-700 dark:border-violet-500/30 dark:text-violet-300"
+                className="rounded-full border border-violet-200 px-2 py-0.5 text-xs text-violet-700 dark:border-violet-500/30 dark:text-violet-300"
               />
             </>
           }
@@ -1460,7 +1460,7 @@ export default function TutorPage() {
           {dc && !dcOpen ? (
             <>
               {dcFrame ? (
-                <p className="mb-1.5 text-[11px] text-neutral-500">要决定的是：{dcFrame.decision}</p>
+                <p className="mb-1.5 text-xs text-neutral-500">要决定的是：{dcFrame.decision}</p>
               ) : null}
               <ReceiptLine
                 title={dc.title || '方案'}
@@ -1474,7 +1474,7 @@ export default function TutorPage() {
             <>
               {dcFrame ? (
             <div className="mb-2 rounded-lg border border-violet-200/70 bg-white/70 p-2.5 dark:border-violet-500/20 dark:bg-neutral-900/40">
-              <p className="text-[11px] text-neutral-500">我理解你要决定的是</p>
+              <p className="text-xs text-neutral-500">我理解你要决定的是</p>
               <p className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
                 {dcFrame.decision}
               </p>
@@ -1483,7 +1483,7 @@ export default function TutorPage() {
                   {dcFrame.options.map((o) => (
                     <span
                       key={o}
-                      className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
+                      className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
                     >
                       {o}
                     </span>
@@ -1491,7 +1491,7 @@ export default function TutorPage() {
                 </div>
               ) : null}
               {dcFrame.criteria.length > 0 ? (
-                <p className="mt-1.5 text-[11px] text-neutral-500">
+                <p className="mt-1.5 text-xs text-neutral-500">
                   会比：{dcFrame.criteria.join(' · ')}
                 </p>
               ) : null}
@@ -1516,7 +1516,7 @@ export default function TutorPage() {
                 }
               />
               {dcSaved ? (
-                <p className="mt-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                <p className="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400">
                   已存到 {dcSaved}，已进索引——下次相关话题的取材会先捞到它
                 </p>
               ) : null}
@@ -1543,7 +1543,7 @@ export default function TutorPage() {
               {cf ? (
                 <button
                   onClick={() => setCfOpen((v) => !v)}
-                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
+                  className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400"
                 >
                   {cfOpen ? '收起' : '读全文'}
                 </button>
@@ -1552,14 +1552,14 @@ export default function TutorPage() {
                 <button
                   onClick={() => void saveConflict()}
                   disabled={cfBusy || !!cfSaved}
-                  className="rounded-full border border-teal-300 px-2 py-0.5 text-[10px] text-teal-700 transition-colors hover:bg-teal-100 disabled:opacity-40 dark:border-teal-500/40 dark:text-teal-300 dark:hover:bg-teal-500/20"
+                  className="rounded-full border border-teal-300 px-2 py-0.5 text-xs text-teal-700 transition-colors hover:bg-teal-100 disabled:opacity-40 dark:border-teal-500/40 dark:text-teal-300 dark:hover:bg-teal-500/20"
                 >
                   {cfSaved ? '已存进知识库' : cfBusy ? '保存中…' : '存进知识库'}
                 </button>
               ) : null}
               <InjectedLine
                 names={cfInjected}
-                className="rounded-full border border-teal-200 px-2 py-0.5 text-[10px] text-teal-700 dark:border-teal-500/30 dark:text-teal-300"
+                className="rounded-full border border-teal-200 px-2 py-0.5 text-xs text-teal-700 dark:border-teal-500/30 dark:text-teal-300"
               />
             </>
           }
@@ -1578,7 +1578,7 @@ export default function TutorPage() {
           {cf && !cfOpen ? (
             <>
               {cfSubject ? (
-                <p className="mb-1.5 text-[11px] text-neutral-500">比的是：{cfSubject}</p>
+                <p className="mb-1.5 text-xs text-neutral-500">比的是：{cfSubject}</p>
               ) : null}
               <ReceiptLine
                 title={cf.title || '对质'}
@@ -1592,7 +1592,7 @@ export default function TutorPage() {
             <>
               {cfSubject ? (
             <div className="mb-2 rounded-lg border border-teal-200/70 bg-white/70 p-2.5 dark:border-teal-500/20 dark:bg-neutral-900/40">
-              <p className="text-[11px] text-neutral-500">这次比的是</p>
+              <p className="text-xs text-neutral-500">这次比的是</p>
               <p className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
                 {cfSubject}
               </p>
@@ -1602,7 +1602,7 @@ export default function TutorPage() {
                     <span
                       key={`${p.a_n}-${p.b_n}`}
                       title={p.basis}
-                      className="rounded-full bg-teal-100 px-2 py-0.5 text-[11px] text-teal-700 dark:bg-teal-500/20 dark:text-teal-300"
+                      className="rounded-full bg-teal-100 px-2 py-0.5 text-xs text-teal-700 dark:bg-teal-500/20 dark:text-teal-300"
                     >
                       [{p.a_n}] × [{p.b_n}]
                     </span>
@@ -1630,7 +1630,7 @@ export default function TutorPage() {
                 }
               />
               {cfSaved ? (
-                <p className="mt-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                <p className="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400">
                   已存到 {cfSaved}，已进索引——下次相关话题的取材会先捞到它
                 </p>
               ) : null}
@@ -1644,14 +1644,14 @@ export default function TutorPage() {
       {/* 材料消化卡：一份材料 → 要搞懂的点 → 逐点去搞懂。「逐点」走的是普通教学会话，
           所以点一下就从这张卡切换进会话视图，不需要另一套机制。 */}
       {dgOpen || dg || dgBusy || dgMsg ? (
-        <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-4 dark:border-teal-500/30 dark:bg-teal-500/10">
+        <div className="rounded-md border border-teal-200 bg-teal-50/60 p-4 dark:border-teal-500/30 dark:bg-teal-500/10">
           <div className="flex items-center justify-between gap-2 pb-2">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-teal-700 dark:text-teal-300">
+            <p className="text-xs font-medium uppercase tracking-wider text-teal-700 dark:text-teal-300">
               🎒 材料消化
             </p>
             <button
               onClick={closeDigest}
-              className="rounded-full border border-teal-300 px-2 py-0.5 text-[10px] text-teal-700 transition-colors hover:bg-teal-100 dark:border-teal-500/40 dark:text-teal-300 dark:hover:bg-teal-500/20"
+              className="rounded-full border border-teal-300 px-2 py-0.5 text-xs text-teal-700 transition-colors hover:bg-teal-100 dark:border-teal-500/40 dark:text-teal-300 dark:hover:bg-teal-500/20"
             >
               收起
             </button>
@@ -1725,14 +1725,14 @@ export default function TutorPage() {
               {dgBusy ? '拆点中…' : '拆成要搞懂的点'}
             </button>
             {dg?.source_label ? (
-              <span className="min-w-0 truncate text-[11px] text-neutral-500">{dg.source_label}</span>
+              <span className="min-w-0 truncate text-xs text-neutral-500">{dg.source_label}</span>
             ) : null}
           </div>
 
-          {dgMsg ? <p className="pt-2 text-[11px] text-rose-600 dark:text-rose-400">{dgMsg}</p> : null}
+          {dgMsg ? <p className="pt-2 text-xs text-rose-600 dark:text-rose-400">{dgMsg}</p> : null}
 
           {pcNotice ? (
-            <p className="pt-2 text-[11px] text-teal-700 dark:text-teal-400">{pcNotice}</p>
+            <p className="pt-2 text-xs text-teal-700 dark:text-teal-400">{pcNotice}</p>
           ) : null}
 
           {dg && dg.points.length > 0 ? (
@@ -1747,14 +1747,14 @@ export default function TutorPage() {
                       className="block min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/70 disabled:opacity-40 dark:hover:bg-neutral-900/40"
                     >
                       <span className="block text-sm text-neutral-700 dark:text-neutral-200">{p.title}</span>
-                      {p.why ? <span className="block text-[11px] text-neutral-400">{p.why}</span> : null}
+                      {p.why ? <span className="block text-xs text-neutral-400">{p.why}</span> : null}
                     </button>
                     {/* 「按点出卡」：卡面只覆盖这一点，不离开学页 */}
                     <button
                       onClick={() => void makePointCards(p)}
                       disabled={busy || pc?.busy}
                       title="只围绕这一点出几张卡，不离开学页"
-                      className="shrink-0 rounded-lg border border-neutral-200 px-2 text-[11px] text-neutral-500 transition-colors hover:border-teal-400 hover:text-teal-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-teal-500 dark:hover:text-teal-300"
+                      className="shrink-0 rounded-lg border border-neutral-200 px-2 text-xs text-neutral-500 transition-colors hover:border-teal-400 hover:text-teal-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-teal-500 dark:hover:text-teal-300"
                     >
                       {pc?.busy && pc.pointId === p.id ? '…' : '🃏'}
                     </button>
@@ -1762,7 +1762,7 @@ export default function TutorPage() {
                   {pc?.pointId === p.id ? (
                     <div className="ml-2 mt-1 rounded-lg border border-teal-200/70 p-2 dark:border-teal-500/20">
                       {pc.busy ? (
-                        <p className="text-[11px] text-neutral-400">出卡中…</p>
+                        <p className="text-xs text-neutral-400">出卡中…</p>
                       ) : pc.drafts.length > 0 ? (
                         <>
                           {pc.drafts.map((d, j) => (
@@ -1785,11 +1785,11 @@ export default function TutorPage() {
                                 <span className="block text-xs text-neutral-700 dark:text-neutral-200">
                                   {d.front}
                                 </span>
-                                <span className="block text-[11px] text-neutral-500 dark:text-neutral-400">
+                                <span className="block text-xs text-neutral-500 dark:text-neutral-400">
                                   {d.back}
                                 </span>
                                 {d.duplicate_of ? (
-                                  <span className="block text-[10px] text-amber-600 dark:text-amber-400">
+                                  <span className="block text-xs text-amber-600 dark:text-amber-400">
                                     可能的重复
                                   </span>
                                 ) : null}
@@ -1799,13 +1799,13 @@ export default function TutorPage() {
                           <div className="mt-1 flex items-center gap-2">
                             <button
                               onClick={() => void savePointCards()}
-                              className="rounded-full border border-teal-300 px-2 py-0.5 text-[10px] text-teal-700 transition-colors hover:bg-teal-50 dark:border-teal-600 dark:text-teal-300 dark:hover:bg-teal-950/40"
+                              className="rounded-full border border-teal-300 px-2 py-0.5 text-xs text-teal-700 transition-colors hover:bg-teal-50 dark:border-teal-600 dark:text-teal-300 dark:hover:bg-teal-950/40"
                             >
                               入库选中的
                             </button>
                             <button
                               onClick={() => setPc(null)}
-                              className="text-[10px] text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+                              className="text-xs text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
                             >
                               收起
                             </button>
@@ -1813,7 +1813,7 @@ export default function TutorPage() {
                         </>
                       ) : null}
                       {pc.msg ? (
-                        <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{pc.msg}</p>
+                        <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{pc.msg}</p>
                       ) : null}
                     </div>
                   ) : null}
@@ -1859,7 +1859,7 @@ export default function TutorPage() {
                     </span>
                     <RepeatChip c={repeatMap.get(c.concept) ?? null} />
                     <span
-                      className={`shrink-0 text-[10px] ${
+                      className={`shrink-0 text-xs ${
                         c.verdict === 'got'
                           ? 'text-emerald-600 dark:text-emerald-400'
                           : 'text-amber-600 dark:text-amber-400'
@@ -1867,12 +1867,12 @@ export default function TutorPage() {
                     >
                       {c.verdict === 'got' ? '搞懂了' : '半懂'}
                     </span>
-                    <span className="shrink-0 text-[10px] text-neutral-400">
+                    <span className="shrink-0 text-xs text-neutral-400">
                       {(c.last_at || '').slice(5, 10)}
                     </span>
                   </span>
                   {c.stuck ? (
-                    <span className="block truncate text-[11px] text-neutral-400">
+                    <span className="block truncate text-xs text-neutral-400">
                       <span
                         className={
                           c.stuck_resolved
@@ -1885,7 +1885,7 @@ export default function TutorPage() {
                       ↳ {c.stuck}
                     </span>
                   ) : null}
-                  <span className="block truncate text-[10px] text-neutral-400">
+                  <span className="block truncate text-xs text-neutral-400">
                     {c.sessions} 场{c.recalled > 0 ? ` · 接上过 ${c.recalled} 次` : ''}
                   </span>
                 </button>
@@ -1899,7 +1899,7 @@ export default function TutorPage() {
                       .map((t) => `topic=${encodeURIComponent(t)}`)
                       .join('&')}`}
                     title="去复习页看这个概念名下的卡"
-                    className="block truncate pb-1 pr-5 text-[10px] text-sky-600 hover:underline dark:text-sky-400/90"
+                    className="block truncate pb-1 pr-5 text-xs text-sky-600 hover:underline dark:text-sky-400/90"
                   >
                     {c.cards_summary.n} 张卡 · {c.cards_summary.mature} 成熟 · 近 7 天重来{' '}
                     {c.cards_summary.again_7d} 次
@@ -1911,7 +1911,7 @@ export default function TutorPage() {
                   <button
                     onClick={() => void resolveStuck(c.last_session_id, !c.stuck_resolved)}
                     title={c.stuck_resolved ? '标回待解' : '这条卡点不用管了'}
-                    className="absolute right-0 top-1.5 text-[10px] text-neutral-300 opacity-0 transition-opacity hover:text-violet-600 focus:opacity-100 group-hover/c:opacity-100 dark:text-neutral-600 dark:hover:text-violet-300"
+                    className="absolute right-0 top-1.5 text-xs text-neutral-300 opacity-0 transition-opacity hover:text-violet-600 focus:opacity-100 group-hover/c:opacity-100 dark:text-neutral-600 dark:hover:text-violet-300"
                   >
                     {c.stuck_resolved ? '↺' : '✓'}
                   </button>
@@ -1929,7 +1929,7 @@ export default function TutorPage() {
                         <button
                           key={r.id}
                           onClick={() => void open(r.id)}
-                          className="block w-full rounded py-1 text-left text-[11px] text-neutral-500 transition-colors hover:text-violet-600 dark:text-neutral-400 dark:hover:text-violet-300"
+                          className="block w-full rounded py-1 text-left text-xs text-neutral-500 transition-colors hover:text-violet-600 dark:text-neutral-400 dark:hover:text-violet-300"
                         >
                           {(r.created_at || '').slice(5, 10)} · {VERDICT_LABEL[r.verdict] || '没标'}
                           {r.stuck ? <span className="text-neutral-400"> · {r.stuck}</span> : null}
@@ -1938,7 +1938,7 @@ export default function TutorPage() {
                     ) : (
                       <button
                         onClick={() => void open(c.last_session_id)}
-                        className="block w-full rounded py-1 text-left text-[11px] text-neutral-500 transition-colors hover:text-violet-600 dark:text-neutral-400 dark:hover:text-violet-300"
+                        className="block w-full rounded py-1 text-left text-xs text-neutral-500 transition-colors hover:text-violet-600 dark:text-neutral-400 dark:hover:text-violet-300"
                       >
                         打开最近一场
                       </button>
@@ -1946,19 +1946,19 @@ export default function TutorPage() {
                     {/* 「邻居」：同一件事 / 同一份材料 / 语义相近。是**观察**不是待办——
                         旁边还有谁，不催你看。第一次要算向量，先占一行说着。 */}
                     {nebs === undefined ? (
-                      <div className="pt-1 text-[10px] text-neutral-300 dark:text-neutral-600">
+                      <div className="pt-1 text-xs text-neutral-300 dark:text-neutral-600">
                         看旁边还有谁…
                       </div>
                     ) : nebs.length > 0 ? (
                       <div className="pt-1">
-                        <span className="text-[10px] text-neutral-400">旁边还有</span>
+                        <span className="text-xs text-neutral-400">旁边还有</span>
                         <span className="flex flex-wrap gap-1 pt-0.5">
                           {nebs.map((n) => (
                             <button
                               key={n.concept}
                               onClick={() => openConceptRow(n.concept)}
                               title={n.why || '语义相近'}
-                              className="max-w-full truncate rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600 transition-colors hover:bg-violet-100 hover:text-violet-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                              className="max-w-full truncate rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-600 transition-colors hover:bg-violet-100 hover:text-violet-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
                             >
                               {n.concept}
                             </button>
@@ -1986,7 +1986,7 @@ export default function TutorPage() {
   const mapGroup = (label: string, cls: string, items: TutorConceptRow[]) =>
     items.length > 0 ? (
       <div key={label} className="pt-1.5">
-        <p className={`px-1 pb-0.5 text-[10px] font-medium ${cls}`}>
+        <p className={`px-1 pb-0.5 text-xs font-medium ${cls}`}>
           {label} <span className="text-neutral-400">{items.length}</span>
         </p>
         {items.slice(0, CONCEPT_RAIL_CAP).map(conceptRow)}
@@ -2038,7 +2038,7 @@ export default function TutorPage() {
               <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">
                 {r.concept || r.topic}
               </span>
-              <span className="block truncate text-[11px] text-neutral-400">
+              <span className="block truncate text-xs text-neutral-400">
                 {r.verdict ? VERDICT_LABEL[r.verdict] : '没标'}
                 {r.recalled ? ' · 接上过' : ''}
                 {r.stuck ? ` · ${r.stuck}` : ''}
@@ -2055,14 +2055,14 @@ export default function TutorPage() {
       {/* 并概念的回执挂在这里而不是那一行：并完之后 source 那一行就没了。
           「机器自己换了个名字」如果界面上不说，就是一件看不见也查不到的事。 */}
       {mergeMsg ? (
-        <p data-merge-msg className="px-3 pb-2 text-[11px] text-neutral-500">
+        <p data-merge-msg className="px-3 pb-2 text-xs text-neutral-500">
           {mergeMsg}
         </p>
       ) : null}
       {learnMap && mapCount > 0 ? (
         <div className="px-3 pb-3">
           <div className="flex items-center justify-between pb-1.5">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+            <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">
               学到哪了
             </p>
             <div className="flex items-center gap-1">
@@ -2070,7 +2070,7 @@ export default function TutorPage() {
                 onClick={() => void runRoundtable()}
                 disabled={rtBusy}
                 title="开一场圆桌：三个 AI 视角（老师/同侪/考官）笔谈最近的卡点"
-                className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-sky-400 hover:text-sky-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-sky-500 dark:hover:text-sky-300"
+                className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-sky-400 hover:text-sky-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-sky-500 dark:hover:text-sky-300"
               >
                 {rtBusy && !rt ? '讨论中…' : '👥 圆桌'}
               </button>
@@ -2078,7 +2078,7 @@ export default function TutorPage() {
                 onClick={() => void makeStuckPodcast()}
                 disabled={stuckBusy}
                 title="把最近的卡点做成一期双人讨论播客"
-                className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
+                className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
               >
                 {stuckBusy ? '生成中…' : '🎧 做成播客'}
               </button>
@@ -2092,7 +2092,7 @@ export default function TutorPage() {
                 key={s.key}
                 onClick={() => setMapFilter(mapFilter === s.key ? null : s.key)}
                 title={mapFilter === s.key ? '再点一下回到全部' : `只看${s.label}`}
-                className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
+                className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
                   mapFilter === s.key
                     ? `${s.chip} font-medium ring-2`
                     : 'border-neutral-200 text-neutral-500 hover:border-neutral-400 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-500'
@@ -2113,7 +2113,7 @@ export default function TutorPage() {
             : null}
           {(mapFilter === null || mapFilter === 'untouched') && learnMap.untouched.length > 0 ? (
             <div className="pt-1.5">
-              <p className={`px-1 pb-0.5 text-[10px] font-medium ${CONCEPT_STATE.untouched.text}`}>
+              <p className={`px-1 pb-0.5 text-xs font-medium ${CONCEPT_STATE.untouched.text}`}>
                 {CONCEPT_STATE.untouched.label}{' '}
                 <span className="text-neutral-400">{learnMap.untouched.length}</span>
               </p>
@@ -2129,7 +2129,7 @@ export default function TutorPage() {
                     {p.point}
                   </span>
                   {p.why ? (
-                    <span className="block truncate text-[11px] text-neutral-400">{p.why}</span>
+                    <span className="block truncate text-xs text-neutral-400">{p.why}</span>
                   ) : null}
                 </button>
               ))}
@@ -2137,12 +2137,12 @@ export default function TutorPage() {
           ) : null}
           {rt ? (
             <div className="mb-2 mt-2 rounded-lg border border-neutral-100 p-2 dark:border-neutral-800">
-              <p className="truncate text-[10px] text-neutral-400">
+              <p className="truncate text-xs text-neutral-400">
                 圆桌 · {rt.topic}
               </p>
               <ul className="mt-1 space-y-1.5">
                 {rt.turns.map((t, i) => (
-                  <li key={i} className="text-[11px] leading-relaxed text-neutral-600 dark:text-neutral-300">
+                  <li key={i} className="text-xs leading-relaxed text-neutral-600 dark:text-neutral-300">
                     <span className="font-medium text-neutral-800 dark:text-neutral-100">{t.name}</span>
                     ：{t.text}
                   </li>
@@ -2152,13 +2152,13 @@ export default function TutorPage() {
                 <button
                   onClick={() => void makeRtPodcast()}
                   disabled={rtBusy}
-                  className="rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
+                  className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-violet-500 dark:hover:text-violet-300"
                 >
                   {rtBusy ? '生成中…' : '🎧 做成播客'}
                 </button>
               </div>
               {rtMsg ? (
-                <p className="mt-1 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                <p className="mt-1 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                   {rtMsg}
                   {rtAudio && <audio controls src={rtAudio} className="mt-1.5 w-full" />}
                 </p>
@@ -2166,7 +2166,7 @@ export default function TutorPage() {
             </div>
           ) : null}
           {stuckMsg ? (
-            <p className="pb-1.5 pt-1 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+            <p className="pb-1.5 pt-1 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
               {stuckMsg}
               {stuckAudio && (
                 <audio controls src={stuckAudio} className="mt-1.5 w-full" />
@@ -2183,7 +2183,7 @@ export default function TutorPage() {
   const railPanel = (
     <>
   <div className="px-4 pb-2 pt-4">
-    <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+    <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">
       学过的
     </p>
     {stats && stats.sessions > 0 ? (
@@ -2198,7 +2198,7 @@ export default function TutorPage() {
         演进——同一概念历次自评与卡点。是记录，不是待办：不催、不排期。 */}
     {conceptsPanel}
     {rows.length > 0 ? (
-      <p className="px-3 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+      <p className="px-3 pb-1 pt-1 text-xs font-medium uppercase tracking-wider text-neutral-400">
         会话历史
       </p>
     ) : null}
@@ -2290,7 +2290,7 @@ export default function TutorPage() {
                 {/* 选中面试陪练时看一眼题库（**只读**）：它问什么，你自己得能查得到。
                     只在选中时拉——不选它的人不该为它付一次请求。 */}
                 {mode === 'interview' ? (
-                  <p data-interview-bank className="pb-2 text-[11px] text-neutral-400">
+                  <p data-interview-bank className="pb-2 text-xs text-neutral-400">
                     {bank
                       ? `题库：${
                           bank.file ? `${bank.file} ${bank.questions.length} 条` : '没有 面试准备.md'
@@ -2312,13 +2312,13 @@ export default function TutorPage() {
                         ? '例如：Python 后端'
                         : '例如：asyncio 里 await 到底把控制权交给了谁'
                     }
-                    className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3.5 py-2.5 text-left text-sm outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                    className="min-w-0 flex-1 rounded-md border border-neutral-300 bg-white px-3.5 py-2.5 text-left text-sm outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
                   />
                   <button
                     data-tutor-begin
                     onClick={() => void begin()}
                     disabled={!topic.trim() || busy}
-                    className="shrink-0 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:brightness-110 disabled:opacity-40 disabled:shadow-none dark:shadow-violet-900/60"
+                    className="shrink-0 rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-5 py-2.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
                   >
                     开始
                   </button>
@@ -2349,8 +2349,8 @@ export default function TutorPage() {
 
                 {/* 继续上次：最近的会话一跳直达，不用去历史列表里翻 */}
                 {tab === 'learn' && rows.length > 0 ? (
-                  <div className="mx-auto flex w-full max-w-2xl items-center gap-3 rounded-2xl border border-neutral-200/80 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900/60">
-                    <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">
+                  <div className="mx-auto flex w-full max-w-2xl items-center gap-3 rounded-lg border border-neutral-200/80 bg-white px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900/60">
+                    <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">
                       继续上次
                     </span>
                     <span className="min-w-0 flex-1 truncate text-xs text-neutral-600 dark:text-neutral-300">
@@ -2368,7 +2368,7 @@ export default function TutorPage() {
 
                 {/* 练：一进来就是测验，不摆别的 */}
                 {tab === 'practice' ? (
-                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-200/80 bg-white px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/60">
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-neutral-200/80 bg-white px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/60">
                     <p className="text-sm text-neutral-600 dark:text-neutral-300">
                       出几道题考你，找出没懂的地方；没答上的就地开教学补课。
                     </p>
@@ -2387,7 +2387,7 @@ export default function TutorPage() {
                 <section>
                   {tab === 'learn' ? (
                   <>
-                  <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                  <p className="pb-2 text-xs font-medium uppercase tracking-wider text-neutral-400">
                     或者直接用这些工具 · 不用先开一场教学
                   </p>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -2396,7 +2396,7 @@ export default function TutorPage() {
                         setToolTopic(topic)
                         setToolOpen(toolOpen === 'research' ? '' : 'research')
                       }}
-                      className={`flex h-full flex-col gap-1 rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                      className={`flex h-full flex-col gap-1 rounded-lg border p-4 text-left transition-all ${
                         toolOpen === 'research'
                           ? 'border-sky-400 ring-2 ring-sky-200 dark:ring-sky-500/30'
                           : 'border-neutral-200 bg-white hover:border-sky-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-sky-500/40'
@@ -2406,7 +2406,7 @@ export default function TutorPage() {
                       <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
                         深入研究{rsBusy ? '…' : ''}
                       </span>
-                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                      <span className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                         围绕话题搜资料、读正文，写一篇带引用的讲解；成品可存进知识库。
                       </span>
                     </button>
@@ -2415,7 +2415,7 @@ export default function TutorPage() {
                         setToolTopic(topic)
                         setToolOpen(toolOpen === 'decide' ? '' : 'decide')
                       }}
-                      className={`flex h-full flex-col gap-1 rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                      className={`flex h-full flex-col gap-1 rounded-lg border p-4 text-left transition-all ${
                         toolOpen === 'decide'
                           ? 'border-violet-400 ring-2 ring-violet-200 dark:ring-violet-500/30'
                           : 'border-neutral-200 bg-white hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-violet-500/40'
@@ -2425,7 +2425,7 @@ export default function TutorPage() {
                       <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
                         帮我理清{dcBusy ? '…' : ''}
                       </span>
-                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                      <span className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                         把它当成一次决策：先复述题面，再摆开选项、指出判据，给有条件的判断。
                       </span>
                     </button>
@@ -2434,7 +2434,7 @@ export default function TutorPage() {
                         setToolTopic(topic)
                         setToolOpen(toolOpen === 'conflict' ? '' : 'conflict')
                       }}
-                      className={`flex h-full flex-col gap-1 rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                      className={`flex h-full flex-col gap-1 rounded-lg border p-4 text-left transition-all ${
                         toolOpen === 'conflict'
                           ? 'border-rose-400 ring-2 ring-rose-200 dark:ring-rose-500/30'
                           : 'border-neutral-200 bg-white hover:border-rose-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-rose-500/40'
@@ -2444,13 +2444,13 @@ export default function TutorPage() {
                       <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
                         对质{cfBusy ? '…' : ''}
                       </span>
-                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                      <span className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                         把你的说法和外部来源摆在一起，逐处找对不上的地方。
                       </span>
                     </button>
                     <button
                       onClick={() => setDgOpen(true)}
-                      className={`flex h-full flex-col gap-1 rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                      className={`flex h-full flex-col gap-1 rounded-lg border p-4 text-left transition-all ${
                         dgOpen
                           ? 'border-teal-400 ring-2 ring-teal-200 dark:ring-teal-500/30'
                           : 'border-neutral-200 bg-white hover:border-teal-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-teal-500/40'
@@ -2460,19 +2460,19 @@ export default function TutorPage() {
                       <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
                         消化一份材料
                       </span>
-                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                      <span className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                         拿一份教程 / 长文 / 仓库，拆成「要搞懂的点」，逐点开教、顺手出卡。
                       </span>
                     </button>
                     <button
                       onClick={() => setTab('practice')}
-                      className="flex h-full flex-col gap-1 rounded-2xl border border-neutral-200 bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:border-orange-300 hover:shadow-sm dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-orange-500/40"
+                      className="flex h-full flex-col gap-1 rounded-lg border border-neutral-200 bg-white p-4 text-left transition-all hover:border-orange-300 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-orange-500/40"
                     >
                       <span className="text-xl">📝</span>
                       <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
                         模拟测验
                       </span>
-                      <span className="text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                      <span className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
                         拿一份材料出几道题考你，逐题自判；没答上的一键开教学补课。
                       </span>
                     </button>
@@ -2482,7 +2482,7 @@ export default function TutorPage() {
                   {/* 点开的工具面板：就地收话题、就地开跑 */}
                   {toolOpen ? (
                     <div
-                      className={`mt-3 rounded-2xl border p-4 ${
+                      className={`mt-3 rounded-lg border p-4 ${
                         toolOpen === 'research'
                           ? 'border-sky-200 bg-sky-50/40 dark:border-sky-500/30 dark:bg-sky-500/10'
                           : toolOpen === 'decide'
@@ -2500,7 +2500,7 @@ export default function TutorPage() {
                         </p>
                         <button
                           onClick={() => setToolOpen('')}
-                          className="text-[11px] text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+                          className="text-xs text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
                         >
                           收起
                         </button>
@@ -2514,12 +2514,12 @@ export default function TutorPage() {
                           }}
                           autoFocus
                           placeholder="说一个具体的东西…"
-                          className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                          className="min-w-0 flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
                         />
                         <button
                           onClick={runTool}
                           disabled={!toolTopic.trim()}
-                          className="shrink-0 rounded-xl bg-neutral-800 px-4 py-2 text-sm font-medium text-white transition-all hover:brightness-125 disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+                          className="shrink-0 rounded-md bg-neutral-800 px-4 py-2 text-sm font-medium text-white transition-all hover:brightness-125 disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
                         >
                           开跑
                         </button>
@@ -2530,14 +2530,14 @@ export default function TutorPage() {
                   {/* 模拟测验面板：选材料 → 出题 → 逐题作答自判 → 总结。
                       没答上的题就地开一场教学，题面就是开场话题。 */}
                   {tab === 'practice' ? (
-                    <div className="mt-3 rounded-2xl border border-orange-200 bg-orange-50/40 p-4 dark:border-orange-500/30 dark:bg-orange-500/10">
+                    <div className="mt-3 rounded-lg border border-orange-200 bg-orange-50/40 p-4 dark:border-orange-500/30 dark:bg-orange-500/10">
                       <div className="flex items-center justify-between pb-2">
                         <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                           📝 拿什么材料考你？
                         </p>
                         <button
                           onClick={() => setTab('learn')}
-                          className="text-[11px] text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+                          className="text-xs text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
                         >
                           收起
                         </button>
@@ -2611,7 +2611,7 @@ export default function TutorPage() {
                               {qzBusy ? '出题中…' : '出 5 道题考我'}
                             </button>
                             {qzMsg ? (
-                              <p className="text-[11px] text-rose-600 dark:text-rose-400">{qzMsg}</p>
+                              <p className="text-xs text-rose-600 dark:text-rose-400">{qzMsg}</p>
                             ) : null}
                           </div>
                         </>
@@ -2619,8 +2619,8 @@ export default function TutorPage() {
 
                       {/* 逐题作答：先自己想（可写下来），看答案，再自判 */}
                       {qz && qz.idx < qz.cards.length ? (
-                        <div className="rounded-xl border border-orange-200/70 bg-white/80 p-4 dark:border-orange-500/20 dark:bg-neutral-900/50">
-                          <p className="pb-1 text-[11px] text-neutral-400">
+                        <div className="rounded-md border border-orange-200/70 bg-white/80 p-4 dark:border-orange-500/20 dark:bg-neutral-900/50">
+                          <p className="pb-1 text-xs text-neutral-400">
                             第 {qz.idx + 1} / {qz.cards.length} 题 · 已答上{' '}
                             {qz.marks.filter((m) => m === 'hit').length} · 没答上{' '}
                             {qz.marks.filter((m) => m === 'miss').length}
@@ -2654,7 +2654,7 @@ export default function TutorPage() {
                                 {qz.cards[qz.idx].back}
                               </div>
                               {qz.cards[qz.idx].hint ? (
-                                <p className="pt-1.5 text-[11px] text-neutral-400">
+                                <p className="pt-1.5 text-xs text-neutral-400">
                                   提示：{qz.cards[qz.idx].hint}
                                 </p>
                               ) : null}
@@ -2679,14 +2679,14 @@ export default function TutorPage() {
 
                       {/* 总结：全判完才出现。没答上的题就地开教学，题面当开场话题 */}
                       {qz && qz.marks.every((m) => m !== null) ? (
-                        <div className="rounded-xl border border-orange-200/70 bg-white/80 p-4 dark:border-orange-500/20 dark:bg-neutral-900/50">
+                        <div className="rounded-md border border-orange-200/70 bg-white/80 p-4 dark:border-orange-500/20 dark:bg-neutral-900/50">
                           <p className="pb-2 text-sm font-medium text-neutral-800 dark:text-neutral-100">
                             测验完成：{qz.marks.filter((m) => m === 'hit').length} / {qz.cards.length}{' '}
                             答上了
                           </p>
                           {qz.marks.some((m) => m === 'miss') ? (
                             <div className="space-y-1.5">
-                              <p className="text-[11px] text-neutral-400">
+                              <p className="text-xs text-neutral-400">
                                 这几道没答上——点一题，专门开一场教学把它搞懂：
                               </p>
                               {qz.cards.map((c, i) =>
@@ -2711,7 +2711,7 @@ export default function TutorPage() {
                           )}
                           <button
                             onClick={() => setQz(null)}
-                            className="pt-2 text-[11px] text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
+                            className="pt-2 text-xs text-neutral-400 transition-colors hover:text-neutral-600 dark:hover:text-neutral-300"
                           >
                             再测一份
                           </button>
@@ -2732,7 +2732,7 @@ export default function TutorPage() {
                 (!mastery || mastery.events.length === 0) &&
                 stuckRows.length === 0 &&
                 (!stats || stats.sessions === 0) ? (
-                  <section className="wb-card-hero rounded-2xl p-6">
+                  <section className="wb-card-hero rounded-lg p-6">
                     <h2 className="text-base font-semibold text-neutral-800 dark:text-neutral-100">
                       从一场教学开始
                     </h2>
@@ -2743,34 +2743,34 @@ export default function TutorPage() {
                     <div className="mt-4 grid gap-3 sm:grid-cols-3">
                       <Link
                         to="/tutor"
-                        className="rounded-xl border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
+                        className="rounded-md border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
                       >
                         <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                           🗣 开一场教学
                         </p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                        <p className="mt-1 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
                           挑一个概念讲给零柒听——说通了它就记住，地图上多一颗星。
                         </p>
                       </Link>
                       <Link
                         to="/notes"
-                        className="rounded-xl border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
+                        className="rounded-md border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
                       >
                         <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                           📝 消化一份材料
                         </p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                        <p className="mt-1 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
                           在笔记页划词挖空、让它出题——学的东西带着出处，以后可考。
                         </p>
                       </Link>
                       <Link
                         to="/companion?tab=audio"
-                        className="rounded-xl border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
+                        className="rounded-md border border-violet-200/70 bg-white p-3 transition-colors hover:border-violet-400 dark:border-violet-500/30 dark:bg-neutral-900/60 dark:hover:border-violet-500/60"
                       >
                         <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                           🎙 拿卡点录一期播客
                         </p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+                        <p className="mt-1 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
                           没解的卡点让它讲成人话——通勤路上也能把没懂的过一遍。
                         </p>
                       </Link>
@@ -2796,11 +2796,11 @@ export default function TutorPage() {
                         key={label}
                         className="wb-card p-4"
                       >
-                        <p className="text-[11px] text-neutral-400">{label}</p>
+                        <p className="text-xs text-neutral-400">{label}</p>
                         <p className="pb-0.5 text-xl font-semibold text-neutral-800 dark:text-neutral-100">
                           {value}
                         </p>
-                        <p className="text-[10px] leading-relaxed text-neutral-400">{hint}</p>
+                        <p className="text-xs leading-relaxed text-neutral-400">{hint}</p>
                       </div>
                     ))}
                   </section>
@@ -2819,7 +2819,7 @@ export default function TutorPage() {
                     {/* 最近搞懂：学会一个东西的「时刻」。从半懂到懂的格外标出来——
                         那是这份记录里最值钱的线索 */}
                     <div className="wb-card p-4">
-                      <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                      <p className="pb-2 text-xs font-medium uppercase tracking-wider text-neutral-400">
                         最近搞懂
                       </p>
                       {mastery && mastery.events.length > 0 ? (
@@ -2831,11 +2831,11 @@ export default function TutorPage() {
                                 {e.concept}
                               </span>
                               {e.from_half ? (
-                                <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300">
+                                <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300">
                                   从半懂到懂
                                 </span>
                               ) : null}
-                              <span className="shrink-0 text-[10px] text-neutral-400">
+                              <span className="shrink-0 text-xs text-neutral-400">
                                 {(e.at || '').slice(5, 10)}
                               </span>
                             </li>
@@ -2850,7 +2850,7 @@ export default function TutorPage() {
                     {/* 待解的卡点：全库的卡点集中在这里，逐条可以关掉；做成播客、
                         开圆桌的入口在左边地图的标题行 */}
                     <div className="wb-card p-4">
-                      <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                      <p className="pb-2 text-xs font-medium uppercase tracking-wider text-neutral-400">
                         待解的卡点 {stuckRows.filter((s) => !s.resolved_at).length > 0 ? stuckRows.filter((s) => !s.resolved_at).length : ''}
                       </p>
                       {stuckRows.some((s) => !s.resolved_at) ? (
@@ -2869,7 +2869,7 @@ export default function TutorPage() {
                                         「又卡住」的那一批，扫描这一列时才不会看漏 */}
                                     <RepeatChip c={repeatMap.get(s.concept) ?? null} />
                                   </span>
-                                  <span className="block text-[11px] leading-relaxed text-neutral-400">
+                                  <span className="block text-xs leading-relaxed text-neutral-400">
                                     ↳ {s.stuck}
                                   </span>
                                 </span>
@@ -2895,11 +2895,11 @@ export default function TutorPage() {
                 {/* 学过的：统计一句话 + 完整会话历史，通栏铺开 */}
                 <section className="wb-card p-4">
                   <div className="flex items-baseline justify-between pb-2">
-                    <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                    <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">
                       学过的
                     </p>
                     {stats && stats.sessions > 0 ? (
-                      <p className="text-[11px] text-neutral-400">
+                      <p className="text-xs text-neutral-400">
                         近 {stats.days} 天 {stats.sessions} 次，{stats.got} 次说通了
                         {stats.got_with_recall > 0
                           ? `，其中 ${stats.got_with_recall} 次接上了以前卡的点`
@@ -2921,19 +2921,19 @@ export default function TutorPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">
                     {mode === 'feynman' && (
-                      <span className="mr-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+                      <span className="mr-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
                         费曼
                       </span>
                     )}
                     {mode === 'future' && (
-                      <span className="mr-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] text-sky-700 dark:bg-sky-500/20 dark:text-sky-300">
+                      <span className="mr-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-700 dark:bg-sky-500/20 dark:text-sky-300">
                         未来的你
                       </span>
                     )}
                     {topic || '这次'}
                   </p>
                   {ended?.concept ? (
-                    <p className="truncate text-[11px] text-neutral-500">
+                    <p className="truncate text-xs text-neutral-500">
                       {ended.concept}
                       {ended.domain ? ` · 领域：${ended.domain}` : ''}
                       {ended.stuck ? ` · 卡点：${ended.stuck}` : ''}
@@ -2942,7 +2942,7 @@ export default function TutorPage() {
                   {/* 这次归并了什么，必须说出来：机器自己换了个名字如果界面上不提，
                       就是一件用户看不见也查不到的事。 */}
                   {ended?.merged ? (
-                    <p data-ended-merged className="truncate text-[11px] text-violet-600 dark:text-violet-300">
+                    <p data-ended-merged className="truncate text-xs text-violet-600 dark:text-violet-300">
                       这次的叫法「{ended.merged.from}」并进了已有概念「{ended.merged.into}」
                       （{ended.merged.why}）
                     </p>
@@ -3021,7 +3021,7 @@ export default function TutorPage() {
                   ) : (
                   <>
                   <div className="flex flex-wrap items-center gap-2 pb-2">
-                    <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                    <span className="text-xs font-medium uppercase tracking-wider text-neutral-400">
                       这次
                     </span>
                     {VERDICTS.map((v) => (
@@ -3049,12 +3049,12 @@ export default function TutorPage() {
                       {judging ? '判中…' : '让它判'}
                     </button>
                     {judgeMsg ? (
-                      <span data-judge-msg className="text-[11px] text-neutral-400">
+                      <span data-judge-msg className="text-xs text-neutral-400">
                         {judgeMsg}
                       </span>
                     ) : null}
                     {verdict ? (
-                      <span className="text-[11px] text-neutral-400">
+                      <span className="text-xs text-neutral-400">
                         {verdict === 'useless'
                           ? '记下了，不会再翻出来'
                           : ended?.concept
@@ -3072,7 +3072,7 @@ export default function TutorPage() {
                       <AttachToThread kind="session" ref={String(sid)} className="inline-flex" />
                     ) : null}
                     {ended && ended.nearby.length > 0 ? (
-                      <span className="text-[11px] text-neutral-400">
+                      <span className="text-xs text-neutral-400">
                         材料里还有：
                         {ended.nearby.map((n) => (
                           <span key={n.source} className="ml-1 rounded bg-neutral-200/70 px-1.5 py-0.5 dark:bg-neutral-700/60">
@@ -3084,7 +3084,7 @@ export default function TutorPage() {
                     {/* 迁移问题（Bjork 参考项）：原场景答对不算懂，换个场景还能用才算。
                         和 material_nearby 一样只在总结里出现一次，不落库。 */}
                     {ended?.transfer ? (
-                      <span className="text-[11px] text-violet-500 dark:text-violet-300">
+                      <span className="text-xs text-violet-500 dark:text-violet-300">
                         换个场景试试：{ended.transfer}
                       </span>
                     ) : null}
@@ -3102,7 +3102,7 @@ export default function TutorPage() {
                         }}
                         disabled={busy || turns.length === 0}
                         title={text}
-                        className="rounded-full border border-neutral-200 px-2.5 py-1 text-[11px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
+                        className="rounded-full border border-neutral-200 px-2.5 py-1 text-xs text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
                       >
                         {label}
                       </button>
@@ -3121,12 +3121,12 @@ export default function TutorPage() {
                       }}
                       rows={2}
                       placeholder="先按你自己的理解答一遍（Enter 发送，Shift+Enter 换行）"
-                      className="min-w-0 flex-1 resize-none rounded-xl border border-neutral-300 bg-white px-3.5 py-2.5 text-sm outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+                      className="min-w-0 flex-1 resize-none rounded-md border border-neutral-300 bg-white px-3.5 py-2.5 text-sm outline-none transition-colors placeholder:text-neutral-400 focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
                     />
                     <button
                       onClick={() => void submit()}
                       disabled={!draft.trim() || busy}
-                      className="shrink-0 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+                      className="shrink-0 rounded-md bg-violet-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
                     >
                       发送
                     </button>

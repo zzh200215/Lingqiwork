@@ -10,7 +10,6 @@ gets it back, and that an *unrelated* topic does not.
 """
 import asyncio
 import atexit
-import os
 import shutil
 import sys
 import tempfile
@@ -34,10 +33,7 @@ def _cleanup() -> None:
 
 atexit.register(_cleanup)
 
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 # 取材走真 chroma；不指走就等于每次跑测试都摸真实库
-os.environ["WB_CHROMA_PATH"] = str(_TMP / "chroma")
 
 from app.core import tutor as core  # noqa: E402
 from app.db import engine  # noqa: E402

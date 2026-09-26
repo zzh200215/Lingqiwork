@@ -6,7 +6,7 @@ Env must be set before app imports so the engine binds to a throwaway db.
 """
 import asyncio
 import atexit
-import os
+import json
 import shutil
 import sys
 import tempfile
@@ -30,8 +30,6 @@ def _cleanup() -> None:
 
 
 atexit.register(_cleanup)
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 
 from sqlalchemy import delete, select  # noqa: E402
 
@@ -47,6 +45,7 @@ from app.models import (  # noqa: E402
     ThreadItem,
 )
 from app.core.triggers import TaskTriggerWatcher  # noqa: E402
+from app.routers.tasks import recent_runs  # noqa: E402
 
 
 async def _create_all() -> None:
@@ -77,6 +76,27 @@ def test_filter_tools():
     assert len(core.filter_tools(specs, "nope")) == 0
     # MCP tool must be whitelisted by its exposed server__tool name
     assert [s["function"]["name"] for s in core.filter_tools(specs, "fs__read")] == ["fs__read"]
+
+
+def test_none_is_the_reserved_word_for_no_tools():
+    """A2：白名单多了一个保留字 `none` = **一个都不给**（agent 那一栏的「不用工具」）。
+
+    它与「空」是**两件事**：空 = 不限制（全给）、`none` = 零。把两者混起来，
+    「这个 agent 不许用工具」会静默变成「什么都能用」——迁移就是把旧布尔映射到这两个值上
+    （`true → ''`、`false → 'none'`，见 `migrations._m017_agent_tool_whitelist`）。
+    语义只在 `mcp.filter_specs` 一处，`tasks.filter_tools` 只是转调它。
+    """
+    from app.core import mcp
+
+    specs = _specs()
+    assert mcp.filter_specs(specs, "none") == []
+    assert mcp.filter_specs(specs, "NONE") == []  # 大小写不敏感
+    assert mcp.filter_specs(specs, " none , vault_* ") == []  # 保留字在场就是不放开
+    assert len(mcp.filter_specs(specs, "")) == len(specs)  # 空 = 不限制
+    # 一处实现：tasks 那边转调的就是它
+    assert core.filter_tools(specs, "vault_*") == mcp.filter_specs(specs, "vault_*")
+    # 记号一个都没匹配上 → 空表，**不是**回落到全给（写错了该是「没有工具」）
+    assert mcp.filter_specs(specs, "no_such_tool") == []
 
 
 # ---------- normalize_watch_path ----------
@@ -1518,7 +1538,204 @@ async def test_chain_step_landing_dir_overrides_inherited_run_dir(monkeypatch):
     assert not (vault / "deliver").samefile(vault / "decisions")
 
 
-# ---------- 产物挂到一条「一件事」（M2，docs/work-module.md） ----------
+# ---------- 步骤条（方案 §8.3：点单次运行 → 每步状态/耗时/可展开） ----------
+#
+# 真值记在 `task_runs.log_json` 里，**与工具调用同一个数组**——顺序就是发生的顺序，
+# 分两个数组就没法交错（工具那几项没有时间戳）。所以这一组测两件事：
+# 步骤记全了，以及**原来按 `tool` 过滤的读法没被这些东西干扰**。
+
+
+def _steps_of(entries: list[dict]) -> list[dict]:
+    return [e for e in entries if e.get("step")]
+
+
+class _FakeEngine:
+    """一个可控的假引擎：按给定的相位依次发事件。落盘也假装（这里测的是账，不是盘）。"""
+
+    def __init__(self, events: list[tuple[str, dict]]):
+        self.events = events
+
+    def install(self, monkeypatch):
+        from app.core import research as engine_mod
+
+        events = self.events
+
+        async def fake_run(topic):
+            for ev, data in events:
+                yield ev, data
+
+        async def fake_save(rep, sources):
+            return {"filename": "research/x.md", "title": rep.title, "chunks": 1}
+
+        monkeypatch.setattr(engine_mod, "run", fake_run)
+        monkeypatch.setattr(engine_mod, "save", fake_save)
+
+
+async def test_engine_run_records_a_step_per_phase_with_timing(monkeypatch):
+    """无人值守跑一个引擎 = 取材 → 成文 → 落盘，三步各带耗时。"""
+    m = await _add_task("跑一遍引擎", action="research")
+    _FakeEngine(
+        [
+            ("gathering", {}),
+            ("sources", {"sources": [{"n": 1, "kind": "kb", "title": "A", "ref": "notes/a.md"}]}),
+            ("writing", {}),
+            ("report", {"title": "T", "sections": [{"heading": "H", "body": "B"}], "used": []}),
+        ]
+    ).install(monkeypatch)
+
+    await core.run_task(m, manual=True)
+
+    async with SessionLocal() as db:
+        run = (await db.execute(select(TaskRun).order_by(TaskRun.id.desc()))).scalars().first()
+    steps = _steps_of(json.loads(run.log_json))
+    assert [s["step"] for s in steps] == ["取材", "成文", "落盘"]
+    assert all(s["ok"] for s in steps)
+    assert all(isinstance(s["ms"], int) and s["ms"] >= 0 for s in steps)
+    assert steps[0]["note"] == "1 条材料"
+    assert steps[2]["ref"] == "research/x.md"
+
+
+async def test_a_step_that_found_nothing_material_is_marked_not_ok(monkeypatch):
+    """一条材料都没找到也是一步，而且**该被看见**（`ok=False` + 说明）。
+
+    省略它的话，那趟失败在步骤条上看上去会像「没跑过」——而它明明跑到了取材。
+    """
+    m = await _add_task("空取材", action="research")
+    _FakeEngine(
+        [
+            ("gathering", {}),
+            ("sources", {"sources": []}),
+            ("error", {"message": "你自己的材料里没找到相关内容"}),
+        ]
+    ).install(monkeypatch)
+
+    await core.run_task(m, manual=True)
+
+    async with SessionLocal() as db:
+        run = (await db.execute(select(TaskRun).order_by(TaskRun.id.desc()))).scalars().first()
+    assert run.status == "error"
+    steps = _steps_of(json.loads(run.log_json))
+    assert steps[0] == {
+        "step": "取材",
+        "ok": False,
+        "ms": steps[0]["ms"],
+        "note": "没找到材料",
+    }
+
+
+async def test_step_entries_do_not_disturb_the_tool_log_readers():
+    """**两种形状同一个数组**的代价在这里守住：原来按 `tool` 过滤的读法一个字都不受影响。
+
+    真有两个读者：`skill_trials`（数「草稿被用过几次」）与 `skill_metrics`（按工序聚合）。
+    它们读的是 `entry["tool"] == "skill_inject"`，而步骤那些项**没有 `tool` 键**——
+    这条用例把那个约定钉住（哪天有人给步骤也加上 `tool`，这里会红）。
+    """
+    from app.core import skill_trials
+
+    entries = [
+        {"step": "取材", "ok": True, "ms": 12, "note": "1 条材料"},
+        {"tool": "skill_inject", "args": {"skills": ["给领导写汇报要结论先行"]}, "ok": True, "result": ""},
+        {"step": "成文", "ok": True, "ms": 900},
+    ]
+    skills: list[str] = []
+    for entry in entries:
+        if entry.get("tool") == "skill_inject":
+            skills += [str(n) for n in (entry.get("args") or {}).get("skills") or []]
+    assert skills == ["给领导写汇报要结论先行"]
+
+    # 同一个数组，两种形状互不误认
+    assert len(_steps_of(entries)) == 2
+    assert all("tool" not in s for s in _steps_of(entries))
+    assert skill_trials._entries(json.dumps(entries)) == entries  # noqa: SLF001
+
+
+async def test_tool_calls_carry_their_own_duration(monkeypatch):
+    """工具那几项也有耗时（§8.3 的「每步耗时」）——它只能在这里量。
+
+    `rounds` 是次数，`started_at/finished_at` 是整趟；一次调用花了多久别处补不出来。
+    """
+    m = await _add_task("带工具跑", mode="agent")
+
+    async def fake_execute(t: dict, log_entries: list) -> dict:
+        log_entries.append(
+            {"tool": "vault_list_files", "args": {"path": ""}, "ok": True, "result": "a.md", "ms": 37}
+        )
+        return {"answer": "ok", "sources": [], "model_id": "m", "rounds": 1, "tool_calls": 1}
+
+    monkeypatch.setattr(core, "_execute", fake_execute)
+    await core.run_task(m, manual=True)
+
+    async with SessionLocal() as db:
+        run = (await db.execute(select(TaskRun).order_by(TaskRun.id.desc()))).scalars().first()
+    entry = json.loads(run.log_json)[0]
+    assert entry["tool"] == "vault_list_files" and entry["ms"] == 37
+
+
+# ---------- 运行时间戳：两个时钟合一（2026-09-25 在真界面上发现） ----------
+#
+# 症状是「每一次运行的耗时都多八小时」：`started_at` 走模型默认的 `utcnow()`（UTC），
+# 而 `finished_at` 走 `datetime.now().astimezone()`、`tasks.last_run` 走 `started.astimezone()`
+# ——后两个是**本地墙上时间**。前端 `elapsed()` 拿两个时钟相减，实测一次 50 秒的运行
+# 显示成「480 分 50 秒」；同一屏上任务行说「上次 13:58」、它自己的运行记录说「05:58」。
+
+
+async def test_run_timestamps_are_on_one_clock(monkeypatch):
+    """一次运行的 `started_at` 与 `finished_at` 之间必须是**真实的那几秒**。"""
+    m = await _add_task("对表")
+
+    async def fake_execute(t: dict, log_entries: list) -> dict:
+        return {"answer": "ok", "sources": [], "model_id": "m", "rounds": 0, "tool_calls": 0}
+
+    monkeypatch.setattr(core, "_execute", fake_execute)
+    await core.run_task(m, manual=True)
+
+    async with SessionLocal() as db:
+        run = (await db.execute(select(TaskRun).order_by(TaskRun.id.desc()))).scalars().first()
+        task = await db.get(ScheduledTask, m)
+
+    gap = (run.finished_at - run.started_at).total_seconds()
+    # 八小时是那个 bug 的指纹，所以这条上界要卡得比它紧得多
+    assert 0 <= gap < 60, f"两个时间戳差 {gap} 秒——是不是又有一个走了本地时钟？"
+    # 任务行的 `last_run` 说的是**同一个时刻**（不是另一个时钟上的同一件事）
+    assert abs((task.last_run - run.started_at).total_seconds()) < 1
+
+
+async def test_run_payload_carries_the_offset(monkeypatch):
+    """发给界面的时间戳必须带 `+00:00`。
+
+    前端 `fmtWhen` 是**解析**它的（不是切字符串）：少了偏移，浏览器按本地时区读，
+    本时区下整整齐齐差八小时——而那正是这个 bug 的另一半。
+    """
+    m = await _add_task("带偏移")
+
+    async def fake_execute(t: dict, log_entries: list) -> dict:
+        return {"answer": "ok", "sources": [], "model_id": "m", "rounds": 0, "tool_calls": 0}
+
+    monkeypatch.setattr(core, "_execute", fake_execute)
+    await core.run_task(m, manual=True)
+
+    from app.routers import tasks as api
+
+    async with SessionLocal() as db:
+        run = (await db.execute(select(TaskRun).order_by(TaskRun.id.desc()))).scalars().first()
+        task = await db.get(ScheduledTask, m)
+
+    out = api._run_out(run)  # noqa: SLF001
+    assert out["started_at"].endswith("+00:00") and out["finished_at"].endswith("+00:00")
+    task_out = api._out(task)  # noqa: SLF001
+    assert task_out["last_run"].endswith("+00:00")
+
+    # 两边的墙上数字必须一致——曾经它们差八小时，那才是用户看见的那个症状。
+    #
+    # **容差一秒，别拿字符串比**：`started_at` 是插入那一刻、`last_run` 是收尾那一刻，
+    # 中间隔着一次真实运行，跨过秒边界是完全正常的。原来这里比的是 `[:19]`（整秒的
+    # 字符串），全量跑（CPU 抢得凶）时就会偶发地红——那个红是**测试的毛病**，不是代码的。
+    # 八小时那个量级的差不会被这一秒的容差放过去。
+    from datetime import datetime as _dt
+
+    a = _dt.fromisoformat(out["started_at"])
+    b = _dt.fromisoformat(task_out["last_run"])
+    assert abs((a - b).total_seconds()) < 2, f"两个时钟差了 {(a - b).total_seconds()} 秒"
 
 
 async def _attached(thread_id: int) -> list[str]:
@@ -2076,3 +2293,51 @@ def test_engine_actions_and_router_agree():
         assert TaskIn(name="n", prompt="p", action=eng).action == eng
     with pytest.raises(pydantic.ValidationError):
         TaskIn(name="n", prompt="p", action="nope")
+
+
+# ---------- 批量取「每任务最近一次运行」（P2）----------
+
+
+async def test_recent_runs_gives_the_latest_row_per_task_in_one_call():
+    """前端原来对前 8 条任务各发一次 `/{id}/runs`——**8 次请求换 8 条数据**。"""
+    async with SessionLocal() as db:
+        a = ScheduledTask(name="甲", prompt="p")
+        b = ScheduledTask(name="乙", prompt="p")
+        db.add_all([a, b])
+        await db.commit()
+        await db.refresh(a)
+        await db.refresh(b)
+
+        # 甲跑三次、乙跑一次；每次的 answer 不同，好认出留下的是哪一条
+        for i in (1, 2, 3):
+            db.add(TaskRun(task_id=a.id, status="ok", answer=f"甲{i}"))
+        db.add(TaskRun(task_id=b.id, status="error", answer="乙1"))
+        await db.commit()
+
+        out = await recent_runs(ids=f"{a.id},{b.id}", db=db)
+
+    assert set(out) == {str(a.id), str(b.id)}
+    assert out[str(a.id)]["answer"] == "甲3", "要的是**最近一次**，不是第一次"
+    assert out[str(b.id)]["status"] == "error"
+
+
+async def test_recent_runs_omits_tasks_that_never_ran():
+    """**没跑过的不出现在结果里**——调用方据此区分「没跑过」与「跑了但读不到」。"""
+    async with SessionLocal() as db:
+        never = ScheduledTask(name="没跑过", prompt="p")
+        db.add(never)
+        await db.commit()
+        await db.refresh(never)
+        out = await recent_runs(ids=str(never.id), db=db)
+
+    assert out == {}
+
+
+async def test_recent_runs_tolerates_junk_and_caps_the_batch():
+    """id 串是从 URL 来的：空串、乱字符、超量都不该炸成 500。"""
+    async with SessionLocal() as db:
+        assert await recent_runs(ids="", db=db) == {}
+        assert await recent_runs(ids="abc,,x", db=db) == {}
+        # 超量：封顶 50 个，不为了一个前端请求把整张表捞出来
+        many = ",".join(str(i) for i in range(1, 200))
+        await recent_runs(ids=many, db=db)  # 不抛异常即可

@@ -57,6 +57,9 @@ def _dump(c: Conversation, with_messages: bool = False, quality_by_msg: dict | N
                 # 这一轮落盘的产出回执。刷新后靠它把回执重建出来——正文在 vault
                 # 文件里，这条是会话流里唯一能把用户带回产出的线索。
                 "artifacts": _loads_or_none(getattr(m, "artifacts_json", None)),
+                # A2 的**逐步账**（协作那条路才有）。以前它只走流式事件、刷新即丢；
+                # 现在跟着消息一起回来，界面**照抄**它，不自己聚合（同 `sources` 的口径）。
+                "steps": _loads_or_none(getattr(m, "steps_json", None)),
                 # W2a 的两条底线校验结论（这一轮该存的存了没、有没有编路径）。
                 # **从回合账本读，不在界面里重算**：判定只有 `core/turn_quality.py`
                 # 那一处，两份实现分叉的那天这条提示就没人敢信了。
@@ -195,6 +198,9 @@ async def fork_conversation(
                 role=m.role,
                 content=m.content,
                 sources_json=m.sources_json,
+                # 分叉也把逐步账带走：它和正文是同一条消息的两半，只带一半会让分叉出来那条
+                # 看起来「跑过但没有账」（同 `sources_json` 的处理）
+                steps_json=getattr(m, "steps_json", None),
                 model_id=m.model_id,
             )
         )

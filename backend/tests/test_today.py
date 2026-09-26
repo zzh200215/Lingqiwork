@@ -141,7 +141,7 @@ def test_fallback_does_not_depend_on_a_try_block_import():
     assert router_mod.today_core.next_suggestion({})["tone"] == "idle"
 
 
-# ---------- 五档概览（/api/today/summary） ----------
+# ---------- 概览（/api/today/summary） ----------
 #
 # 和上面那条建议是**两回事**：那条是一句会主动开口的文案，由封存词表守着；这里是计数
 # 与落点。所以下面这组测试不碰 _DEBT_WORDS——但最后一条要反过来，钉住「加了概览没有
@@ -150,16 +150,36 @@ def test_fallback_does_not_depend_on_a_try_block_import():
 
 def test_summary_rows_come_in_fixed_priority_order():
     rows = summary(
-        {"tasks_failing": 1, "untouched": 2, "due_cards": 3, "awaiting": 4, "inflight": 5}
+        {
+            "tasks_failing": 1,
+            "untouched": 2,
+            "due_cards": 3,
+            "due_threads": 6,
+            "awaiting": 4,
+            "inflight": 5,
+        }
     )
     assert [r["key"] for r in rows] == [
         "tasks_failing",
         "untouched",
         "due_cards",
+        "due_threads",
         "awaiting",
         "inflight",
     ]
-    assert [r["count"] for r in rows] == [1, 2, 3, 4, 5]
+    assert [r["count"] for r in rows] == [1, 2, 3, 6, 4, 5]
+
+
+def test_due_cards_and_due_threads_are_two_different_rows():
+    """§五-5 把「到期事项」加进概览，**不是**并进「到期卡」。
+
+    卡片是「这份知识该重看了」，事情是「你自己设的期限到了」——合成一档之后
+    「3 件到期」说不清是哪种，点了也不知道该去哪（两条的落点一个是复习页、一个是事项页）。
+    """
+    rows = summary({"due_cards": 2, "due_threads": 3})
+    assert [r["key"] for r in rows] == ["due_cards", "due_threads"]
+    assert [r["label"] for r in rows] == ["到期卡", "到期事项"]
+    assert rows[0]["href"] != rows[1]["href"]
 
 
 def test_summary_omits_empty_rows_instead_of_showing_zeros():
@@ -187,15 +207,37 @@ def test_summary_junk_facts_never_raise(bad):
 def test_summary_href_override_is_used_and_defaults_otherwise():
     with_override = summary({"awaiting": 1, "awaiting_href": "/work?task=7"})
     assert with_override[0]["href"] == "/work?task=7"
-    assert summary({"awaiting": 1})[0]["href"] == "/work?tab=engine"
+    assert summary({"awaiting": 1})[0]["href"] == "/work?tab=workflow"
+    assert summary({"due_threads": 1})[0]["href"] == "/work?tab=thread"
 
 
 def test_summary_hrefs_point_at_known_routes():
     rows = summary(
-        {"tasks_failing": 1, "untouched": 1, "due_cards": 1, "awaiting": 1, "inflight": 1}
+        {
+            "tasks_failing": 1,
+            "untouched": 1,
+            "due_cards": 1,
+            "due_threads": 1,
+            "awaiting": 1,
+            "inflight": 1,
+        }
     )
     for r in rows:
         assert r["href"].startswith(("/work", "/review", "/tutor", "/settings")), r
+
+
+def test_summary_hrefs_speak_the_current_tab_keys_only():
+    """落点里的 `?tab=` 必须是**方案 §一 那一代**（`report`/`prompt`/`workflow`/`thread`）。
+
+    `engine` 那批旧名字只在 `routes.tsx` 的重定向层里活着——旧书签要认，但**新写出去的
+    链接不该再吐旧 key**：那等于每次翻新都往重定向表里再添一笔，而表越长越没人敢删。
+    """
+    from app.core.today import SUMMARY_HREF_DEFAULT
+
+    legacy = ("engine", "dispatch", "automation", "eval", "output", "deliver", "lab", "form", "follow")
+    for key, href in SUMMARY_HREF_DEFAULT.items():
+        for old in legacy:
+            assert f"tab={old}" not in href, f"{key} 还在用旧 tab key：{href}"
 
 
 def test_adding_summary_did_not_reopen_the_debt_words():

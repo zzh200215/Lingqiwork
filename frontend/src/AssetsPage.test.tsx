@@ -1,4 +1,4 @@
-// 资产页：产出速览 + 四个库的入口。真数据要跑过引擎才有，固定数据钉住结构。
+﻿// 资产页：产出速览 + 四个库的入口。真数据要跑过引擎才有，固定数据钉住结构。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
@@ -77,7 +77,7 @@ describe('AssetsPage', () => {
   it('产出速览：最近几件点得开，全量清单指回工作页', async () => {
     renderPage()
     expect(await screen.findByText('第 37 周周报')).toBeTruthy()
-    expect(screen.getByText(/全部 1 件/).getAttribute('href')).toBe('/work?tab=output')
+    expect(screen.getByText(/全部 1 件/).getAttribute('href')).toBe('/work?tab=report')
   })
 
   it('家底：摆的是「有多少」，不是「还差多少」', async () => {

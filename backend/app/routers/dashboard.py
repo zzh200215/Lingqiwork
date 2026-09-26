@@ -108,6 +108,19 @@ async def prompt_eval_board():
     return await prompt_eval.board()
 
 
+@router.get("/agent-eval")
+async def agent_eval_board():
+    """任务级基线（A0 · `Agent升级.md` §5 点名的「进计量局」那一笔）。
+
+    与北极星/回合读数同一条红线：**只进仪表盘**——不设目标、不排名、不进零柒嘴里。
+    读的是跑分**落下来的报告**（`core/agent_report.py` 那个只读投影）；**运行时绝不碰金标**
+    （红线 #3）：要指纹、要重判、要体检，去跑尺子。
+    """
+    from app.core import agent_report
+
+    return agent_report.view()
+
+
 @router.get("")
 async def dashboard(db: AsyncSession = Depends(get_db)):
     from app.core import usage as usage_core
@@ -160,16 +173,31 @@ async def dashboard(db: AsyncSession = Depends(get_db)):
         )
     ).all()
     month_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    # **按任务分解**（方案 §8.3：工作流清单每行要自己的 30 天成功率）。
+    # 原来只按 status 分组，于是只有全站一个数——「哪条流程在悄悄变差」答不出来。
+    # 一次多一个 group by 键就够，不新增查询。
     run_rows = (
         await db.execute(
-            select(TaskRun.status, func.count(TaskRun.id))
+            select(TaskRun.task_id, TaskRun.status, func.count(TaskRun.id))
             .where(TaskRun.started_at >= month_ago)
-            .group_by(TaskRun.status)
+            .group_by(TaskRun.task_id, TaskRun.status)
         )
     ).all()
-    run_counts = {status: n for status, n in run_rows}
+    run_counts: dict[str, int] = {}
+    per_task: dict[int, dict[str, int]] = {}
+    for task_id, status, n in run_rows:
+        run_counts[status] = run_counts.get(status, 0) + n
+        per_task.setdefault(task_id, {})[status] = n
     runs_total = sum(run_counts.values())
     runs_ok = run_counts.get("ok", 0)
+    task_runs_30d = {
+        str(tid): {
+            "runs": sum(c.values()),
+            "ok": c.get("ok", 0),
+            "rate": round(c.get("ok", 0) / sum(c.values()), 4) if sum(c.values()) else None,
+        }
+        for tid, c in per_task.items()
+    }
 
     from app.core import tasks as task_core
 
@@ -210,6 +238,10 @@ async def dashboard(db: AsyncSession = Depends(get_db)):
             "ok": runs_ok,
             "error": run_counts.get("error", 0),
             "rate": round(runs_ok / runs_total, 4) if runs_total else None,
+            # 按 task_id 分解（键是字符串，JSON 的键本来就只能是字符串）。
+            # **只在 30 天内有运行的任务会出现**——没有的别摆一个 0%，
+            # 那会把「没跑过」说成「全挂了」。
+            "by_task": task_runs_30d,
         },
         "tasks": upcoming[:5],
         "tasks_total": len(task_rows),

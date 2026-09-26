@@ -5,13 +5,16 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import CodeBlock from './CodeBlock'
 import ArtifactReceipt from './ArtifactReceipt'
+import CollabSteps from './CollabSteps'
+import CollabPins, { type PinnedMaterial } from './CollabPins'
 import { upsertArtifact, saveHint } from './artifacts'
 import SaveToVault from './SaveToVault'
-import { api, type AgentPreset, type Conversation, type PromptItem, type ProviderConfig } from './api'
+import { api, type AgentPreset, type Conversation, type Message, type PromptItem, type ProviderConfig } from './api'
 import {
   streamChat,
   streamCollab,
   type ArtifactRef,
+  type CollabStep,
   type QualityNote,
   type SourceRef,
   type ToolTrace,
@@ -37,6 +40,10 @@ interface ChatMessage {
   streamUid?: string // 'a'/'b' while streaming in comparison mode
   feedback?: 'up' | 'down' | null
   ctxFiles?: string[] // vault files injected whole via # command (ephemeral)
+  /** 协作的**逐步账**（A2 的 `step` 事件：谁跑的、几轮、几次工具、几秒、有没有烧光）。
+   *  与 `tools` 一样是**这一轮的过程读数**，后端不落库——刷新之后只剩纪要正文，
+   *  逐步账不再出现（它是"看这一步贵在哪"的现场账，不是历史）。 */
+  collabSteps?: CollabStep[]
 }
 // Memoized markdown body — only re-renders when its own text changes,
 // so streaming one message doesn't re-render every other message.
@@ -88,7 +95,7 @@ const MessageRow = React.memo(function MessageRow({
                 onChange={(e) => setDraft(e.target.value)}
                 rows={Math.min(8, Math.max(2, draft.split('\n').length))}
                 autoFocus
-                className="resize-none rounded-2xl border border-violet-300 bg-white px-4 py-3 text-[15px] focus:border-violet-500 focus:outline-none dark:border-violet-500/50 dark:bg-neutral-900"
+                className="resize-none rounded-lg border border-violet-300 bg-white px-4 py-3 text-[15px] focus:border-violet-500 focus:outline-none dark:border-violet-500/50 dark:bg-neutral-900"
               />
               <div className="flex justify-end gap-2 text-xs">
                 <button
@@ -110,7 +117,7 @@ const MessageRow = React.memo(function MessageRow({
               </div>
             </div>
           ) : (
-            <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2.5 text-[15px] text-white shadow-sm shadow-violet-200 dark:shadow-none">
+            <div className="max-w-[80%] whitespace-pre-wrap rounded-lg rounded-br-md bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2.5 text-[15px] text-white shadow-sm shadow-violet-200 dark:shadow-none">
               {m.content}
             </div>
           )}
@@ -120,7 +127,7 @@ const MessageRow = React.memo(function MessageRow({
             {m.ctxFiles.map((f) => (
               <span
                 key={f}
-                className="max-w-[240px] truncate rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+                className="max-w-[240px] truncate rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
               >
                 # {f}
               </span>
@@ -154,7 +161,7 @@ const MessageRow = React.memo(function MessageRow({
         <div className="prose prose-neutral min-w-0 max-w-none flex-1 break-words text-[15px] leading-relaxed dark:prose-invert">
           {m.modelLabel && (
             <span
-              className={`not-prose mb-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              className={`not-prose mb-1 inline-block rounded px-1.5 py-0.5 text-xs font-medium ${
                 m.modelLabel.startsWith('B')
                   ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300'
                   : 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300'
@@ -219,7 +226,7 @@ const MessageRow = React.memo(function MessageRow({
             </details>
           )}
           {m.sources && m.sources.length > 0 && (
-            <details className="not-prose mt-2 rounded-xl border border-neutral-200 bg-neutral-50 text-xs transition-colors dark:border-neutral-800 dark:bg-neutral-900/60">
+            <details className="not-prose mt-2 rounded-md border border-neutral-200 bg-neutral-50 text-xs transition-colors dark:border-neutral-800 dark:bg-neutral-900/60">
               <summary className="cursor-pointer px-3 py-2 text-neutral-500 transition-colors hover:text-violet-600 dark:hover:text-violet-400">
                 📚 参考了 {m.sources.length} 个知识库片段
               </summary>
@@ -234,7 +241,7 @@ const MessageRow = React.memo(function MessageRow({
                         )}
                         {' · '}score {s.score}
                         {s.channels?.includes('full') && (
-                          <span className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
+                          <span className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-xs text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
                             全文
                           </span>
                         )}
@@ -254,6 +261,9 @@ const MessageRow = React.memo(function MessageRow({
               </ol>
             </details>
           )}
+          {/* 协作的逐步账（A2）：摆在纪要**下面**——正文是结论，这一份是"贵在哪"的现场账。
+              它是流式事件带来的，后端不落库，所以刷新之后就不再出现（同 `tools`）。 */}
+          {m.collabSteps && m.collabSteps.length > 0 && <CollabSteps steps={m.collabSteps} />}
         </div>
       </div>
       {/* action bar */}
@@ -336,6 +346,28 @@ const MessageRow = React.memo(function MessageRow({
   )
 })
 
+/** 后端那条消息 → 界面这条气泡。**纯函数，故有测试**（`App.message.test.tsx`）。
+ *
+ * 三条附属事实都是「刷新后就没了」那一类，所以每一条都要 hydrate：产出回执（正文在 vault
+ * 文件里）、W2a 的校验结论（不做的话那条「没落盘」的实话消失、看起来一切正常）、以及
+ * A2 的逐步账（协作那条路才有）。
+ *
+ * **`null` 一律化成 `undefined`**：后端用 NULL 说「那时候没有这笔账」，界面据此**不渲染那一栏**
+ * ——不能把它变成空数组，那会画出一个 0 步的空壳（「没有」与「空账」是两件事）。
+ */
+export function toChatMessage(m: Message): ChatMessage {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    sources: (m as { sources?: SourceRef[] | null }).sources ?? undefined,
+    artifacts: m.artifacts ?? undefined,
+    quality: m.quality ?? undefined,
+    collabSteps: m.steps ?? undefined,
+    feedback: m.feedback ?? undefined,
+  }
+}
+
 export default function App() {
   return (
     <>
@@ -360,7 +392,10 @@ function ChatView() {
   const [agentId, setAgentId] = useState<number | null>(null)
   const [collabOpen, setCollabOpen] = useState(false)
   const [collabPick, setCollabPick] = useState<number[]>([])
-  const [collabPattern, setCollabPattern] = useState<'pipeline' | 'review'>('pipeline')
+  const [collabPattern, setCollabPattern] = useState<'pipeline' | 'review' | 'fanout'>('pipeline')
+  // 「这一轮读哪几份」（材料清单的第二个来源，2026-09-22）：只有 fanout 吃材料清单，
+  // 所以这一栏也只在 fanout 下露出来（后端对别的模式会记一行"钉了不生效"，见 agents.py）。
+  const [collabPins, setCollabPins] = useState<PinnedMaterial[]>([])
   const [followups, setFollowups] = useState<string[]>([])
   const [memorizedNote, setMemorizedNote] = useState<string | null>(null)
   const memorizedTimer = useRef<number | null>(null)
@@ -593,21 +628,7 @@ function ChatView() {
     if (busy) return
     const c = await api.getConversation(id)
     setActiveId(id)
-    setMessages(
-      c.messages?.map((m) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        sources: (m as { sources?: SourceRef[] | null }).sources ?? undefined,
-        // 产出回执是这一轮唯一有信息量的东西（正文可能在 vault 文件里）——
-        // 不hydrate 它，刷新后就只剩一条空壳消息。
-        artifacts: m.artifacts ?? undefined,
-        // W2a 的校验结论也在账本里：不 hydrate 它，刷新后那条「没落盘」的实话就没了，
-        // 而用户看到的是一条看起来正常、其实东西没进产出区的回答。
-        quality: m.quality ?? undefined,
-        feedback: m.feedback ?? undefined,
-      })) || []
-    )
+    setMessages(c.messages?.map(toChatMessage) || [])
     setError('')
   }
 
@@ -801,6 +822,34 @@ function ChatView() {
               return next
             })
           },
+          onCitations: (fix, uid) => {
+            // P3：编造的 `[来源 N]` 已经随流到了屏幕上。服务端把正文剥干净了，这一帧就是
+            // 让界面换成剥完的那一份 —— 库里剥了、屏幕上还留着，两边就不一致（那比不剥
+            // 更糟：用户以为那条引用是真的，刷新之后它又不见了）。
+            //
+            // **气泡上不另说一句**：正文换掉之后屏幕与库里就是同一份（刷新也一样），
+            // 而这件事的账在服务端（`turn_traces.quality.citations` + 那一栏毛病）。
+            // 要弹提示就得把它落进 `messages`，否则刷一下提示就没了 —— 那是另一种不一致。
+            const key = uid ?? 'none'
+            // 这一帧给的是**完整**正文，所以正在攒的那一批 delta 要丢掉：留着的话，
+            // 那个还没执行的 flush 会把旧文本（或整份新文本）再拼一次 —— 屏幕上出现两份。
+            pending[key] = ''
+            if (rafs[key]) {
+              cancelAnimationFrame(rafs[key])
+              delete rafs[key]
+            }
+            if (!uid || uid === 'a') streamedPrimary = fix.text
+            setMessages((prev) => {
+              const next = [...prev]
+              const idx =
+                uid != null
+                  ? next.findLastIndex((m) => m.streaming && m.streamUid === uid)
+                  : next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
+              if (idx === -1) return next
+              next[idx] = { ...next[idx], content: fix.text }
+              return next
+            })
+          },
           onSaved: (messageId, uid) => {
             // 这一轮刚落库的那条消息：把 id 接上，「📄 存进产出」当场就能点。
             setMessages((prev) => {
@@ -960,6 +1009,8 @@ function ChatView() {
     setBusy(true)
     let acc = ''
     let raf = 0
+    // A2 的逐步账：流式事件一条条来，攒在这里再挂到那条消息上（与 `sources` 同一个写法）
+    const steps: CollabStep[] = []
     const flush = () => {
       raf = 0
       setMessages((prev) => {
@@ -976,6 +1027,8 @@ function ChatView() {
         collabPick,
         collabPattern,
         useRag,
+        // 钉的材料原样发：只有 fanout 吃，而且后端会跳过读步打不开的那些
+        collabPins.map((p) => p.spec),
         {
           onDelta: (t) => {
             acc += t
@@ -986,6 +1039,17 @@ function ChatView() {
               const next = [...prev]
               const idx = next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
               if (idx !== -1) next[idx] = { ...next[idx], sources }
+              return next
+            })
+          },
+          // A2 的逐步账：每跑完一步来一条。**照抄后端那份事实**（谁/几轮/几次工具/几秒/
+          // 有没有烧光），界面不聚合、不加权——那会与后端那笔账分叉。
+          onStep: (fact) => {
+            steps.push(fact)
+            setMessages((prev) => {
+              const next = [...prev]
+              const idx = next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
+              if (idx !== -1) next[idx] = { ...next[idx], collabSteps: [...steps] }
               return next
             })
           },
@@ -1269,7 +1333,7 @@ function ChatView() {
             type="checkbox"
             checked={useRag}
             onChange={(e) => setUseRag(e.target.checked)}
-            className="h-3.5 w-3.5 accent-violet-600"
+            className="h-4 w-4 accent-violet-600"
           />
           知识库
         </label>
@@ -1326,19 +1390,19 @@ function ChatView() {
               const Row = (c: Conversation) => (
                 <div key={c.id} className={rowCls(activeId === c.id)}>
                   <button className="flex-1 truncate text-left" onClick={() => openConversation(c.id)}>
-                    {c.folder && <span className="mr-1 text-[10px]">📁</span>}
+                    {c.folder && <span className="mr-1 text-xs">📁</span>}
                     {c.title}
                   </button>
                   <button
                     onClick={() => renameConversation(c)}
-                    className="ml-1 hidden text-neutral-400 hover:text-violet-500 group-hover:block"
+                    className="ml-1 shrink-0 text-neutral-400 opacity-60 transition-[color,opacity] hover:text-violet-500 hover:opacity-100 focus-visible:opacity-100"
                     title="重命名"
                   >
                     ✎
                   </button>
                   <button
                     onClick={() => togglePin(c)}
-                    className={`ml-0.5 hidden group-hover:block ${
+                    className={`ml-0.5 shrink-0 opacity-60 transition-[color,opacity] hover:opacity-100 focus-visible:opacity-100 ${
                       c.pinned ? 'text-violet-500' : 'text-neutral-400 hover:text-violet-500'
                     }`}
                     title={c.pinned ? '取消置顶' : '置顶'}
@@ -1349,7 +1413,7 @@ function ChatView() {
                     value={c.folder || ''}
                     onChange={(e) => setFolder(c, e.target.value)}
                     onClick={(e) => e.stopPropagation()}
-                    className="ml-0.5 hidden w-5 cursor-pointer bg-transparent text-[10px] outline-none group-hover:block"
+                    className="ml-0.5 w-5 shrink-0 cursor-pointer bg-transparent text-xs opacity-60 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100"
                     title="移入文件夹"
                   >
                     <option value="">📁+</option>
@@ -1361,7 +1425,7 @@ function ChatView() {
                   </select>
                   <button
                     onClick={() => deleteConversation(c.id)}
-                    className="ml-0.5 hidden text-neutral-400 transition-colors hover:text-red-500 group-hover:block"
+                    className="ml-0.5 shrink-0 text-neutral-400 opacity-60 transition-[color,opacity] hover:text-red-500 hover:opacity-100 focus-visible:opacity-100"
                     title="删除"
                   >
                     ×
@@ -1372,7 +1436,7 @@ function ChatView() {
                 <>
                   {pinned.length > 0 && (
                     <>
-                      <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-neutral-400">
+                      <p className="px-2 pb-1 pt-1.5 text-xs font-medium uppercase tracking-wider text-neutral-400">
                         📌 置顶
                       </p>
                       {pinned.map(Row)}
@@ -1380,14 +1444,14 @@ function ChatView() {
                   )}
                   {[...folders.entries()].map(([folder, items]) => (
                     <div key={folder}>
-                      <p className="px-2 pb-1 pt-3 text-[10px] font-medium uppercase tracking-wider text-neutral-400">
+                      <p className="px-2 pb-1 pt-3 text-xs font-medium uppercase tracking-wider text-neutral-400">
                         📁 {folder}
                       </p>
                       {items.map(Row)}
                     </div>
                   ))}
                   {loose.length > 0 && (pinned.length > 0 || folders.size > 0) && (
-                    <p className="px-2 pb-1 pt-3 text-[10px] font-medium uppercase tracking-wider text-neutral-400">
+                    <p className="px-2 pb-1 pt-3 text-xs font-medium uppercase tracking-wider text-neutral-400">
                       全部
                     </p>
                   )}
@@ -1477,7 +1541,7 @@ function ChatView() {
       <div className="border-t border-neutral-200/80 bg-neutral-50/50 p-4 dark:border-neutral-800/80 dark:bg-neutral-900/30">
         {queuedMsgs.length > 0 && (
           <div className="mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-1.5">
-            <span className="text-[10px] uppercase tracking-wider text-neutral-400">排队中</span>
+            <span className="text-xs uppercase tracking-wider text-neutral-400">排队中</span>
             {queuedMsgs.map((q, i) => (
               <button
                 key={`${i}-${q.slice(0, 8)}`}
@@ -1492,7 +1556,7 @@ function ChatView() {
         )}
         {attachedFiles.length > 0 && (
           <div className="mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-1.5">
-            <span className="text-[10px] uppercase tracking-wider text-neutral-400">附带全文</span>
+            <span className="text-xs uppercase tracking-wider text-neutral-400">附带全文</span>
             {attachedFiles.map((f) => (
               <button
                 key={f}
@@ -1507,7 +1571,7 @@ function ChatView() {
         )}
         {attachedImages.length > 0 && (
           <div className="mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wider text-neutral-400">图片</span>
+            <span className="text-xs uppercase tracking-wider text-neutral-400">图片</span>
             {attachedImages.map((im, i) => (
               <div key={`${im.name}-${i}`} className="group relative">
                 <img
@@ -1518,7 +1582,7 @@ function ChatView() {
                   }`}
                 />
                 {im.uploading && (
-                  <span className="absolute inset-0 flex items-center justify-center text-[10px] text-neutral-500">
+                  <span className="absolute inset-0 flex items-center justify-center text-xs text-neutral-500">
                     上传中…
                   </span>
                 )}
@@ -1526,7 +1590,7 @@ function ChatView() {
                   <button
                     onClick={() => void ocrAttached(im)}
                     title="提取图中文字（本地 OCR，填入输入框）"
-                    className="absolute -bottom-1.5 -left-1.5 hidden h-5 w-5 rounded-full bg-neutral-800 text-[10px] leading-5 text-white group-hover:block disabled:opacity-50"
+                    className="absolute -bottom-1.5 -left-1.5 h-5 w-5 rounded-full bg-neutral-800 text-xs leading-5 text-white opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 disabled:opacity-50"
                   >
                     {ocrBusy === (im.url.split('/').pop() || im.name) ? '…' : '🔍'}
                   </button>
@@ -1534,13 +1598,13 @@ function ChatView() {
                 <button
                   onClick={() => setAttachedImages((prev) => prev.filter((x) => x !== im))}
                   title="点击移除"
-                  className="absolute -right-1.5 -top-1.5 hidden h-5 w-5 rounded-full bg-red-500 text-xs leading-5 text-white group-hover:block"
+                  className="absolute -right-1.5 -top-1.5 h-5 w-5 rounded-full bg-red-500 text-xs leading-5 text-white opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
                 >
                   ×
                 </button>
               </div>
             ))}
-            <span className="text-[11px] text-neutral-400">
+            <span className="text-xs text-neutral-400">
               发送后交给视觉模型理解；悬停图片点 🔍 可本地 OCR 提取文字
             </span>
           </div>
@@ -1590,11 +1654,11 @@ function ChatView() {
               }}
               rows={Math.min(8, Math.max(1, input.split('\n').length))}
               placeholder={useRag ? '向你的知识库提问…  / 提示词  # 引用笔记' : '输入消息，Enter 发送，/ 提示词库，# 引用笔记全文'}
-              className="w-full resize-none rounded-2xl border border-neutral-300 bg-white px-4 py-3 pr-12 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200 dark:border-neutral-700 dark:bg-neutral-900 dark:focus:border-violet-500 dark:focus:ring-violet-500/20"
+              className="w-full resize-none rounded-lg border border-neutral-300 bg-white px-4 py-3 pr-12 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200 dark:border-neutral-700 dark:bg-neutral-900 dark:focus:border-violet-500 dark:focus:ring-violet-500/20"
             />
             {slashOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
-                <p className="border-b border-neutral-100 px-3 py-1.5 text-[10px] uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
+              <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+                <p className="border-b border-neutral-100 px-3 py-1.5 text-xs uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
                   提示词库 · {slashMatches.length} 条匹配（Enter 用第一条）
                 </p>
                 <div className="max-h-56 overflow-y-auto">
@@ -1605,7 +1669,7 @@ function ChatView() {
                       className="block w-full px-3 py-2 text-left transition-colors hover:bg-violet-50 dark:hover:bg-violet-500/10"
                     >
                       <span className="text-xs font-medium text-neutral-700 dark:text-neutral-200">/{p.title}</span>
-                      <span className="mt-0.5 line-clamp-1 block text-[11px] text-neutral-400">{p.content}</span>
+                      <span className="mt-0.5 line-clamp-1 block text-xs text-neutral-400">{p.content}</span>
                     </button>
                   ))}
                   {!slashMatches.length && (
@@ -1615,8 +1679,8 @@ function ChatView() {
               </div>
             )}
             {hashOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
-                <p className="border-b border-neutral-100 px-3 py-1.5 text-[10px] uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
+              <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+                <p className="border-b border-neutral-100 px-3 py-1.5 text-xs uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
                   引用笔记全文 · {hashMatches.length} 个文件（Enter 用第一条）
                 </p>
                 <div className="max-h-56 overflow-y-auto">
@@ -1635,7 +1699,7 @@ function ChatView() {
                 </div>
               </div>
             )}
-            <span className="pointer-events-none absolute bottom-3 right-4 text-[11px] text-neutral-300 dark:text-neutral-600">
+            <span className="pointer-events-none absolute bottom-3 right-4 text-xs text-neutral-300 dark:text-neutral-600">
               Enter ↵
             </span>
             <button
@@ -1649,7 +1713,7 @@ function ChatView() {
           <button
             onClick={() => setCollabOpen((v) => !v)}
             title="智能体协作：选 2-4 个智能体按流水线或评审回路协作完成输入框里的目标"
-            className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-2xl border text-lg transition-all ${
+            className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border text-lg transition-all ${
               collabOpen
                 ? 'border-violet-400 bg-violet-50 text-violet-600 dark:border-violet-500/50 dark:bg-violet-500/10'
                 : 'border-neutral-300 bg-white text-neutral-400 hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50'
@@ -1658,8 +1722,8 @@ function ChatView() {
             👥
           </button>
           {collabOpen && (
-            <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
-              <p className="border-b border-neutral-100 px-3 py-1.5 text-[10px] uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
+            <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+              <p className="border-b border-neutral-100 px-3 py-1.5 text-xs uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
                 智能体协作 · 以输入框内容为目标
               </p>
               <div className="flex gap-1.5 px-3 pt-2.5">
@@ -1667,6 +1731,7 @@ function ChatView() {
                   [
                     ['pipeline', '流水线', '依次接力完成'],
                     ['review', '评审回路', '初稿→评审→修订'],
+                    ['fanout', '并行分派', '各自独立做→汇总'],
                   ] as const
                 ).map(([id, label, hint]) => (
                   <button
@@ -1679,12 +1744,17 @@ function ChatView() {
                     }`}
                   >
                     <span className="block text-xs font-medium text-neutral-700 dark:text-neutral-200">{label}</span>
-                    <span className="block text-[10px] text-neutral-400">{hint}</span>
+                    <span className="block text-xs text-neutral-400">{hint}</span>
                   </button>
                 ))}
               </div>
               <div className="max-h-44 overflow-y-auto px-3 py-2">
-                <p className="pb-1 text-[10px] text-neutral-400">选择 {collabPattern === 'review' ? '2 个（起草者与评审者）' : '2-4 个'}智能体：</p>
+                <p className="pb-1 text-xs text-neutral-400">选择 {collabPattern === 'review' ? '2 个（起草者与评审者）' : '2-4 个'}智能体：</p>
+                {collabPattern === 'fanout' && (
+                  <p className="pb-1 text-xs text-neutral-400">
+                    每个智能体各做一版（互不依赖，服务端并行跑），最后一个负责汇总
+                  </p>
+                )}
                 {agents.length ? (
                   <div className="flex flex-wrap gap-1.5">
                     {agents
@@ -1710,9 +1780,13 @@ function ChatView() {
                   <p className="py-2 text-xs text-neutral-400">还没有智能体 — 在设置页「智能体预设」创建</p>
                 )}
               </div>
+              {collabPattern === 'fanout' && (
+                <CollabPins pins={collabPins} onChange={setCollabPins} />
+              )}
               <div className="flex items-center gap-2 border-t border-neutral-100 px-3 py-2 dark:border-neutral-800">
-                <span className="text-[10px] leading-snug text-neutral-400">
+                <span className="text-xs leading-snug text-neutral-400">
                   已选 {collabPick.length} 个 · 评审回路用前 2 个
+                  {collabPattern === 'fanout' && ' · 并行分派：第 1 个负责汇总'}
                 </span>
                 <button
                   onClick={startCollab}
@@ -1727,7 +1801,7 @@ function ChatView() {
           <button
             onClick={() => void captureScreen()}
             title="截取屏幕/窗口进行问答（截图会附加为图片）"
-            className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-2xl border border-neutral-300 bg-white text-lg text-neutral-400 transition-all hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+            className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border border-neutral-300 bg-white text-lg text-neutral-400 transition-all hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50"
           >
             📷
           </button>
@@ -1735,7 +1809,7 @@ function ChatView() {
             onClick={voice.toggle}
             disabled={transcribing}
             title={recording ? '停止录音并转写' : transcribing ? '转写中…' : '语音输入（再次点击结束）'}
-            className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-2xl border text-lg transition-all disabled:opacity-40 ${
+            className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border text-lg transition-all disabled:opacity-40 ${
               recording
                 ? 'border-red-400 bg-red-50 text-red-500 dark:border-red-500/50 dark:bg-red-500/10'
                 : 'border-neutral-300 bg-white text-neutral-400 hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50'
@@ -1747,7 +1821,7 @@ function ChatView() {
             <>
               <button
                 onClick={stop}
-                className="flex h-[46px] w-[64px] items-center justify-center gap-1.5 rounded-2xl border border-neutral-300 bg-white text-sm font-medium text-neutral-600 transition-colors hover:border-red-300 hover:text-red-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-red-500/50"
+                className="flex h-[46px] w-[64px] items-center justify-center gap-1.5 rounded-lg border border-neutral-300 bg-white text-sm font-medium text-neutral-600 transition-colors hover:border-red-300 hover:text-red-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-red-500/50"
               >
                 <span className="h-2.5 w-2.5 animate-pulse-dot rounded-full bg-red-500" />
                 停止
@@ -1756,7 +1830,7 @@ function ChatView() {
                 onClick={send}
                 disabled={!input.trim()}
                 title="加入队列，回答完成后自动发送"
-                className="flex h-[46px] w-[52px] items-center justify-center rounded-2xl border border-violet-300 bg-violet-50 text-lg text-violet-600 transition-all hover:border-violet-500 hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
+                className="flex h-[46px] w-[52px] items-center justify-center rounded-lg border border-violet-300 bg-violet-50 text-lg text-violet-600 transition-all hover:border-violet-500 hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
               >
                 ⏭
               </button>
@@ -1765,7 +1839,7 @@ function ChatView() {
             <button
               onClick={send}
               disabled={!input.trim()}
-              className="flex h-[46px] w-[76px] items-center justify-center rounded-2xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 hover:brightness-110 disabled:from-neutral-200 disabled:to-neutral-200 disabled:text-neutral-400 disabled:shadow-none dark:disabled:from-neutral-800 dark:disabled:to-neutral-800 dark:disabled:text-neutral-600"
+              className="flex h-[46px] w-[76px] items-center justify-center rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 hover:brightness-110 disabled:from-neutral-200 disabled:to-neutral-200 disabled:text-neutral-400 disabled:shadow-none dark:disabled:from-neutral-800 dark:disabled:to-neutral-800 dark:disabled:text-neutral-600"
             >
               发送
             </button>
@@ -1785,7 +1859,7 @@ function ChatView() {
           onClick={() => setSearchOpen(false)}
         >
           <div
-            className="w-full max-w-xl animate-slide-up overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
+            className="w-full max-w-xl animate-slide-up overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2 border-b border-neutral-100 px-4 py-3 dark:border-neutral-800">
@@ -1826,7 +1900,7 @@ function ChatView() {
                       {hit.source === 'tutor' && <span className="mr-1 text-amber-600 dark:text-amber-400">🎓</span>}
                       {hit.title}
                     </span>
-                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
                       hit.source === 'tutor'
                         ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
                         : hit.role === 'user'
@@ -1865,7 +1939,7 @@ function Welcome({ useRag, onPick }: { useRag: boolean; onPick: (prompt: string)
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-4 pb-16">
-      <div className="mb-1.5 flex h-14 w-14 animate-slide-up items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-2xl shadow-lg shadow-violet-300 dark:shadow-violet-900/50">
+      <div className="mb-1.5 flex h-14 w-14 animate-slide-up items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 text-2xl shadow-lg shadow-violet-300 dark:shadow-violet-900/50">
         🧠
       </div>
       <h1 className="mt-4 animate-slide-up bg-gradient-to-r from-violet-600 via-fuchsia-500 to-violet-600 bg-clip-text text-2xl font-bold text-transparent dark:from-violet-400 dark:via-fuchsia-400 dark:to-violet-400">
@@ -1879,7 +1953,7 @@ function Welcome({ useRag, onPick }: { useRag: boolean; onPick: (prompt: string)
           <button
             key={s.title}
             onClick={() => onPick(s.prompt)}
-            className="group rounded-xl border border-neutral-200 bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md hover:shadow-violet-100 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-violet-500/40 dark:hover:shadow-none"
+            className="group rounded-md border border-neutral-200 bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md hover:shadow-violet-100 dark:border-neutral-800 dark:bg-neutral-900/60 dark:hover:border-violet-500/40 dark:hover:shadow-none"
           >
             <div className="flex items-center gap-2 text-sm font-medium">
               <span className="text-base">{s.icon}</span>

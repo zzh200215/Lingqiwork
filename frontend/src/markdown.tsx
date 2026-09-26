@@ -4,7 +4,7 @@
  *  收在一处还有一个理由：正文里的 `[n]` 引用回填是跨全部引擎的改动，只改这里就够。
  */
 import { useMemo, type ReactNode } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 
@@ -62,7 +62,7 @@ export function linkCitations(md: string): string {
 function Citation({ n, sources }: { n: number; sources: Map<number, CiteSource> }) {
   const s = sources.get(n)
   const href = s ? sourceHref(s.ref) : null
-  const cls = `align-super rounded px-0.5 text-[11px] no-underline ${
+  const cls = `align-super rounded px-0.5 text-xs no-underline ${
     href
       ? 'text-violet-600 hover:bg-violet-100 dark:text-violet-300 dark:hover:bg-violet-500/20'
       : 'text-neutral-400'
@@ -84,34 +84,38 @@ function Citation({ n, sources }: { n: number; sources: Map<number, CiteSource> 
 export function Markdown({
   children,
   sources,
+  withAnchors = false,
 }: {
   children: string
   /** 给了就把正文里的 `[n]` 变成可点回来源的角标；不给则与从前逐字节一致。 */
   sources?: CiteSource[]
+  /** 给标题挂锚点 id（阅读视图的大纲导航要用）。
+   *
+   *  **默认关**：这个组件在今日页、教学页、学页回执等五处共用，
+   *  给它们悄悄加上 id 是「一处改、五处跟着变」——而只有阅读视图需要它。 */
+  withAnchors?: boolean
 }) {
   const byN = useMemo(() => new Map((sources ?? []).map((s) => [s.n, s])), [sources])
-  const components = useMemo(
-    () => ({
-      pre: CodeBlock,
-      ...(byN.size
-        ? {
-            a: ({ href, children }: { href?: string; children?: ReactNode }) => {
-              const m = /^#wb-cite-(\d+)$/.exec(href ?? '')
-              if (!m) {
-                // 正文里真正的链接：外链开新页，别把正在读的东西顶掉
-                return (
-                  <a href={href} target="_blank" rel="noreferrer">
-                    {children}
-                  </a>
-                )
-              }
-              return <Citation n={Number(m[1])} sources={byN} />
-            },
-          }
-        : {}),
-    }),
-    [byN]
-  )
+  const components = useMemo(() => {
+    const base: Components = { pre: CodeBlock }
+    if (withAnchors) Object.assign(base, headingComponents())
+    if (!byN.size) return base
+    return {
+      ...base,
+      a: ({ href, children }: { href?: string; children?: ReactNode }) => {
+        const m = /^#wb-cite-(\d+)$/.exec(href ?? '')
+        if (!m) {
+          // 正文里真正的链接：外链开新页，别把正在读的东西顶掉
+          return (
+            <a href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          )
+        }
+        return <Citation n={Number(m[1])} sources={byN} />
+      },
+    }
+  }, [byN, withAnchors])
 
   return (
     <div className="prose prose-sm max-w-none dark:prose-invert">
@@ -124,6 +128,60 @@ export function Markdown({
       </ReactMarkdown>
     </div>
   )
+}
+
+/** 把标题文本变成一个能当 `id` 的锚点串。
+ *
+ *  **阅读视图的「大纲导航」需要它**（方案 §8.1）：左栏点一节要跳到正文那一节，
+ *  而 `react-markdown` 默认不给标题 `id`。中文标题没法像英文那样转成短横线串
+ *  （`### 本周进展` → `id="本周进展"` 就挺好），所以只做「去空白、去标点」这一步。
+ *
+ *  **同一份文档里重名标题会撞 id**——这是可接受的：撞了就跳到第一个，
+ *  比为了唯一性给标题编号（`本周进展-2`）更难认。 */
+export function slug(title: string): string {
+  return title
+    .trim()
+    .replace(/[\s\u3000]+/g, '-')
+    .replace(/[^\p{L}\p{N}\-_]/gu, '')
+    .slice(0, 80)
+}
+
+/** 从成文里抽出大纲（章节 → 锚点），给阅读视图左栏用。
+ *
+ *  只认 `##` 与 `###`：`reportMarkdown` 就是这么生成的（`## 标题` + 每条 `### 小节`）。 */
+export function outlineOf(md: string): { level: number; text: string; id: string }[] {
+  const out: { level: number; text: string; id: string }[] = []
+  for (const line of md.split('\n')) {
+    const m = /^(#{2,3})\s+(.+?)\s*$/.exec(line)
+    if (!m) continue
+    const text = m[2]
+    out.push({ level: m[1].length, text, id: slug(text) })
+  }
+  return out
+}
+
+/** 阅读视图的标题组件：把 `## / ###` 挂上锚点 id，左栏的大纲才跳得动。
+ *
+ *  和 `outlineOf` 用**同一个** `slug()`——两处各算一份的那天，点了没反应还没人报错。 */
+export function headingComponents(): Components {
+  const H = (Tag: 'h2' | 'h3') =>
+    function Heading({ children }: { children?: ReactNode }) {
+      const text = flatten(children)
+      return <Tag id={slug(text)}>{children}</Tag>
+    }
+  return { h2: H('h2'), h3: H('h3') }
+}
+
+/** 把 React 子节点压成纯文本——标题里常带 `**粗体**` 或 `` `代码` ``，
+ *  锚点要按**文字**算，不能按节点树算。 */
+function flatten(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(flatten).join('')
+  if (typeof node === 'object' && 'props' in node) {
+    return flatten((node as { props?: { children?: ReactNode } }).props?.children)
+  }
+  return ''
 }
 
 /** 成文（研究 / 方案 / 对质 / 交付同一形状）→ markdown。正文里的 [n] 由 `Markdown` 接管。 */
@@ -155,7 +213,7 @@ export function SourceList({
   const marked = new Set(used ?? [])
   return (
     <details className={`mt-2 border-t pt-2 ${className}`}>
-      <summary className="cursor-pointer text-[11px] text-neutral-500">
+      <summary className="cursor-pointer text-xs text-neutral-500">
         {summary ?? `来源 ${sources.length} 条`}
       </summary>
       <ul className="mt-1 space-y-0.5">
@@ -176,7 +234,7 @@ export function SourceList({
             </>
           )
           return (
-            <li key={s.n} className="text-[11px] leading-relaxed">
+            <li key={s.n} className="text-xs leading-relaxed">
               {href ? (
                 <a
                   href={href}

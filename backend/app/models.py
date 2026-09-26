@@ -1,7 +1,7 @@
 """ORM models: conversations, messages, providers, memories, agents, tasks, evals, cards."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app.core.secrets import seal, unseal
@@ -64,6 +64,10 @@ class Message(Base):
     # 存它是因为回执是这一轮**唯一有信息量**的东西：正文可能在 vault 文件里、
     # 回复正文那头是空的，只把正文落库等于把有价值的丢掉、把空壳留下。
     artifacts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A2 的**逐步账**（协作跑完那十来步，每步一条 `fact`）：谁、几轮、几次工具、几秒、烧没烧光。
+    # 存它是因为它以前**只走流式事件**——刷新一下就没了，用户回头再看那条消息只剩纪要正文，
+    # 而「哪一步贵、哪一步烧光」恰恰是协作最该留下的那笔账（同 `artifacts_json` 的理由）。
+    steps_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     feedback: Mapped[str | None] = mapped_column(String(4), nullable=True)  # 'up' | 'down'
     tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -131,7 +135,16 @@ class Agent(Base):
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     model_id: Mapped[str] = mapped_column(String(100), default="")  # "" = conversation default
     use_rag: Mapped[bool] = mapped_column(Boolean, default=False)
-    tools_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # A2：这一栏从「用不用工具」升成「**能用哪些**工具」——fnmatch 通配（`vault_*`、
+    # `kb_search`、`server__*`），空 = 不限制，保留字 `none` = 一个都不给。
+    # 语义在 `mcp.filter_specs` 一处（与 `tasks.tool_whitelist` 同一套）。
+    # 旧库那一列原样叫 `tools_enabled`：迁移时 `true → ''`、`false → 'none'`
+    # （见 `migrations._m017_agent_tool_whitelist`）。
+    #
+    # `server_default` 是有意的：这一列非空、默认「不限制」，而 `create_all` 只带
+    # Python 侧默认值时，**裸 SQL 的 INSERT 会在 NOT NULL 上炸**（A2 写迁移测试时撞的）。
+    # 迁移重建表时也从模型取 DDL（`Table.to_metadata`），两边同源。
+    tool_whitelist: Mapped[str] = mapped_column(Text, default="", server_default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -140,6 +153,10 @@ class Prompt(Base):
     """Reusable prompt template (Open WebUI-style prompt library).
 
     Content may contain {variable} placeholders the user fills in before send.
+
+    「提示词」模块（`提示词模块方案.md`）把它从一张纯文本表扩成一个**库**：
+    标签 / 分类 / 收藏 / 评分 / 出处 / 备注。参照 AI Gist，但**不引 Jinja**——
+    现有的 `{变量}` 够用，少一个模板注入面。
     """
 
     __tablename__ = "prompts"
@@ -147,6 +164,123 @@ class Prompt(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(100))
     content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    # 下面每一列都带 `server_default`：这些列非空，而 `create_all` 只带 Python 侧
+    # 默认值时，**裸 SQL 的 INSERT 会在 NOT NULL 上炸**（同 `tool_whitelist` L144-147
+    # 那条注释的来由）。文本列一律「空字符串 = 没填」，不用 NULL 表达两种含义。
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tags: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    category: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    favorite: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    rating: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # 0 = 未评
+    source: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    note: Mapped[str] = mapped_column(String(500), default="", server_default="")
+
+
+class PromptVersion(Base):
+    """提示词改一版就留一条（AI Gist 的「历史版本记录」）。
+
+    **为什么值得单独一张表**：这个库的用处就是「持续变好」，而「变好」只有在能回头比
+    的时候才成立。改前的原文不留下，改完就只剩一句「我记得以前那版更好」。
+    只留最近 20 版——与 `core/tasks.py::_RUNS_KEEP` 同一条纪律：留痕不能无限长。
+    """
+
+    __tablename__ = "prompt_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prompt_id: Mapped[int] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    content: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PromptUsage(Base):
+    """一次「用了它」（复制走，或者填完变量发出去）。
+
+    `content_sha` 让「改过之后效果不一样」可追溯；`vars_json` 让下次复用不必重填。
+    **不存冗余计数**：列表要的「用过几次」由这里聚合出来，不养第二份真值。
+    """
+
+    __tablename__ = "prompt_usages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prompt_id: Mapped[int] = mapped_column(Integer, index=True)
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    content_sha: Mapped[str] = mapped_column(String(12), default="", server_default="")
+    vars_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+
+
+class PromptCategory(Base):
+    """分类是**一等对象**（参照 AI Gist）：有名字、有颜色、有顺序。
+
+    **为什么成员关系不在这一张表上。**「这条提示词属于哪个分类」只有一处真值：
+    `prompts.category`（一个字符串）。这张表只管「这个分类**长什么样**」——颜色与排序。
+    两处都存成员关系就会分叉，而分叉那天没人说得清哪一边是对的。
+
+    于是三种状态都是**定义好的**，不是坏数据：
+    - 有提示词、有这一行 → 正常；
+    - 有提示词、没这一行 → 没挑过颜色，用默认色（不必先建分类才能归类）；
+    - 这一行在、却没有提示词 → **空分类**（你建了它，还没往里放东西）。
+    """
+
+    __tablename__ = "prompt_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), unique=True)
+    # `#rrggbb`。空串 = 没挑过色，界面按名字派一个稳定的默认色。
+    color: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class DeliverTemplate(Base):
+    """自定义体裁模板（方案 §8.1 行2）——把「你常写的那种东西」存成一种体裁。
+
+    **它是体裁，不是别的东西。** 内置那五条（`core/deliver.py` 的 `GENRES`）与这里每一行
+    是**同一个形状**：一个界面名 + 一段结构指令 + 一个「长稿吗」判据。`synth_prompt` 对
+    两者一视同仁，所以界面上它们并排出现在同一排 chips 里——结构只能由一处决定，
+    摆两个选择器（体裁一处、模板一处）就会互相打架。
+
+    **`slug` 与 `label` 分开是有意的**：`prompt_sha` 按体裁 id 分版本（质量闭环靠它把
+    「这一版写得好不好」分开统计），所以**改名不该让历史断裂**。`label` 随便改，`slug`
+    建了就不动。同理 `slug` 带 `t-` 前缀：内置体裁的 id 因此**永远不可能被顶掉**。
+
+    这张表只存模板本身。**没有「用了几次」这种列**——那是算得出来的（`artifact_feedback`
+    按 prompt_sha 分组），存进来只会悄悄过期。
+    """
+
+    __tablename__ = "deliver_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(60), unique=True)
+    label: Mapped[str] = mapped_column(String(40))
+    # 结构指令——与 `GENRES[*]["prompt"]` 同一个位置、同一个作用。
+    prompt: Mapped[str] = mapped_column(Text)
+    # 长稿 = 结构值得先定下来再写（界面据此走「先出提纲」那一模）。新建默认长稿：
+    # 你会想存成模板的，多半是那种值得先定结构的稿子。
+    long: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ThreadIgnore(Base):
+    """收件箱里**你按过「忽略」的**那一条（方案 §8.4 行175）。
+
+    **为什么这张表非有不可。** 收件箱的目标是**清空**——§8.4 的注释原话是「常驻就变成
+    『又一堆欠账』，而不是『待归类』」。而它的候选是**派生**出来的：所有没挂到任何事的条目。
+    没有「忽略」这一档，你永远不想挂的那些就会一直躺在那里，收件箱永远清不空，
+    于是它变成了它本该避免的那样东西。
+
+    **只存 `(kind, ref)`，不存标题**：标题是派生的（`threads._catalog()` 现取），存一份
+    就会在改名之后说谎。删掉这一行的唯一后果是那条**又出现在收件箱里**——东西一件都没动
+    （`core/threads.py` 的两条护栏之一：删掉一件事只少一层索引）。
+    """
+
+    __tablename__ = "thread_ignores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(12))
+    ref: Mapped[str] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -220,7 +354,12 @@ class TaskRun(Base):
     tool_calls: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str] = mapped_column(Text, default="")
     answer: Mapped[str] = mapped_column(Text, default="")
-    log_json: Mapped[str] = mapped_column(Text, default="[]")  # [{tool, args, ok, result}]
+    # 运行日志。**两种形状同一个数组**（顺序就是发生的顺序，这也正是步骤条要的东西）：
+    #   · 工具调用：`{tool, args, ok, result, ms}`（`ms` = 这一次调用花了多久，§8.3）
+    #   · 一步工序：`{step, ok, ms, note?, ref?}`（引擎跑的那几步，**没有 `tool` 键**）
+    # 为什么不分成两个数组：两边都没有时间戳，插不回正确的位置。读的人按 `tool` / `step`
+    # 各自过滤，互不干扰（`skill_trials` / `skill_metrics` 读的就是 `tool`）。
+    log_json: Mapped[str] = mapped_column(Text, default="[]")
     tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 尺子（§4-10）：这次产出对该任务检索到的材料的接地分 0-5（`core/engine_eval` 的
@@ -870,6 +1009,19 @@ class TurnTrace(Base):
     claim_checked: Mapped[bool] = mapped_column(Boolean, default=False)
     claim_truthful: Mapped[bool] = mapped_column(Boolean, default=True)
     retried: Mapped[int] = mapped_column(Integer, default=0)
+    # P3：这一轮**注入了几条材料**、模型**真引用了几条**。两个计数开成正式列（不再借
+    # `quality_json`）——它是线上唯一一条最便宜的检索质量反馈，要能被聚合读。
+    #
+    # **为什么不存一个「使用率」**：比率要分母，而这两个数在两种回合里含义完全不同
+    # ——没检索的回合（闲聊跳过、RAG 关）注入就是 0，把它算进分母等于拿「没检索」当
+    # 「检索了没人用」。所以存两个原始计数，聚合的人自己选分母（`summary()` 用的分母
+    # 是「注入 > 0 的回合数」，理由写在那边）。
+    sources_injected: Mapped[int] = mapped_column(Integer, default=0)
+    sources_cited: Mapped[int] = mapped_column(Integer, default=0)
+    # A1：这一轮委托出去的子代理（每个一条事实：谁、哪个模型、几轮、用了哪些工具、
+    # 花了多少 token、多久、有没有出错）。**一列 JSON 而不是一张表**——它只在排查
+    # 「这一轮为什么这么贵」时逐条读，不参与聚合（要聚合的那两个数已经开了正式列）。
+    sub_traces_json: Mapped[str] = mapped_column(Text, default="[]")
     # W2a 的两条底线校验结论：`{"findings":[{"code","detail"}...], "repaired":bool,
     # "dropped_receipts":[...]}`。**存 findings 而不是存一个分数** —— 判据在
     # `core/turn_quality.py` 一处，界面照着显示，不自己再算一遍。
@@ -1029,6 +1181,14 @@ class Thread(Base):
     name: Mapped[str] = mapped_column(String(120))
     note: Mapped[str] = mapped_column(Text, default="")
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 状态机（方案 §8.4）：`open`（进行中）/ `done`（完成）。
+    #
+    # **「停滞」不在这里**：它是**算出来的**——「N 天没动静」是事实，不是你要维护的字段。
+    # 存进来的话，它会在没人碰的某一天悄悄过期（库里写着 open、其实早停了），
+    # 而界面上还得靠第二次判断去纠正。算的话永远和 `updated_at` 一致。
+    status: Mapped[str] = mapped_column(String(12), default="open")
+    # 截止日（`YYYY-MM-DD`）。NULL = 没设——**不编一个默认期限出来**。
+    deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1069,3 +1229,6 @@ Index(
     ThreadItem.ref,
     unique=True,
 )
+# 「忽略过」也是幂等的，靠唯一索引兜底而不是靠调用方自觉（与 `ix_thread_items_unique`
+# 同一条理由）：连点两次不该长出两行，否则「撤销忽略」就得删两遍。
+Index("ix_thread_ignores_unique", ThreadIgnore.kind, ThreadIgnore.ref, unique=True)

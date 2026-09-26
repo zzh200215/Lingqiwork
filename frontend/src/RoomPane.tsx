@@ -51,7 +51,7 @@ function Fact({ k, label }: { k: string; label: string }) {
   return (
     <span
       data-room-weekly-fact={k}
-      className="rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-[11px] text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300"
+      className="rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300"
     >
       {label}
     </span>
@@ -73,7 +73,7 @@ function Thing({ t, now }: { t: PetThing; now: number }) {
       data-room-thing={t.id}
       data-room-module={t.module}
       title={`${t.detail} · ${t.at.replace('T', ' ')}`}
-      className={`rounded-xl border px-3 py-2.5 text-center ${
+      className={`rounded-md border px-3 py-2.5 text-center ${
         fresh
           ? 'border-violet-300 bg-violet-50/60 dark:border-violet-500/50 dark:bg-violet-500/10'
           : 'border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900'
@@ -83,7 +83,7 @@ function Thing({ t, now }: { t: PetThing; now: number }) {
       <div className="mt-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200">
         {t.label}
       </div>
-      <div className="mt-0.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+      <div className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
         {t.detail} · {ago(t.at_ts, now)}
       </div>
     </div>
@@ -109,7 +109,7 @@ function Concept({ c, now }: { c: PetConceptCard; now: number }) {
       data-room-concept={c.name}
       data-room-concept-state={c.state}
       title="点开就专门搞懂这个概念"
-      className={`block rounded-xl border px-3 py-2.5 transition-colors hover:border-violet-300 dark:hover:border-violet-500/50 ${
+      className={`block rounded-md border px-3 py-2.5 transition-colors hover:border-violet-300 dark:hover:border-violet-500/50 ${
         st?.card ?? 'border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900'
       }`}
     >
@@ -119,13 +119,13 @@ function Concept({ c, now }: { c: PetConceptCard; now: number }) {
         </span>
         <div className="flex-1" />
         <span
-          className={`shrink-0 text-[10px] ${st?.text ?? 'text-neutral-500 dark:text-neutral-400'}`}
+          className={`shrink-0 text-xs ${st?.text ?? 'text-neutral-500 dark:text-neutral-400'}`}
         >
           {/* 认不出来的档就把档位名照实写出来，不猜一个颜色糊上 */}
           {st?.label ?? c.state}
         </span>
       </div>
-      <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-neutral-400 dark:text-neutral-500">
         <span className="shrink-0">讲过 {c.sessions} 次</span>
         {c.stuck ? (
           <span className="min-w-0 truncate">· 卡在「{c.stuck}」</span>
@@ -143,10 +143,10 @@ function Concept({ c, now }: { c: PetConceptCard; now: number }) {
 function Skill({ s, now }: { s: PetSkillCard; now: number }) {
   return (
     <Link
-      to={`/work?tab=lab&prompt=${encodeURIComponent(s.name)}`}
+      to={`/work?tab=prompt&prompt=${encodeURIComponent(s.name)}`}
       data-room-skill={s.name}
       title={`${s.purpose}｜最近的对照：${s.passed}/${s.cases}（${s.model_id}）`}
-      className="block rounded-xl border border-neutral-200 bg-white px-3 py-2.5 transition-colors hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+      className="block rounded-md border border-neutral-200 bg-white px-3 py-2.5 transition-colors hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
     >
       <div className="flex items-baseline gap-2">
         <span className="text-lg leading-none">{KIND_ICON[s.kind] ?? '🔧'}</span>
@@ -154,14 +154,14 @@ function Skill({ s, now }: { s: PetSkillCard; now: number }) {
           {s.name}
         </span>
         <div className="flex-1" />
-        <span className="shrink-0 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+        <span className="shrink-0 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
           {s.passed}/{s.cases}
         </span>
       </div>
-      <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+      <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
         {s.purpose}
       </div>
-      <div className="mt-1 flex items-center gap-2 text-[10px] text-neutral-400">
+      <div className="mt-1 flex items-center gap-2 text-xs text-neutral-400">
         <span>
           最近对照 {Math.round(s.rate * 100)}%（{Math.round(s.ci_low * 100)}–
           {Math.round(s.ci_high * 100)}%）
@@ -201,7 +201,7 @@ function Branch({ b }: { b: FormDomain }) {
   return (
     <div
       data-room-form={b.domain}
-      className="rounded-xl border border-emerald-200 bg-emerald-50/40 px-3 py-2.5 dark:border-emerald-500/30 dark:bg-emerald-500/5"
+      className="rounded-md border border-emerald-200 bg-emerald-50/40 px-3 py-2.5 dark:border-emerald-500/30 dark:bg-emerald-500/5"
     >
       <div className="flex items-baseline gap-2">
         <span className="text-lg leading-none">🌿</span>
@@ -209,22 +209,22 @@ function Branch({ b }: { b: FormDomain }) {
           {b.domain}
         </span>
       </div>
-      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
         {parts.map((p) => (
           <span key={p}>{p}</span>
         ))}
       </div>
       {r.faithfulness != null && r.judged > 0 ? (
-        <div className="mt-0.5 text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+        <div className="mt-0.5 text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
           忠实度 {r.faithfulness}/5（判过 {r.judged} 条）
         </div>
       ) : null}
-      <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+      <p className="mt-1.5 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
         它没有学会{b.domain}。这三个数说的是「在你的材料里找得到、讲得有据、这一条跑通过」
         ——没有一样测过它对你这类问题的判断。
       </p>
       {b.concepts.names.length > 0 ? (
-        <div className="mt-1 truncate text-[10px] text-neutral-400 dark:text-neutral-500">
+        <div className="mt-1 truncate text-xs text-neutral-400 dark:text-neutral-500">
           搞懂的是：{b.concepts.names.join('、')}
         </div>
       ) : null}
@@ -235,7 +235,7 @@ function Branch({ b }: { b: FormDomain }) {
 function Meal({ m }: { m: PetMeal }) {  return (
     <span
       data-room-meal={m.key}
-      className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-[11px] dark:border-neutral-800 dark:bg-neutral-900"
+      className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs dark:border-neutral-800 dark:bg-neutral-900"
     >
       <span>{m.icon}</span>
       <span className="text-neutral-400 dark:text-neutral-500">{m.module_label}</span>
@@ -335,7 +335,7 @@ export default function RoomPane() {
           本尊卡只摆姿势、那句话、身上叼着什么——「它此刻的样子」；
           右卡是它攒下的实物。两卡等高，谁也不孤零零漂在渐变里。 */}
       <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
-        <section className="wb-card-hero rounded-2xl p-5 xl:col-span-5">
+        <section className="wb-card-hero rounded-lg p-5 xl:col-span-5">
           <div className="flex h-full flex-col items-center justify-center">
             <img
               data-room-pet
@@ -360,7 +360,7 @@ export default function RoomPane() {
             {room.carried ? (
               <div
                 data-room-carried={room.carried.id}
-                className="mt-1 inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white px-3 py-1 text-[11px] dark:border-violet-500/40 dark:bg-neutral-900"
+                className="mt-1 inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white px-3 py-1 text-xs dark:border-violet-500/40 dark:bg-neutral-900"
               >
                 <span className="text-neutral-400 dark:text-neutral-500">它最近叼回来</span>
                 <span>{room.carried.icon}</span>
@@ -370,14 +370,14 @@ export default function RoomPane() {
                 </span>
               </div>
             ) : (
-              <p className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">
+              <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
                 它两手空空，正等你做出点什么。
               </p>
             )}
             {/* 喂养风味（Z4）：它这阵子被喂成了什么味道——一句**读出来的事实**。
                 与成长页称号旁那一行同源（`pet_tone.flavor()`）；数不出来时一个字都不摆。 */}
             {room.flavor ? (
-              <p data-room-flavor className="mt-1.5 text-[11px] text-neutral-400 dark:text-neutral-500">
+              <p data-room-flavor className="mt-1.5 text-xs text-neutral-400 dark:text-neutral-500">
                 {room.flavor}
               </p>
             ) : null}
@@ -490,7 +490,7 @@ export default function RoomPane() {
                 const fresh = isFresh(o.mtime, now)
                 return (
                   <li key={o.path} className="flex items-center gap-2 px-4 py-2.5 text-sm">
-                    <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                    <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
                       {o.label}
                     </span>
                     <Link
@@ -503,7 +503,7 @@ export default function RoomPane() {
                     {carried ? (
                       <span
                         data-room-shelf-carried={o.path}
-                        className="shrink-0 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-600 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
+                        className="shrink-0 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-xs text-violet-600 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
                       >
                         它刚叼回来的
                       </span>
@@ -537,8 +537,8 @@ export default function RoomPane() {
               它学会的技能
             </h2>
             <div className="flex-1" />
-            <Link to="/work?tab=lab" className="text-xs text-violet-500 hover:underline">
-              去实验室
+            <Link to="/work?tab=prompt" className="text-xs text-violet-500 hover:underline">
+              去提示词页
             </Link>
           </div>
           {room.skills.length === 0 ? (
@@ -561,7 +561,7 @@ export default function RoomPane() {
               它长出的枝
             </h2>
             <div className="flex-1" />
-            <Link to="/work?tab=form" className="text-xs text-violet-500 hover:underline">
+            <Link to="/work?tab=prompt" className="text-xs text-violet-500 hover:underline">
               看全部领域
             </Link>
           </div>
@@ -629,7 +629,7 @@ export default function RoomPane() {
                   onClick={makePodcast}
                   disabled={podBusy}
                   title="念的就是上面那句话，单音色"
-                  className="rounded-md border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  className="rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
                 >
                   {podBusy ? '正在录…' : '转成播客'}
                 </button>
@@ -660,7 +660,7 @@ export default function RoomPane() {
                     <span
                       key={c}
                       data-room-weekly-recurring={c}
-                      className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300"
+                      className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300"
                     >
                       「{c}」又卡住
                     </span>
@@ -678,7 +678,7 @@ export default function RoomPane() {
               </>
             )}
             {weekMsg ? (
-              <p data-room-weekly-msg className="mt-1 text-[11px] text-rose-500">
+              <p data-room-weekly-msg className="mt-1 text-xs text-rose-500">
                 {weekMsg}
               </p>
             ) : null}

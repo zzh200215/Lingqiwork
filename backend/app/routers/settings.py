@@ -44,6 +44,7 @@ class PrefsIn(BaseModel):
     digest_enabled: bool | None = None
     digest_time: str | None = None
     memory_enabled: bool | None = None
+    thread_context_enabled: bool | None = None
     automemory_enabled: bool | None = None
     memory_tidy_enabled: bool | None = None
     memory_tidy_time: str | None = None
@@ -305,6 +306,11 @@ def _mcp_view() -> dict:
         "servers": load_config().get("mcp_servers", []),
         "status": mcp_manager.status,
         "active_tools": mcp_manager.active_tools(),
+        # A3 的触发条件读数（工具总数 + 那条 >20 的线）：设置页那一栏显示的是**它**，
+        # 不是 `active_tools` 的长度——后者只是已连接的 MCP 工具，本机是 0，会把人读糊涂。
+        "tools": mcp_manager.inventory(
+            include_memory=bool(load_config().get("memory_enabled", True))
+        ),
     }
 
 

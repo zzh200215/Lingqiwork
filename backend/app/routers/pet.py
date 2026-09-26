@@ -342,19 +342,25 @@ def _allowed_tools(prefs: dict) -> set[str] | None:
     return set(PET_TOOL_DEFAULT)
 
 
-async def _pet_tools(prefs: dict) -> list[dict]:
+async def _pet_tools(prefs: dict, ask: str = "") -> list[dict]:
     """零柒这一轮手上的工具：插件声明的 + `mcp` 内置的，再按白名单过滤一次。
 
     内置工具不走插件运行时，所以**两处都要过白名单**——只过滤一边，白名单就是摆设。
+
+    `ask` 是你这一轮说的话：**破坏性工具也要口头授权**（§4.1 ①）——零柒是交互路径，
+    所以规则与 chat 一字不差（`turn_quality.asked_to_forget`），只是这里多过一道白名单。
+    默认那套 `PET_TOOL_DEFAULT` 本来就不含 `memory_delete`，但白名单是用户可以自己改的，
+    所以"能不能删"不能只靠默认值说话。
     """
     from app.core import pet_plugins
     from app.core.mcp import mcp_manager
+    from app.core.turn_quality import asked_to_forget
 
     allow = _allowed_tools(prefs)
     if allow is not None and not allow:
         return []
     out = await pet_plugins.tool_specs(allow=allow)
-    for spec in mcp_manager.tool_specs(include_memory=True):
+    for spec in mcp_manager.tool_specs(include_memory=True, allow_destructive=asked_to_forget(ask)):
         name = spec.get("function", {}).get("name", "")
         if allow is not None and name not in allow:
             continue
@@ -421,7 +427,7 @@ async def pet_chat(body: PetChatIn):
         has_history=bool(turns),
     )
 
-    tools = await _pet_tools(prefs)
+    tools = await _pet_tools(prefs, ask=msg)
     if tools:
         # 工具真的存在才说这句话——否则是在指使模型去调一个它根本没有的能力
         # （同 `chat.py`：工具关掉时不能注入工具规矩）。

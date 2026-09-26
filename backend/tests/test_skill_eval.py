@@ -353,3 +353,79 @@ async def test_a_case_without_checks_uses_the_default_at_run_time(monkeypatch):
     report = await se.run("评测复现", model_id="p/m", generate=gen, judge=_judge(monkeypatch))
 
     assert report["cases"][0]["with_ok"] is True  # 默认那条按字数判，两次都短 → 都过
+
+
+# ---------- 取消：半趟不许写基线（2026-09-26）----------
+
+
+async def test_cancel_stops_between_cases_and_writes_no_baseline(monkeypatch):
+    """「量一遍」跑到一半被停：**留下跑完的那几条，但不落基线、也不给区间与 delta 汇总**。
+
+    这条比评测那边更值得有：一条用例 = 两次生成 + 一次判分，用例一多就是好几分钟；
+    而基线一旦写进去，界面上「这份技能跑分 k/n」就会把一次**没跑完**的当成成绩。
+    """
+    from sqlalchemy import delete, func, select
+
+    from app.core import inflight
+    from app.db import SessionLocal
+    from app.models import SkillEvalRun
+
+    name = _skill()
+    _cases(name, ["第一条", "第二条", "第三条"])
+    token = f"skill-eval:{name}"
+
+    inflight._running.clear()
+    inflight._cancels.clear()
+    assert inflight.try_acquire(token) is True
+
+    calls: list[int] = []
+
+    async def gen(_model_id, _messages):
+        calls.append(1)
+        # **第一条正跑着的时候，用户点了「停止」**
+        inflight.request_cancel(token)
+        return "答"
+
+    async def count_runs() -> int:
+        async with SessionLocal() as db:
+            await db.execute(delete(SkillEvalRun).where(SkillEvalRun.skill == name))
+            await db.commit()
+            return int((await db.execute(
+                select(func.count()).select_from(SkillEvalRun).where(SkillEvalRun.skill == name)
+            )).scalar_one())
+
+    try:
+        await count_runs()
+        report = await se.run(name, model_id="p/m", generate=gen, judge=_judge(monkeypatch), cancel_key=token)
+        after = await count_runs()
+    finally:
+        inflight.release(token)
+
+    assert report["stopped"] is True
+    assert report["total"] == 1 and report["planned"] == 3
+    assert len(calls) == 2, "一条用例问两次（没它 / 有它），停在该条之后"
+    assert report["rate"] is None and report["ci"] is None
+    assert report["follows_method"] is None
+    assert after == 0, "半趟跑分写了基线——那会被读成「这份技能量过了」"
+
+
+async def test_without_a_cancel_key_the_skill_eval_never_stops(monkeypatch):
+    """不传 `cancel_key` = 不轮询（内部调用方走这条），照样跑满所有用例。"""
+    from app.core import inflight
+
+    name = _skill()
+    _cases(name, ["第一条", "第二条"])
+    inflight._running.clear()
+    inflight._cancels.clear()
+    inflight.try_acquire(f"skill-eval:{name}")
+    inflight.request_cancel(f"skill-eval:{name}")
+
+    gen, _ = _gen(monkeypatch, [("没", "有"), ("没", "有")])
+    try:
+        report = await se.run(name, model_id="p/m", generate=gen, judge=_judge(monkeypatch))
+    finally:
+        inflight.release(f"skill-eval:{name}")
+
+    assert report.get("stopped") is not True
+    assert report["total"] == 2
+    assert report["rate"] is not None

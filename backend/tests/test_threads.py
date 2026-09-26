@@ -5,6 +5,7 @@
 存取那层只测往返与守卫。
 """
 import asyncio
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import delete as sa_delete
@@ -27,10 +28,19 @@ asyncio.run(_init_db())
 
 @pytest.fixture(autouse=True)
 def _clean():
+    """每个用例前把所有表清空。
+
+    **列表从 `metadata` 长出来**，不再手写一张表名清单。手写那份漏过一次：2026-09-25 加了
+    `thread_ignores`，它不在清单里，于是上一个用例的「忽略」漏进了下一个——而那正好是一个
+    「第二次忽略应该返回 False」的断言，读起来像幂等坏了，其实是状态没清干净。
+    清单会漏，`metadata` 不会（新表一进模型就在里面）。
+
+    按 `sorted_tables` 的**逆序**删：外键指过来的时候，先删被指的会报错。
+    """
     async def _go() -> None:
         async with SessionLocal() as db:
-            for model in (ThreadItem, Thread, ModelUsage, Card, DecisionLog, ScheduledTask):
-                await db.execute(sa_delete(model))
+            for table in reversed(_Base.metadata.sorted_tables):
+                await db.execute(sa_delete(table))
             await db.commit()
 
     asyncio.run(_go())
@@ -176,6 +186,80 @@ async def test_unclassified_lists_only_what_is_not_attached():
     assert has((await th.unclassified())["items"])
     await th.attach(t["id"], "card", cid)
     assert not has((await th.unclassified())["items"])
+
+
+async def test_ignored_items_leave_the_inbox_but_nothing_else_changes():
+    """忽略 = 收件箱里不再出现。**东西一件都不动**——这是误点一下的全部代价。
+
+    收件箱的目标是清空（§8.4 的注释：「常驻就变成『又一堆欠账』」），而候选是派生的，
+    所以没有这一档它永远清不空。但「划掉」绝不能等于「删掉」：卡片还在、还能挂到别的事上。
+    """
+    cid = await _add_card("忽略试试", "忽略")
+    t = await th.create("忽略")
+
+    def has(items):
+        return any(i["kind"] == "card" and i["ref"] == cid for i in items)
+
+    assert has((await th.unclassified())["items"])
+    assert await th.ignore("card", cid) == {"ok": True, "ignored": True}
+    assert not has((await th.unclassified())["items"])
+
+    # 卡片本身还在，也照样挂得上——忽略只影响收件箱那一份候选
+    async with SessionLocal() as db:
+        assert await db.get(Card, cid) is not None
+    await th.attach(t["id"], "card", cid)
+    assert (await th.detail(t["id"], suggest=False))["items"]
+    # 挂上之后撤销忽略，它也不会回到收件箱（已经挂上了，那是另一条排除）
+    assert await th.unignore("card", cid) == {"ok": True}
+    assert not has((await th.unclassified())["items"])
+
+
+async def test_unignore_puts_it_back_in_the_inbox():
+    cid = await _add_card("撤销忽略", "撤销")
+    await th.ignore("card", cid)
+    assert not any(i["ref"] == cid for i in (await th.unclassified())["items"])
+
+    await th.unignore("card", cid)
+    assert any(i["ref"] == cid for i in (await th.unclassified())["items"])
+
+
+async def test_ignore_is_idempotent():
+    """连点两次不报错、不长出第二行——靠唯一索引兜底，不是靠调用方自觉。"""
+    cid = await _add_card("点两次", "两次")
+    assert (await th.ignore("card", cid))["ignored"] is True
+    assert (await th.ignore("card", cid))["ignored"] is False
+
+    from app.models import ThreadIgnore
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(select(ThreadIgnore).where(ThreadIgnore.ref == cid))
+        ).scalars().all()
+    assert len(rows) == 1
+
+
+async def test_ignore_rejects_an_unknown_kind_or_an_empty_ref():
+    with pytest.raises(ValueError):
+        await th.ignore("nope", "x")
+    with pytest.raises(ValueError):
+        await th.ignore("card", "  ")
+
+
+async def test_the_inbox_endpoints_are_wired(monkeypatch):
+    """路由那三行委派。`kind` 非法 → 400（与 `/items` 的校验同一套）。"""
+    from fastapi import HTTPException
+
+    from app.routers import threads as api
+
+    cid = await _add_card("路由", "路由")
+    assert await api.ignore(api.ItemRef(kind="card", ref=cid)) == {"ok": True, "ignored": True}
+    assert not any(i["ref"] == cid for i in (await api.unclassified())["items"])
+    assert await api.unignore("card", cid) == {"ok": True}
+    assert any(i["ref"] == cid for i in (await api.unclassified())["items"])
+
+    with pytest.raises(HTTPException) as e:
+        await api.ignore(api.ItemRef(kind="nope", ref=cid))
+    assert e.value.status_code == 400
 
 
 # ---------- 事本身 ----------
@@ -489,5 +573,254 @@ async def test_recent_reports_state_not_a_debt_list():
     await th.attach(t["id"], "card", "7")
     (row,) = await th.recent()
     assert row["id"] == t["id"] and row["name"] == "RAG 评测"
-    assert row["summary"] == "搞懂 1"
+    assert row["summary"] == "走到「搞懂」· 卡片 1"
     assert "缺" not in row["summary"] and "未" not in row["summary"]
+
+
+# ---------- 那一行摘要的措辞（2026-09-22，两笔） ----------
+
+
+def test_summary_line_says_which_step_it_reached_and_what_is_attached():
+    """**两样都要有：走到哪一步（五步）+ 挂着什么（kind）。**
+
+    两笔改动的净结果：① 原来只有五步计数，`交付 1` 被读成「`deliver/` 里有一份」；
+    ② 改成只有 kind 计数之后，`进展到哪一步` 这句话在注入段里没了落点，模型照样去盘上找
+    （付费抽查实测）。所以现在两样都给。**步名上不带数字**——被误读的从来是那个数字。
+    """
+    assert th.summary_line({"output": 1}) == "走到「交付」· 成品 1"
+    assert th.summary_line({"note": 2, "output": 1}) == "走到「交付」· 笔记 2 · 成品 1"
+    # 只走到第二步：步名跟着最后那一步走，不是固定一个
+    assert th.summary_line({"material": 1, "card": 1}) == "走到「搞懂」· 材料 1 · 卡片 1"
+    assert th.summary_line({"material": 1}) == "走到「进来」· 材料 1"
+    # 那个误读的**字面形状**不许再出现：步名后面直接跟数字
+    line = th.summary_line({"output": 1, "task": 1})
+    assert "交付 1" not in line and "交付 2" not in line
+    assert line == "走到「交付」· 成品 1 · 任务 1"
+
+
+def test_summary_line_keeps_the_kind_order_and_the_table():
+    """顺序跟 `KINDS` 走（同一份表，不另立一个顺序）；步名跟 `STEPS` 走（同一张表）。"""
+    counts = {k: 1 for k in th.KINDS}
+    line = th.summary_line(counts)
+    assert line == "走到「判断」· " + " · ".join(f"{th.KIND_LABELS[k]} 1" for k in th.KINDS)
+    # 注入段那边夹到 `SUMMARY_CHARS`：这一行现在最长（7 类各 1 + 步名）也不能被夹到——
+    # 否则「每个 kind 说一遍 + 走到哪一步」的改法会在最坏情况下又被截回一个看不懂的尾巴。
+    from app.core import thread_context as tc
+
+    assert len(line) <= tc.SUMMARY_CHARS
+
+
+def test_summary_line_on_empty_and_junk_never_raises():
+    """一行摘要不值得让 `/today` 500（与 `today.summary` 那条同款）。"""
+    assert th.summary_line({}) == ""
+    assert th.summary_line(None) == ""
+    assert th.summary_line({"note": 0}) == ""
+    assert th.summary_line({"note": "2"}) == "走到「留下」· 笔记 2"
+    assert th.summary_line({"note": "x", "card": None}) == ""
+    assert th.summary_line({"unknown_kind": 3}) == ""
+
+
+def test_the_control_arm_stays_at_the_previous_wording():
+    """号尺子上那条对照臂（`smoke_agent.py --no-stage`）必须**停在改之前那一版**上。
+
+    换措辞这种改动没法事后重跑旧版，所以对照臂得留着——而它一旦跟着产品漂，那个 A/B 量的
+    就不是「有没有步名」而是两件别的事了，重跑一次对照组还要花钱。所以这条**免费**测试钉住它。
+    """
+    import smoke_agent as sa
+
+    counts = {"note": 2, "output": 1}
+    assert th.summary_line(counts) == "走到「交付」· 笔记 2 · 成品 1"
+    assert sa.kinds_only_line(counts) == "挂着 3 份：笔记 2 · 成品 1"
+    assert sa.kinds_only_line({}) == ""
+    assert sa.kinds_only_line(None) == ""
+
+
+async def test_the_control_arm_reaches_the_recent_line():
+    """那条臂压的是**模块属性**，而 `recent()` 在调用时才解析它——所以要证明它真到了那一行。
+
+    压错了地方（比如压 `thread_context` 里那份引用）会安静地什么都不改：付费跑出来的两臂
+    一模一样，还会被读成「这一步不值」。这就是个免费的接线检查。
+    """
+    import smoke_agent as sa
+
+    t = await th.create("对照臂")
+    await th.attach(t["id"], "output", "research/a.md")
+
+    real = th.summary_line
+    th.summary_line = sa.kinds_only_line
+    try:
+        (row,) = await th.recent()
+    finally:
+        th.summary_line = real
+
+    assert row["summary"] == "挂着 1 份：成品 1"
+    assert (await th.recent())[0]["summary"] == "走到「交付」· 成品 1"
+
+
+# ---------- 状态机与截止日（方案 §8.4 事项页）----------
+
+
+async def test_a_new_thread_is_open_with_no_deadline():
+    """新建的事就是「进行中」，**没有截止日**——不编一个默认期限出来。"""
+    t = await th.create("要不要上向量库")
+    assert t["status"] == "open"
+    assert t["deadline"] is None
+    assert t["stalled"] is False
+
+
+async def test_status_and_deadline_round_trip():
+    t = await th.create("写周报")
+    up = await th.update(t["id"], status="done", deadline="2026-10-01")
+    assert up["status"] == "done"
+    assert up["deadline"] == "2026-10-01"
+    # 读回来也是同一份（不是只在返回值里对）
+    d = await th.detail(t["id"], suggest=False)
+    assert d["status"] == "done" and d["deadline"] == "2026-10-01"
+
+
+async def test_a_done_thread_is_never_stalled():
+    """完成了的事不谈停滞——它「没动静」是因为已经结束了，不是因为停了。"""
+    t = await th.create("已经做完的事")
+    async with SessionLocal() as db:
+        row = await db.get(Thread, t["id"])
+        row.status = "done"
+        row.updated_at = datetime.now(timezone.utc) - timedelta(days=th.STALLED_DAYS + 5)
+        await db.commit()
+    d = await th.detail(t["id"], suggest=False)
+    assert d["idle_days"] > th.STALLED_DAYS
+    assert d["stalled"] is False
+
+
+async def test_stalled_is_computed_not_stored():
+    """「停滞」是**算出来的**：库里只有一个 `updated_at`，停滞跟着它走。
+
+    存的话它会在没人碰的某一天悄悄过期（库里写着 open、其实早停了）——
+    这条测试把「算」这件事钉住：改一下 `updated_at`，停滞立刻跟着变。
+    """
+    t = await th.create("放很久的事")
+
+    async def backdate(days: int) -> dict:
+        async with SessionLocal() as db:
+            row = await db.get(Thread, t["id"])
+            row.updated_at = datetime.now(timezone.utc) - timedelta(days=days)
+            await db.commit()
+        return await th.detail(t["id"], suggest=False)
+
+    fresh = await backdate(1)
+    assert fresh["stalled"] is False and fresh["idle_days"] == 1
+
+    old = await backdate(th.STALLED_DAYS + 3)
+    assert old["stalled"] is True
+    assert old["idle_days"] >= th.STALLED_DAYS
+
+
+async def test_update_rejects_a_status_it_does_not_know():
+    t = await th.create("随便一件事")
+    with pytest.raises(ValueError):
+        await th.update(t["id"], status="maybe")
+
+
+async def test_update_rejects_a_malformed_deadline():
+    t = await th.create("随便一件事")
+    with pytest.raises(ValueError):
+        await th.update(t["id"], deadline="下周三")
+
+
+async def test_clear_deadline_removes_it():
+    """清掉已有的截止日：`deadline=""` 或 `clear_deadline=True` 都行。
+
+    **`None` 不能表示「清掉」**——它在这条路上表示「这次不改它」，两者不能混。
+    """
+    t = await th.create("先设后清")
+    await th.update(t["id"], deadline="2026-10-01")
+    assert (await th.detail(t["id"], suggest=False))["deadline"] == "2026-10-01"
+
+    assert (await th.update(t["id"], clear_deadline=True))["deadline"] is None
+    # 传空串同样清掉
+    await th.update(t["id"], deadline="2026-10-02")
+    assert (await th.update(t["id"], deadline=""))["deadline"] is None
+
+
+async def test_not_touching_deadline_keeps_it():
+    """`None` = 这次不改它。改个名字不该顺手把截止日抹掉。"""
+    t = await th.create("改名不动期限")
+    await th.update(t["id"], deadline="2026-10-01")
+    up = await th.update(t["id"], name="改了个名")
+    assert up["name"] == "改了个名"
+    assert up["deadline"] == "2026-10-01"
+
+
+# ---------- 到期（§五-5：进今日页概览）----------
+#
+# 判据全在 `threads.due()` 里，今日页只读一个数（`routers/today.py` 那一档）。
+
+
+async def test_due_counts_overdue_and_today_but_not_the_future():
+    """**过期的也算**，不分「今天到期」与「已经过期」——昨天该交的东西今天更该看见。"""
+    today = date(2026, 10, 10)
+    old = await th.create("上周就该交的")
+    now = await th.create("今天到期")
+    soon = await th.create("下周才到")
+    for t, d in ((old, "2026-10-03"), (now, "2026-10-10"), (soon, "2026-10-20")):
+        await th.update(t["id"], deadline=d)
+
+    rows = await th.due(today)
+    assert [r["id"] for r in rows] == [old["id"], now["id"]]  # 按截止日升序
+    assert rows[0]["overdue_days"] == 7
+    assert rows[1]["overdue_days"] == 0  # 就是今天，不是「过了 0 天」
+
+
+async def test_due_leaves_out_done_and_archived_and_undated():
+    """三条排除都有理由，逐条钉住：
+
+    - **完成了的不算**：截止日是「做这件事的期限」，做完了它就不再是期限了。
+      留着它，概览会永远挂着一个你早就交掉的东西。
+    - **归档的不算**：归档是「别烦我了」——与「完成」是两回事，但这一档的效果一样。
+    - **没设截止日的不算**：`None` 不是「很久以前」，是**没设**（`models.Thread.deadline`
+      那条注释）。把它排进来等于替所有人编一个期限。
+    """
+    today = date(2026, 10, 10)
+    done = await th.create("做完了")
+    await th.update(done["id"], deadline="2026-10-01", status="done")
+
+    kept = await th.create("归档了")
+    await th.update(kept["id"], deadline="2026-10-01")
+    async with SessionLocal() as db:
+        row = await db.get(Thread, kept["id"])
+        row.archived = True
+        await db.commit()
+
+    await th.create("没设期限")
+
+    future_but_done = await th.create("未来的期限但已完成")
+    await th.update(future_but_done["id"], deadline="2026-12-01", status="done")
+
+    assert await th.due(today) == []
+
+
+async def test_due_is_bounded_and_returns_a_light_row():
+    """只给界面要的那几个字段——它是「概览上的一格」，不是详情页。"""
+    today = date(2026, 10, 10)
+    t = await th.create("很久以前设的期限")
+    await th.update(t["id"], deadline="2026-09-01")
+
+    (row,) = await th.due(today)
+    assert set(row) == {"id", "name", "deadline", "overdue_days"}
+    assert row["name"] == "很久以前设的期限"
+    assert row["deadline"] == "2026-09-01"
+
+    for i in range(5):
+        x = await th.create(f"第 {i} 件")
+        await th.update(x["id"], deadline="2026-10-01")
+    assert len(await th.due(today, limit=3)) == 3
+
+
+async def test_due_defaults_to_today():
+    """不传 `today` 就是「现在」——今日页那条路不会自己算日期。"""
+    t = await th.create("昨天到期")
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    await th.update(t["id"], deadline=yesterday.isoformat())
+
+    rows = await th.due()
+    assert [r["id"] for r in rows] == [t["id"]]
+    assert rows[0]["overdue_days"] == 1

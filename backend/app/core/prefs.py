@@ -18,12 +18,19 @@ _DEFAULTS: dict[str, Any] = {
     "temperature": None,  # None = provider default
     "mcp_servers": [],  # {"name","type","command","args","url","enabled"}
     "hybrid_search": True,  # BM25 + vector RRF fusion (False = vector only)
-    "rerank_enabled": True,  # cross-encoder rerank after fusion (bge-reranker-base)
+    # 重排默认**关**——这是量出来的决策，不是口味（RAG升级.md §3「P1b 重排去留」）：
+    # 34 条金标上同查询配对 on 赢 5 / 平 23 / off 赢 6，且 on 档把 paraphrase hit@3
+    # 从 0.64 打回 0.50，CPU 实测 563s vs 1.1s（~16.6s/题 vs ~0.03s/题）。
+    # 出厂默认按数据写死，不做运行时自适应（红线 #10）。读取一律走 `rerank_enabled()`。
+    "rerank_enabled": False,  # cross-encoder rerank after fusion (bge-reranker-base)
     "full_context": True,  # short retrieved docs injected whole instead of chunked
     "full_context_max_chars": 4000,  # per-doc budget for full-context mode
     "digest_time": "09:00",  # daily vault digest schedule (HH:MM)
     "digest_enabled": False,
     "memory_enabled": True,  # inject persistent memories into chat
+    # A4：把「最近在做的那件事」的名字/进度/引用清单追加进 system——**只在消息指涉它时**
+    # （`core/thread_context`）。默认开：空数据本来就不注入，没这事的人一个字都看不到。
+    "thread_context_enabled": True,
     "automemory_enabled": False,  # model decides post-turn what's worth remembering
     "memory_tidy_enabled": False,  # nightly sleep-time consolidation of near-duplicate memories
     "memory_tidy_time": "03:30",
@@ -116,6 +123,16 @@ def load_config() -> dict[str, Any]:
         if isinstance(cfg.get(key), str):
             cfg[key] = unseal(cfg[key])
     return cfg
+
+
+def rerank_enabled(cfg: dict[str, Any] | None = None) -> bool:
+    """重排开关的**唯一读取口**。默认值只在 `_DEFAULTS` 里写一次。
+
+    之前三个调用点各自抄了一份 `.get("rerank_enabled", True)`——默认值散在四处，
+    抄反一处就是「默认开着、每次查询白付 ~16s」。默认值只有一个出处，这里读它。
+    """
+    src = load_config() if cfg is None else cfg
+    return bool(src.get("rerank_enabled", _DEFAULTS["rerank_enabled"]))
 
 
 def save_config(update: dict[str, Any]) -> dict[str, Any]:

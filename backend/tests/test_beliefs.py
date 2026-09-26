@@ -1,7 +1,6 @@
 """信念演化时间线：语义聚线（≥2 条成线）、命名取最近陈述、嵌入挂掉降级为空。"""
 import asyncio
 import atexit
-import os
 import shutil
 import sys
 import tempfile
@@ -21,8 +20,6 @@ def _cleanup() -> None:
 
 
 atexit.register(_cleanup)
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 
 from sqlalchemy import delete  # noqa: E402
 

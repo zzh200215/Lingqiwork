@@ -293,3 +293,51 @@ async def test_the_curve_reads_the_baseline_when_there_is_one():
     assert any("判分器基线" in n for n in after["notes"])
     assert any("完全一致" in n for n in after["notes"])
     assert len(after["notes"]) == 3  # 三条须知：基线 + 历史行 + 没存版本
+
+
+# --- 取消（2026-09-26）：判分型最需要它——金标集 30–50 条，每条一次判分调用 ---
+
+
+async def test_cancel_stops_a_judge_run_without_writing_a_record():
+    """判分金标集跑到一半被停：留下跑完的、**不落记录**、区间为 None。
+
+    形状与 `prompt_eval.check` 的 stopped 分支一致——对照台那一页不用为它长分支。
+    """
+    from sqlalchemy import delete, func, select
+
+    from app.core import inflight
+    from app.db import SessionLocal
+    from app.models import PromptEvalRun
+
+    token = f"prompt-eval:{je.KEY}"
+    inflight._running.clear()
+    inflight._cancels.clear()
+    assert inflight.try_acquire(token) is True
+
+    cases = je.load_cases()
+    inner = _judge({c["retell"]: int(c["grade"]) for c in cases})
+
+    async def judge(*a, **kw):
+        # 第一条正跑着的时候，用户点了「停止」
+        inflight.request_cancel(token)
+        return await inner(*a, **kw)
+
+    async def count_runs() -> int:
+        async with SessionLocal() as db:
+            await db.execute(delete(PromptEvalRun).where(PromptEvalRun.key == je.KEY))
+            await db.commit()
+            return int((await db.execute(
+                select(func.count()).select_from(PromptEvalRun).where(PromptEvalRun.key == je.KEY)
+            )).scalar_one())
+
+    try:
+        await count_runs()
+        report = await je.check(judge=judge, cancel_key=token)
+        after = await count_runs()
+    finally:
+        inflight.release(token)
+
+    assert report["stopped"] is True
+    assert report["total"] == 1 and report["planned"] == len(cases)
+    assert report["rate"] is None and report["ci"] is None
+    assert after == 0, "半趟判分落库了——那会污染档位一致率"

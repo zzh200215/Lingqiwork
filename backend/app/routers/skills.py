@@ -157,18 +157,47 @@ class RunIn(BaseModel):
     model_id: str = ""
 
 
+def _run_key(name: str) -> str:
+    """这一趟技能跑分在 `inflight` 里的 key（取消接口说的是同一个字符串——只拼这一处）。"""
+    return f"skill-eval:{name}"
+
+
 @router.post("/{name}/run")
 async def run_skill_eval(name: str, body: RunIn):
     """量一遍：每条用例问两次（没它 / 有它），逐条比对 + `k/n` + Wilson 区间。
 
     **会花钱**：用例数 × 2 次生成 + 有它那一侧每条一次判分，报告里写着 `calls`。
-    """
-    from app.core import skill_eval
 
+    **占 `inflight` 锁**（2026-09-26 补）：这条最该占——分钟级、花钱、还会写一份基线；
+    两个标签页同时点就是两倍调用，而基线只会留下后写的那份。
+    """
+    from app.core import inflight, skill_eval
+
+    token = _run_key(name)
+    if not inflight.try_acquire(token):
+        raise HTTPException(
+            409,
+            f"「{name}」正在量一遍——等它跑完，或者先在页面上点「停止」。"
+            "并发两次 = 两倍的模型调用，而基线只会留下后写的那份。",
+        )
     try:
-        return await skill_eval.run(name, model_id=body.model_id)
+        return await skill_eval.run(name, model_id=body.model_id, cancel_key=token)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    finally:
+        inflight.release(token)
+
+
+@router.post("/{name}/run/cancel")
+async def cancel_skill_eval(name: str):
+    """请正在跑的那次「量一遍」停下。
+
+    **合作式**：每条用例之间生效（一条 = 两次生成 + 一次判分），所以当前这条会跑完才停。
+    没有在跑的也如实回 `stopped: false`。
+    """
+    from app.core import inflight
+
+    return {"stopped": inflight.request_cancel(_run_key(name))}
 
 
 @router.get("/{name}/eval")

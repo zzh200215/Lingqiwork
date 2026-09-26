@@ -28,8 +28,6 @@ def _cleanup() -> None:
 
 atexit.register(_cleanup)
 
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
 # the router writes via tempfile.mkstemp — point it at the writable scratch dir
 os.environ["TEMP"] = str(_TMP)
 os.environ["TMP"] = str(_TMP)

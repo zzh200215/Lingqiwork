@@ -141,6 +141,11 @@ async def _write(draft: dict, usage: dict, error: str) -> dict:
         claim_checked=bool(draft.get("claim_checked")),
         claim_truthful=bool(draft.get("claim_truthful", True)),
         retried=_int(draft.get("retried")),
+        # P3：注入了几条材料、真引用了几条（正式列，见 `models.TurnTrace`）。
+        sources_injected=_int(draft.get("sources_injected")),
+        sources_cited=_int(draft.get("sources_cited")),
+        # A1：这一轮委托出去的子代理（`delegate` handler 挂进草稿的 `sub_traces`）。
+        sub_traces_json=json.dumps(draft.get("sub_traces") or [], ensure_ascii=False),
         quality_json=json.dumps(draft.get("quality") or {}, ensure_ascii=False),
         seconds=seconds,
         error=(error or draft.get("error") or "")[:500],
@@ -173,6 +178,14 @@ def _view(row) -> dict:
         "claim_checked": bool(row.claim_checked),
         "claim_truthful": bool(row.claim_truthful),
         "retried": row.retried,
+        # P3：这一轮注入了几条材料、模型真引用了几条。**没有「使用率」这个字段** ——
+        # 比率在聚合那一处算（`summary`），逐条读的时候要的是两个原始计数。
+        # 老行（v15 之前）读出来是 0：那时候确实没注入过（见 `migrations._m015`）。
+        "sources_injected": _int(getattr(row, "sources_injected", 0)),
+        "sources_cited": _int(getattr(row, "sources_cited", 0)),
+        # A1：这一轮委托出去的子代理（每条是事实：谁、哪个模型、几轮、哪些工具、多少 token）。
+        # 老行读出来是 []：那时候确实没有委托这件事。
+        "sub_traces": _load(getattr(row, "sub_traces_json", None), []),
         "quality": _load(getattr(row, "quality_json", None), {}),
         "seconds": row.seconds,
         "error": row.error,
@@ -251,6 +264,11 @@ _SUMMARY_RULES = {
     "window": f"窗口 = 最近 N 天（默认 {SUMMARY_DAYS} 天）里落过账的聊天回合",
     "counts": "每一格是「窗口内命中这一类毛病的回合数」，判据与逐条清单、与筛选项**同一份实现**",
     "no_rate": "这里**没有成功率**：这个模块是诊断工具，不是考核仪表（不设目标、不排名、不催）",
+    "sources": (
+        "材料那几个数只数**注入过材料的回合**（注入 > 0）：没检索的回合（闲聊跳过、RAG 关）"
+        "注入本来就是 0，把它们算进分母等于拿「没检索」当「检索了没人用」。"
+        "所以这里给的是两个计数而不是一个使用率"
+    ),
     "truncated": f"库很大时只数最近 {SUMMARY_MAX_ROWS} 轮（内存在此打住）——超了会标出来，不静默截断",
 }
 
@@ -287,10 +305,11 @@ async def _summary_rows(since, cap: int) -> tuple[int, list]:
 
 
 async def summary(days: int = SUMMARY_DAYS, max_rows: int = SUMMARY_MAX_ROWS) -> dict:
-    """窗口内跑过多少个回合、各毛病几例。**只给计数，不给比率**（见上面那段）。
+    """窗口内跑过多少个回合、各毛病几例、材料用掉了几条。**只给计数，不给比率**（见上面那段）。
 
     判据复用 `_matches`——与逐条清单、与筛选按钮**同一份实现**：这里另写一遍「算不算谎报」，
-    两份分叉的那天这个数就没人敢信了。
+    两份分叉的那天这个数就没人敢信了。材料那几个数**不重算**：读 `sources_injected` /
+    `sources_cited` 两列（P3 开的正式列），判据在 `core/citations.py` 一处。
     """
     from datetime import datetime, timedelta, timezone
 
@@ -304,6 +323,7 @@ async def summary(days: int = SUMMARY_DAYS, max_rows: int = SUMMARY_MAX_ROWS) ->
         "total": 0,
         "truncated": False,
         "counts": {f["key"]: 0 for f in FILTERS},
+        "sources": _empty_sources(),
         "filters": FILTERS,
         "rules": _SUMMARY_RULES,
     }
@@ -316,11 +336,21 @@ async def summary(days: int = SUMMARY_DAYS, max_rows: int = SUMMARY_MAX_ROWS) ->
         return out
 
     counts = {f["key"]: 0 for f in FILTERS}
+    src = _empty_sources()
     for r in rows:
         view = _view(r)
         for key in view["flags"]:
             if key in counts:
                 counts[key] += 1
+        injected = _int(view.get("sources_injected"))
+        if injected <= 0:
+            continue  # 没检索的回合不进材料那几个数的分母（`_SUMMARY_RULES["sources"]`）
+        cited = _int(view.get("sources_cited"))
+        src["turns_with_material"] += 1
+        src["injected"] += injected
+        src["cited"] += cited
+        if cited <= 0:
+            src["uncited_turns"] += 1
     out.update(
         readable=True,
         error="",
@@ -328,8 +358,19 @@ async def summary(days: int = SUMMARY_DAYS, max_rows: int = SUMMARY_MAX_ROWS) ->
         total=total,
         truncated=total > len(rows),
         counts=counts,
+        sources=src,
     )
     return out
+
+
+# P3 的材料读数。**只有计数，一个比率都没有**（墙上那条铁律：一列数有了分母，
+# 下一个人就会去算比率、去比较、去追 —— 而这里量的是「检索质量有没有在往下走」，
+# 它要的是趋势，不是一个可以追的分数）。
+#
+# `turns_with_material` 是这一块**自己的分母**（不是 `turns`）：没检索的回合注入就是 0，
+# 把它算进来会把「没检索」读成「检索了没人用」。
+def _empty_sources() -> dict:
+    return {"turns_with_material": 0, "injected": 0, "cited": 0, "uncited_turns": 0}
 
 
 # 每一条都是**实测到的**一类毛病（upgrade-plan 的缺口三 / 四），不是想象出来的。
@@ -341,7 +382,13 @@ FILTERS: list[dict] = [
     {"key": "retried", "label": "补跑过", "hint": "服务端判定没落盘，替它重跑了一次（W2a）"},
     {"key": "repaired", "label": "补跑补上了", "hint": "补跑那一轮真的落盘了（长文没留在对话里）"},
     {"key": "invented_path", "label": "报了个不存在的路径", "hint": "回复里写的产出路径不在这一轮的回执里（点开即 404）"},
+    {
+        "key": "false_delete",
+        "label": "嘴上删了",
+        "hint": "你明说要忘掉一条记忆，它回了「已经删掉」却没调 memory_delete（§4.1 ① 的另一半）",
+    },
     {"key": "dropped_receipt", "label": "回执没给出去", "hint": "回执路径过不了白名单（不在 vault 里 / 盘上没有），界面不渲染成链接"},
+    {"key": "fake_citation", "label": "编了个不存在的来源", "hint": "正文标注了 [来源 N]，但这一轮没注入那一条——已从正文里拿掉（P3）"},
     {"key": "over", "label": "超了字数预算", "hint": "用户在那一句里给了字数，服务端数出来超过了（W4）"},
     {"key": "rewrote", "label": "为字数重写过", "hint": "同一轮里落盘 ≥2 次（每多一版都是多一次生成，要用户付钱）"},
     {"key": "multi", "label": "一轮多份", "hint": "同一轮落了不止一份产出"},
@@ -374,8 +421,18 @@ def _matches(t: dict, key: str) -> bool:
         return bool((t.get("quality") or {}).get("repaired"))
     if key == "invented_path":
         return any(f.get("code") == key for f in (t.get("quality") or {}).get("findings") or [])
+    if key == "false_delete":
+        # 与 `invented_path` 同一条读法：判据在 `core/turn_quality.py`，这里只读它写下的结论
+        return any(
+            f.get("code") == "claims_a_delete_without_one"
+            for f in (t.get("quality") or {}).get("findings") or []
+        )
     if key == "dropped_receipt":
         return bool((t.get("quality") or {}).get("dropped_receipts"))
+    # P3：这一轮**真的动手拿掉过**编造的 `[来源 N]`。判据在 `core/citations.py`，
+    # 写进 `quality["citations"]["stripped"]`；这里只读那个结论，不自己再识别一遍。
+    if key == "fake_citation":
+        return bool(((t.get("quality") or {}).get("citations") or {}).get("stripped"))
     # W4：字数。`budget` 是 None = 用户那一句里没给字数（那就没有「超」这回事）。
     if key == "over":
         return bool(((t.get("quality") or {}).get("length") or {}).get("over"))

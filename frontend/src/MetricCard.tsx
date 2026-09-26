@@ -1,4 +1,4 @@
-/** 读数块（R1 · PLAN5 §3）——九条尺子上墙时共用的那张壳。
+﻿/** 读数块（R1 · PLAN5 §3）——九条尺子上墙时共用的那张壳。
  *
  *  **它不是重构。** 仪表盘上原来那六张卡（北极星 / 过程 / 校准 / 矛盾率 / 技能闭环）
  *  各自把下面这四件事写了一遍，也都各有测试钉着。这里先只给**新上墙的三条**
@@ -78,7 +78,7 @@ export default function MetricCard({
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <div className="flex items-baseline gap-2">
           <span className="h-3.5 w-0.5 shrink-0 self-center rounded-full bg-violet-300 dark:bg-violet-500/60" />
-          <h2 className="text-[11px] font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+          <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
             {title}
           </h2>
         </div>
@@ -98,7 +98,7 @@ export default function MetricCard({
         ) : null}
         <div className="flex-1" />
         {scope ? (
-          <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+          <span className="text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
             {scope}
           </span>
         ) : null}
@@ -129,7 +129,7 @@ export default function MetricCard({
       {ruleLines.length > 0 || bias ? (
         <p
           {...{ [`${marker}-rule`]: '' }}
-          className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500"
+          className="mt-3 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500"
         >
           {ruleLines.join('；')}
           {bias ? `。${bias}` : ''}

@@ -57,6 +57,23 @@ export interface QualityNote {
   dropped_receipts?: { path?: string; why?: string }[]
 }
 
+/** P3：这一轮有几个**编造的** `[来源 N]` 被拿掉了。
+ *
+ *  判定在服务端一处（`core/citations.py`），界面只负责显示 —— 前端再识别一遍就是第二份
+ *  实现，两份分叉的那天这个数就没人敢信了（与 `QualityNote` 同一条规矩）。
+ *  这一帧带的是**剥完之后**的正文：那几个编号已经随流到了屏幕上，不换掉它，就成了
+ *  「库里剥了、屏幕上还留着」——两边不一致比不剥更糟。 */
+export interface CitationFix {
+  /** 剥完之后的正文（拿它替换气泡里已经流出来的那一段）。 */
+  text: string
+  /** 被拿掉的编号（这一轮没注入的那几个）。 */
+  fake: number[]
+  /** 这一轮一共注入了多少条材料（= 合法编号的上界）。 */
+  injected: number
+  /** 真被引用到的编号。 */
+  cited: number[]
+}
+
 export interface StreamCallbacks {
   onDelta: (text: string, uid?: string) => void
   onError: (message: string) => void
@@ -65,12 +82,36 @@ export interface StreamCallbacks {
   onTool?: (tc: ToolTrace) => void
   onToolResult?: (name: string, meta: Record<string, unknown>, uid?: string) => void
   onQuality?: (note: QualityNote, uid?: string) => void
+  /** P3：服务端剥掉了编造的 `[来源 N]`，带一份干净正文来（界面拿它替换气泡）。 */
+  onCitations?: (fix: CitationFix, uid?: string) => void
   /** 这一轮刚落库的那条消息的 id（跑完才有）。界面拿它把气泡接上后端，
    *  于是「📄 存进产出」当场就能点，不用先刷新。 */
   onSaved?: (messageId: number, uid?: string) => void
   onFollowups?: (questions: string[]) => void
   onModelDone?: (uid: string) => void
   onMemorized?: (facts: string[]) => void
+  /** 协作的**逐步账**（A2）：每跑完一步就来一条——谁跑的、几轮、调了哪些工具、几秒、
+   *  有没有把轮数烧光。与后端 `collab._fact` 那份事实同形（界面不自己算）。 */
+  onStep?: (fact: CollabStep) => void
+}
+
+/** 协作的一步之账（后端 `collab._fact` 的投影）。 */
+export interface CollabStep {
+  step: number
+  title: string
+  /** work / read / digest / draft / review / revise / merge */
+  phase: string
+  agent: string
+  model_id?: string
+  rounds: number
+  tools: string[]
+  artifacts?: string[]
+  seconds: number
+  error?: string
+  /** 轮数烧光：这一步只吐出占位符，**没有答案**（别把它读成"跑完了"） */
+  rounds_exhausted?: boolean
+  /** 这一步是不是在并行那一波里 */
+  parallel?: boolean
 }
 
 export async function streamChat(
@@ -130,6 +171,7 @@ export async function streamChat(
       else if (event === 'tool_result')
         cb.onToolResult?.(data.name as string, (data.meta ?? {}) as Record<string, unknown>, data.uid as string | undefined)
       else if (event === 'quality') cb.onQuality?.(data as QualityNote, data.uid as string | undefined)
+      else if (event === 'citations') cb.onCitations?.(data as CitationFix, data.uid as string | undefined)
       else if (event === 'saved') cb.onSaved?.(data.message_id as number, data.uid as string | undefined)
       else if (event === 'followups') cb.onFollowups?.(data.questions as string[])
       else if (event === 'answer_done') cb.onModelDone?.(data.uid as string)
@@ -146,8 +188,12 @@ export async function streamCollab(
   conversationId: number,
   goal: string,
   agentIds: number[],
-  pattern: 'pipeline' | 'review',
+  // A2 加了 fanout（并行分派 → 汇总）。并行是**编排器**说了算的，这里只是选模式。
+  pattern: 'pipeline' | 'review' | 'fanout',
   useRag: boolean,
+  // 材料清单的第二个来源（2026-09-22）：你钉的这一轮要读哪几份。只有 fanout 吃它，
+  // 而且后端会跳过读步打不开的那些（`repo:` / 不在 vault 里的）——所以这里原样发。
+  pinned: string[],
   cb: StreamCallbacks,
   signal: AbortSignal
 ): Promise<void> {
@@ -160,6 +206,7 @@ export async function streamCollab(
       agent_ids: agentIds,
       pattern,
       use_rag: useRag,
+      pinned,
     }),
     signal,
   })
@@ -190,9 +237,10 @@ export async function streamCollab(
       const data = JSON.parse(dataLines.join('\n'))
       if (event === 'delta') cb.onDelta(data.text as string)
       else if (event === 'sources') cb.onSources?.(data.sources as SourceRef[])
+      else if (event === 'step') cb.onStep?.(data.fact as CollabStep)
       else if (event === 'error') cb.onError(data.message as string)
       else if (event === 'done') cb.onDone()
-      // meta / step events: transcript headers already carry the structure
+      // meta events: transcript headers already carry the structure
     }
   }
 }
@@ -618,6 +666,9 @@ export interface DeliverReport {
   /** 这次交付的体裁与读者——存进 vault 之后还看得出这份是给谁写的 */
   genre?: string
   audience?: string
+  /** 这次是按哪份提纲写的（空 = 没走提纲）。**提纲不进 `prompt_sha`**：它是每一次运行的
+   *  输入，不是提示词版本——算进去的话每份定稿都自成一版，满意率再也聚不起来。 */
+  outline?: string[]
 }
 
 export interface DeliverDone {
@@ -640,12 +691,14 @@ export async function streamDeliver(
   onStage: DeliverStage,
   signal?: AbortSignal,
   /** 「加进这次产出」：钉进来的材料 spec，排在最前（§4-14） */
-  pinned: string[] = []
+  pinned: string[] = [],
+  /** §8.1 长稿那一模：用户在提纲确认区**定稿的小节名**。空 = 没走提纲（一键直出）。 */
+  outline: string[] = []
 ): Promise<DeliverDone> {
   const res = await fetch('/api/deliver', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic, genre, audience, pinned }),
+    body: JSON.stringify({ topic, genre, audience, pinned, outline }),
     signal,
   })
   if (!res.ok || !res.body) {

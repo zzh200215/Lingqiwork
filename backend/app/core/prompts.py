@@ -135,6 +135,12 @@ _SPECS: list[tuple[str, str, str, str]] = [
         "零柒的「今天」（Z1）：历史在场时说明「你们正在连着聊」，别回「我看不见之前的对话」",
         "instruction",
     ),
+    (
+        "app.core.thread_context",
+        "THREAD_HEAD",
+        "手头那件事（A4）：Thread 的名字/进度/引用清单——只给引用，要内容自己用 vault_read_file 打开",
+        "instruction",
+    ),
     # ---- 仪表盘 / 笔记 ----
     ("app.routers.dashboard", "_BRIEFING_SYSTEM", "今日一句话简报（零柒口吻，TTL 缓存 + 模板兜底）", "persona"),
     ("app.routers.notes", "_WRITER_PERSONA", "笔记 AI 写作助手人设", "persona"),
@@ -147,6 +153,26 @@ _SPECS: list[tuple[str, str, str, str]] = [
         "app.routers.chat",
         "_OUTPUT_RULE",
         "成篇的成品要调 save_artifact 存进产出区，别糊在回复里（提到 system 层后遵从率 0/10 → 6/10）",
+        "system",
+    ),
+    # ---- 提示词模块（AI Gist 那三条：生成 / 调优 / 提取变量）----
+    # 它们和上面那些一样在驱动模型行为，改一句就换产出，所以**同样是一等提示词**。
+    (
+        "app.core.prompt_ai",
+        "GENERATE_SYSTEM",
+        "提示词模块·AI 生成：一句想法 → 一条可复用的提示词（挖成 {变量}，只出一条）",
+        "system",
+    ),
+    (
+        "app.core.prompt_ai",
+        "REFINE_SYSTEM",
+        "提示词模块·AI 调优：只按他说的那一句改，保住原意图，不许顺手加东西",
+        "system",
+    ),
+    (
+        "app.core.prompt_ai",
+        "EXTRACT_VARS_SYSTEM",
+        "提示词模块·提取变量：只列真正会变的那几处（与本地那条正则互为对照）",
         "system",
     ),
 ]

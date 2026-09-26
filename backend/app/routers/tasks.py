@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import VAULT_DIR
 from app.core import tasks as core
 from app.db import get_db
-from app.models import ScheduledTask, TaskRun
+from app.models import ScheduledTask, TaskRun, iso_utc
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -215,7 +215,10 @@ def _out(t: ScheduledTask) -> dict:
         # 这条流程处理的是哪件「事」（M2）。工作链起链时写进来，前端拿它给一个「去这件事」的入口。
         "thread_id": t.thread_id,
         "conversation_id": t.conversation_id,
-        "last_run": t.last_run.isoformat(timespec="seconds") if t.last_run else None,
+        # `iso_utc` 不是装饰：这一列是 naive UTC，裸 `.isoformat()` 出来不带偏移，
+        # 而前端 `fmtWhen` 是**解析**它的 —— 少了那个 `+00:00`，浏览器会按本地时区读，
+        # 本时区下整整齐齐差八小时（`models.iso_utc` 的注释就是为这件事写的）。
+        "last_run": iso_utc(t.last_run),
         "last_status": t.last_status,
         "last_result": t.last_result,
         "next_run": core.next_run(t.id) if t.enabled else None,
@@ -232,8 +235,12 @@ def _run_out(r: TaskRun) -> dict:
         "task_id": r.task_id,
         "trigger": r.trigger,
         "upstream_task_id": r.upstream_task_id,
-        "started_at": r.started_at.isoformat(timespec="seconds") if r.started_at else None,
-        "finished_at": r.finished_at.isoformat(timespec="seconds") if r.finished_at else None,
+        # 两个时间戳都带 `+00:00` —— 见 `_out` 里 `last_run` 那条注释。
+        # **这两个值必须是同一个时钟**：曾经 `started_at` 是 UTC（模型默认 `utcnow`）
+        # 而 `finished_at` 是本地（`datetime.now().astimezone()`），于是每一次运行的
+        # 耗时都多八小时（实测一次 50 秒的运行显示成「480 分 50 秒」）。
+        "started_at": iso_utc(r.started_at),
+        "finished_at": iso_utc(r.finished_at),
         "status": r.status,
         "mode": r.mode,
         "model_id": r.model_id,
@@ -284,6 +291,39 @@ async def list_tools():
     return [
         {"name": s["function"]["name"], "description": s["function"]["description"]} for s in specs
     ]
+
+
+@router.get("/recent-runs")
+async def recent_runs(ids: str = "", db: AsyncSession = Depends(get_db)):
+    """**一批任务各自的最近一次运行**——把前端那 8 次请求合成 1 次。
+
+    「工作」页顶那块「最近几次运行」是逐条任务去问 `/api/tasks/{id}/runs` 的
+    （`WorkPage.tsx` 的 `EnginePulse`，`t.slice(0, 8)`），**8 个并发请求换 8 条数据**，
+    每次切回那一档还重新来一遍。这个接口就是那 8 次的批量版。
+
+    **不能直接复用 `list_runs`**：那条是「每任务最近 20 条」，照字面复用等于还是
+    每 id 一次查询，批量就白做了。这里按 `task_id IN (...)` **一次捞完再在 Python 侧
+    取每组最新**——`core/tasks._RUNS_KEEP = 20` 保证每任务最多 20 行，所以这一次查询
+    的上界是 `20 × len(ids)`，封顶 50 个 id 就是最多 1000 行，很小。
+
+    返回**按 task_id 分组的一个对象**（JSON 的键是字符串）：`{"7": {...run...}}`。
+    没有运行记录的任务**不出现**在结果里——调用方据此区分「没跑过」与「跑了但读不到」。
+    """
+    wanted = sorted({int(x) for x in ids.split(",") if x.strip().isdigit()})[:50]
+    if not wanted:
+        return {}
+    rows = (
+        await db.execute(
+            select(TaskRun)
+            .where(TaskRun.task_id.in_(wanted))
+            .order_by(TaskRun.id.desc())
+        )
+    ).scalars().all()
+    latest: dict[int, TaskRun] = {}
+    for r in rows:
+        # 按 id 倒序扫，**每条第一次遇到的**就是它最近的那一次
+        latest.setdefault(r.task_id, r)
+    return {str(k): _run_out(v) for k, v in latest.items()}
 
 
 @router.get("/{task_id}/runs")

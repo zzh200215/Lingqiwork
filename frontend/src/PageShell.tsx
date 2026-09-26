@@ -50,7 +50,10 @@ export default function PageShell({
               <p className="text-sm text-neutral-500 dark:text-neutral-400">{description}</p>
             ) : null}
             {stats ? (
-              <p className="pt-0.5 text-xs text-neutral-400 dark:text-neutral-500">{stats}</p>
+              // `div` 而不是 `p`：`stats` 收的是 ReactNode，而有的页面往里放的是
+              // `<StatTile>`（一段 `<div>`）——`<p>` 里嵌块级元素会被浏览器就地截断，
+              // DOM 结构与写下的不一样（方案 §8.3 的「统计砖并入页头 stats」正是那种用法）。
+              <div className="pt-0.5 text-xs text-neutral-400 dark:text-neutral-500">{stats}</div>
             ) : null}
           </div>
           {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}

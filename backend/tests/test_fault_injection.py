@@ -8,7 +8,6 @@
 """
 import asyncio
 import atexit
-import os
 import shutil
 import sys
 import tempfile
@@ -34,9 +33,6 @@ def _cleanup() -> None:
 
 
 atexit.register(_cleanup)
-os.environ["WB_DB_PATH"] = str(_TMP / "test.db")
-os.environ["WB_CONFIG_PATH"] = str(_TMP / "config.json")
-os.environ["WB_CHROMA_PATH"] = str(_TMP / "chroma")
 
 from sqlalchemy import delete  # noqa: E402
 

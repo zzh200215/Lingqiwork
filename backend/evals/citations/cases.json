@@ -1,0 +1,155 @@
+{
+  "key": "citations",
+  "note": "P3 引用验证的尺子（免费、确定）。每一条 = 一次「这一轮注入了几条材料 + 模型写了什么」→ 该认出哪几个编号是编的。**两组数字都要看**：`fake` 对不上 = 漏剥（假指针留在正文里，用户点不开也看不见）；`cited` 对不上或 `must_keep` 少了 = 误剥（把真引用/真文本吃掉了）。**判据只有 app/core/citations.py 一处**，本文件只是它的用例，不是第二份实现。注意后半段那几条不是引用（[来源 N]、[资料来源 3]、[来源 七]、[来源 1-2]、【来源 7】）——它们一个字都不许动：宽匹配吃掉的是真话，比漏一个假编号贵。",
+  "cases": [
+    {
+      "id": "c01-single-in-range",
+      "injected": 5,
+      "reply": "按你笔记里的说法，阈值是 0.62[来源 3]。",
+      "fake": [],
+      "cited": [3]
+    },
+    {
+      "id": "c02-two-in-range",
+      "injected": 5,
+      "reply": "周一修了时区错[来源 1]，周三做了迁移版本化[来源 5]。",
+      "fake": [],
+      "cited": [1, 5]
+    },
+    {
+      "id": "c03-same-number-twice",
+      "injected": 5,
+      "reply": "阈值 0.62[来源 3]，这一点[来源 3]在两条笔记里都写过。",
+      "fake": [],
+      "cited": [3]
+    },
+    {
+      "id": "c04-spaces-inside",
+      "injected": 5,
+      "reply": "参见 [ 来源 2 ] 那一节。",
+      "fake": [],
+      "cited": [2]
+    },
+    {
+      "id": "c05-no-space",
+      "injected": 5,
+      "reply": "参见[来源2]。",
+      "fake": [],
+      "cited": [2]
+    },
+    {
+      "id": "c06-last-one-is-legal",
+      "injected": 3,
+      "reply": "最后一条材料说的是这个[来源 3]。",
+      "fake": [],
+      "cited": [3]
+    },
+    {
+      "id": "c07-beyond-the-list",
+      "injected": 5,
+      "reply": "这一条来自更早的讨论[来源 7]。",
+      "fake": [7],
+      "cited": []
+    },
+    {
+      "id": "c08-zero-is-not-a-source",
+      "injected": 5,
+      "reply": "编号从 1 开始[来源 0]。",
+      "fake": [0],
+      "cited": []
+    },
+    {
+      "id": "c09-nothing-injected-at-all",
+      "injected": 0,
+      "reply": "材料里写着阈值是 0.62[来源 1]。",
+      "fake": [1],
+      "cited": []
+    },
+    {
+      "id": "c10-one-real-one-fake",
+      "injected": 5,
+      "reply": "时区错是周一修的[来源 1]，另外[来源 9]也提过。",
+      "fake": [9],
+      "cited": [1]
+    },
+    {
+      "id": "c11-two-fakes",
+      "injected": 3,
+      "reply": "见[来源 5]与[来源 8]。",
+      "fake": [5, 8],
+      "cited": []
+    },
+    {
+      "id": "c12-fake-glued-to-punctuation",
+      "injected": 2,
+      "reply": "结论就是这样[来源 4]。",
+      "fake": [4],
+      "cited": [],
+      "clean": "结论就是这样。"
+    },
+    {
+      "id": "c13-space-left-behind",
+      "injected": 1,
+      "reply": "先给结论 [来源 7] 再说细节。",
+      "fake": [7],
+      "cited": [],
+      "clean": "先给结论 再说细节。"
+    },
+    {
+      "id": "c14-only-a-fake-marker",
+      "injected": 0,
+      "reply": "[来源 7]",
+      "fake": [7],
+      "cited": [],
+      "clean": ""
+    },
+    {
+      "id": "c15-literal-instruction-echo",
+      "injected": 5,
+      "reply": "我会在涉及某一片段时标注 [来源 N]，不会编。",
+      "fake": [],
+      "cited": [],
+      "must_keep": ["[来源 N]"]
+    },
+    {
+      "id": "c16-not-our-format",
+      "injected": 5,
+      "reply": "这一条[资料来源 3]里写着。",
+      "fake": [],
+      "cited": [],
+      "must_keep": ["[资料来源 3]"]
+    },
+    {
+      "id": "c17-chinese-numeral",
+      "injected": 5,
+      "reply": "第[来源 七]条说的是这件事。",
+      "fake": [],
+      "cited": [],
+      "must_keep": ["[来源 七]"]
+    },
+    {
+      "id": "c18-a-range",
+      "injected": 5,
+      "reply": "见[来源 1-2]这两条。",
+      "fake": [],
+      "cited": [],
+      "must_keep": ["[来源 1-2]"]
+    },
+    {
+      "id": "c19-fullwidth-brackets",
+      "injected": 5,
+      "reply": "这条在别处写过【来源 7】。",
+      "fake": [],
+      "cited": [],
+      "must_keep": ["【来源 7】"]
+    },
+    {
+      "id": "c20-quoted-markers-in-a-code-block",
+      "injected": 5,
+      "reply": "提示词里写的是：\n\n```\n[来源 12]\n```\n\n所以它会照抄。",
+      "fake": [12],
+      "cited": [],
+      "note": "**已知代价，如实记**：正文里引用的原文标记也按编造处理（这里被拿掉）。要区分「模型在引用材料」与「模型在举例说明标记长什么样」得读语义，而这一层是确定性的 —— 按 RAG升级.md §3 P3 的取舍（假指针比少个角标贵），认这一条。"
+    }
+  ]
+}

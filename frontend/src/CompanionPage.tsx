@@ -146,7 +146,7 @@ function WorkshopCard() {
       {focus && focusPanel && (
         <div className="flex items-center gap-3 pb-3">
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] text-neutral-400">⏱ 专注</p>
+            <p className="text-xs text-neutral-400">⏱ 专注</p>
             <p className="text-2xl font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
               {focusPanel.running ? mmss(focusLeft) : `${focusPanel.minutes ?? focusPanel.default_minutes ?? 25}:00`}
             </p>
@@ -167,15 +167,15 @@ function WorkshopCard() {
       {water && waterPanel && (
         <div className="border-t border-neutral-100 py-2.5 dark:border-neutral-800/70">
           <div className="flex items-center gap-2">
-            <p className="text-[10px] text-neutral-400">💧 喝水</p>
-            <p className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+            <p className="text-xs text-neutral-400">💧 喝水</p>
+            <p className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
               {waterValue}/{waterTarget} {waterPanel.unit ?? '杯'}
             </p>
             <div className="flex-1" />
             <button
               onClick={() => void run('water', 'drink')}
               title="记一杯水"
-              className="rounded-full border border-sky-300 px-2.5 py-0.5 text-[11px] text-sky-700 transition-colors hover:bg-sky-50 dark:border-sky-500/50 dark:text-sky-300 dark:hover:bg-sky-500/10"
+              className="rounded-full border border-sky-300 px-2.5 py-0.5 text-xs text-sky-700 transition-colors hover:bg-sky-50 dark:border-sky-500/50 dark:text-sky-300 dark:hover:bg-sky-500/10"
             >
               +1 杯
             </button>
@@ -196,8 +196,8 @@ function WorkshopCard() {
       {mood && moodPanel && (
         <div className="border-t border-neutral-100 pt-2.5 dark:border-neutral-800/70">
           <div className="flex items-center gap-2">
-            <p className="text-[10px] text-neutral-400">🙂 心情</p>
-            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+            <p className="text-xs text-neutral-400">🙂 心情</p>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
               {moodValue ? `今天 ${moodValue}/${moodPanel.scale ?? 5}` : '今天还没记'}
             </p>
           </div>
@@ -225,11 +225,11 @@ function WorkshopCard() {
       )}
 
       {said ? (
-        <p className="mt-2 border-t border-neutral-100 pt-2 text-[11px] leading-relaxed text-violet-600 dark:border-neutral-800/70 dark:text-violet-300">
+        <p className="mt-2 border-t border-neutral-100 pt-2 text-xs leading-relaxed text-violet-600 dark:border-neutral-800/70 dark:text-violet-300">
           零柒：{said}
         </p>
       ) : null}
-      {err ? <p className="mt-2 text-[11px] text-rose-500">{err}</p> : null}
+      {err ? <p className="mt-2 text-xs text-rose-500">{err}</p> : null}
     </section>
   )
 }
@@ -237,7 +237,7 @@ function WorkshopCard() {
 /** 侧栏三小卡的公共外壳：标题小写字距款，与「学」页右栏同一套排版语言。 */
 function RailTitle({ children }: { children: string }) {
   return (
-    <p className="pb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+    <p className="pb-2 text-xs font-medium uppercase tracking-wider text-neutral-400">
       {children}
     </p>
   )
@@ -373,7 +373,7 @@ function ChatPane() {
                 key={c.title}
                 onClick={() => void send(c.q)}
                 disabled={busy}
-                className="rounded-xl border border-neutral-200 bg-white p-3.5 text-left transition-all hover:border-violet-300 hover:shadow-sm disabled:opacity-40 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+                className="rounded-md border border-neutral-200 bg-white p-3.5 text-left transition-all hover:border-violet-300 disabled:opacity-40 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
               >
                 <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                   <span className="mr-1.5">{c.icon}</span>
@@ -392,14 +392,14 @@ function ChatPane() {
             m.role === 'user' ? (
               <div
                 key={`u${i}`}
-                className="ml-auto max-w-[75%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-violet-600 px-4 py-3 text-white"
+                className="ml-auto max-w-[75%] whitespace-pre-wrap rounded-lg rounded-br-sm bg-violet-600 px-4 py-3 text-white"
               >
                 {m.text}
               </div>
             ) : (
               <div
                 key={`p${i}`}
-                className="max-w-[75%] rounded-2xl rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                className="max-w-[75%] rounded-lg rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
               >
                 {/* 它真的做了什么。写在话**前面**：先有动作，再有解释。 */}
                 {m.tools && m.tools.length > 0 && (
@@ -407,7 +407,7 @@ function ChatPane() {
                     {m.tools.map((r, k) => (
                       <li
                         key={k}
-                        className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
+                        className="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
                       >
                         {receiptLabel(r)}
                       </li>
@@ -416,7 +416,7 @@ function ChatPane() {
                 )}
                 {m.text ? <span className="whitespace-pre-wrap">{m.text}</span> : null}
                 {!m.text && (
-                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                  <span className="text-xs text-neutral-400 dark:text-neutral-500">
                     {toolBusy ?? (
                       <span className="inline-block animate-pulse text-violet-400">▊</span>
                     )}
@@ -439,7 +439,7 @@ function ChatPane() {
           <button
             onClick={() => voice.toggle()}
             title={voice.recording ? '停止录音并转写' : '说一段，转成文字（不自动发送）'}
-            className={`shrink-0 rounded-xl border px-3 transition-colors ${
+            className={`shrink-0 rounded-md border px-3 transition-colors ${
               voice.recording
                 ? 'animate-pulse border-rose-300 bg-rose-50 text-rose-600 dark:border-rose-500/50 dark:bg-rose-500/10 dark:text-rose-300'
                 : 'border-neutral-300 text-neutral-500 hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50'
@@ -461,12 +461,12 @@ function ChatPane() {
               }
             }}
             placeholder="跟零柒说点什么（Esc 停止生成）"
-            className="flex-1 rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+            className="flex-1 rounded-md border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
           />
           <button
             onClick={() => (busy ? abortRef.current?.abort() : void send())}
             disabled={!busy && !input.trim()}
-            className="rounded-xl bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+            className="rounded-md bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
           >
             {busy ? '停' : '发送'}
           </button>
@@ -499,14 +499,14 @@ function AudioRail() {
             <li key={s.id}>
               <p className="truncate text-sm text-neutral-700 dark:text-neutral-200">{s.concept}</p>
               {s.stuck ? (
-                <p className="truncate text-[11px] text-neutral-400 dark:text-neutral-500" title={s.stuck}>
+                <p className="truncate text-xs text-neutral-400 dark:text-neutral-500" title={s.stuck}>
                   ↳ {s.stuck}
                 </p>
               ) : null}
             </li>
           ))}
         </ul>
-        <p className="pt-2 text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        <p className="pt-2 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
           点左上「拿没解的卡点录一期」，它把「你卡在哪」讲成人话。
         </p>
       </section>
@@ -562,11 +562,11 @@ function AudioPane() {
         <button
           onClick={() => void fromStuck()}
           disabled={busy}
-          className="rounded-xl border border-violet-300 px-3 py-1.5 text-xs text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-500/50 dark:text-violet-300 dark:hover:bg-violet-500/10"
+          className="rounded-md border border-violet-300 px-3 py-1.5 text-xs text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-500/50 dark:text-violet-300 dark:hover:bg-violet-500/10"
         >
           {busy ? '录制中…' : '🎙 拿没解的卡点录一期'}
         </button>
-        <span className="text-[11px] text-neutral-400">
+        <span className="text-xs text-neutral-400">
           想聊调研圆桌，去
           <Link to="/tutor" className="text-violet-500 hover:underline">
             学
@@ -574,7 +574,7 @@ function AudioPane() {
           页的圆桌卡
         </span>
       </div>
-      {msg ? <p className="text-[11px] text-neutral-500">{msg}</p> : null}
+      {msg ? <p className="text-xs text-neutral-500">{msg}</p> : null}
 
       {podcasts === null ? null : podcasts.length === 0 ? (
         <EmptyHint
@@ -589,14 +589,14 @@ function AudioPane() {
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">
                   {p.title}
                 </span>
-                <span className="shrink-0 text-[11px] tabular-nums text-neutral-400">
+                <span className="shrink-0 text-xs tabular-nums text-neutral-400">
                   {dur(p.duration_sec)}
                 </span>
-                <span className="shrink-0 text-[11px] text-neutral-400">{p.created_at.slice(5, 10)}</span>
+                <span className="shrink-0 text-xs text-neutral-400">{p.created_at.slice(5, 10)}</span>
                 <button
                   onClick={() => void remove(p.id)}
                   title="删掉这一期（脚本和音频一起）"
-                  className="shrink-0 text-[11px] text-neutral-400 transition-colors hover:text-rose-500"
+                  className="shrink-0 text-xs text-neutral-400 transition-colors hover:text-rose-500"
                 >
                   删
                 </button>
@@ -793,12 +793,12 @@ function TeachPane() {
                 }
               }}
               placeholder="你要教它什么？比如 asyncio 事件循环"
-              className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+              className="min-w-0 flex-1 rounded-md border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
             />
             <button
               onClick={() => void begin(topic)}
               disabled={busy || !topic.trim()}
-              className="shrink-0 rounded-xl bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+              className="shrink-0 rounded-md bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
             >
               开始讲
             </button>
@@ -809,7 +809,7 @@ function TeachPane() {
                 key={s.id}
                 onClick={() => void begin(s.concept)}
                 disabled={busy}
-                className="rounded-xl border border-neutral-200 bg-white p-3.5 text-left transition-all hover:border-violet-300 hover:shadow-sm disabled:opacity-40 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+                className="rounded-md border border-neutral-200 bg-white p-3.5 text-left transition-all hover:border-violet-300 disabled:opacity-40 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
               >
                 <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                   <span className="mr-1.5">🎯</span>
@@ -823,14 +823,14 @@ function TeachPane() {
                     ↳ {s.stuck}
                   </p>
                 ) : null}
-                <p className="mt-1 text-[11px] font-medium text-violet-500">讲这个 →</p>
+                <p className="mt-1 text-xs font-medium text-violet-500">讲这个 →</p>
               </button>
             ))}
             {stuck.length === 0 && (
               <>
                 <Link
                   to="/notes"
-                  className="rounded-xl border border-neutral-200 bg-white p-3.5 transition-all hover:border-violet-300 hover:shadow-sm dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+                  className="rounded-md border border-neutral-200 bg-white p-3.5 transition-all hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
                 >
                   <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                     📝 去笔记挑一段
@@ -841,7 +841,7 @@ function TeachPane() {
                 </Link>
                 <Link
                   to="/tutor?tab=learn"
-                  className="rounded-xl border border-neutral-200 bg-white p-3.5 transition-all hover:border-violet-300 hover:shadow-sm dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+                  className="rounded-md border border-neutral-200 bg-white p-3.5 transition-all hover:border-violet-300 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-violet-500/50"
                 >
                   <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">
                     🧭 消化一份材料
@@ -860,14 +860,14 @@ function TeachPane() {
           m.role === 'user' ? (
             <div
               key={`u${i}`}
-              className="ml-auto max-w-[75%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-violet-600 px-4 py-3 text-white"
+              className="ml-auto max-w-[75%] whitespace-pre-wrap rounded-lg rounded-br-sm bg-violet-600 px-4 py-3 text-white"
             >
               {m.text}
             </div>
           ) : (
             <div
               key={`p${i}`}
-              className="max-w-[75%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              className="max-w-[75%] whitespace-pre-wrap rounded-lg rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
             >
               {m.text}
             </div>
@@ -875,17 +875,17 @@ function TeachPane() {
         )}
 
         {streaming ? (
-          <div className="max-w-[75%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+          <div className="max-w-[75%] whitespace-pre-wrap rounded-lg rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
             {streaming}
           </div>
         ) : busy ? (
-          <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-neutral-100 px-4 py-3 text-violet-400 dark:bg-neutral-800">
+          <div className="max-w-[75%] rounded-lg rounded-bl-sm bg-neutral-100 px-4 py-3 text-violet-400 dark:bg-neutral-800">
             <span className="inline-block animate-pulse">▊</span>
           </div>
         ) : null}
 
         {verdict && (
-          <div className="rounded-2xl border border-violet-200 bg-violet-50/60 px-4 py-3 text-neutral-700 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-neutral-200">
+          <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-4 py-3 text-neutral-700 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-neutral-200">
             {verdict === 'got' ? (
               <>
                 <div className="font-medium">零柒把「{concept || who}」记住了。</div>
@@ -916,7 +916,7 @@ function TeachPane() {
                 ) : null
               })()}
             {stuckMsg ? (
-              <p className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400">{stuckMsg}</p>
+              <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-400">{stuckMsg}</p>
             ) : null}
             <button
               onClick={() => {
@@ -943,7 +943,7 @@ function TeachPane() {
       {/* 自评那一行：这是「它学没学会」的唯一输入，也是成长值的来源 */}
       {!idle && (
         <div className="flex flex-wrap items-center gap-1.5 border-t border-neutral-200 px-5 py-2 dark:border-neutral-800">
-          <span className="text-[11px] text-neutral-400">它听明白了吗：</span>
+          <span className="text-xs text-neutral-400">它听明白了吗：</span>
           {(
             [
               ['got', '听懂了'],
@@ -976,12 +976,12 @@ function TeachPane() {
                 }
               }}
               placeholder="接着说（Esc 停止生成）"
-              className="flex-1 rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+              className="flex-1 rounded-md border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
             />
             <button
               onClick={() => (busy ? abortRef.current?.abort() : void submit())}
               disabled={!busy && !draft.trim()}
-              className="rounded-xl bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+              className="rounded-md bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
             >
               {busy ? '停' : '发送'}
             </button>

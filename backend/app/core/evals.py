@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from app.core.llm import ProviderInfo, stream_chat
 from app.core.structured import extract_json
-from app.core.prefs import load_config
+from app.core.prefs import load_config, rerank_enabled
 from app.db import SessionLocal
 from app.models import EvalItem, EvalRun
 from app.core import usage_ledger
@@ -207,7 +207,7 @@ async def run_eval(top_k: int | None = None, judge: bool = True) -> dict:
     agg = {
         "top_k": k,
         "hybrid": bool(prefs.get("hybrid_search", True)),
-        "rerank": bool(prefs.get("rerank_enabled", True)),
+        "rerank": rerank_enabled(prefs),
         "full_context": bool(prefs.get("full_context", True)),
         "judge_model": judge_model,
         "total": len(results),

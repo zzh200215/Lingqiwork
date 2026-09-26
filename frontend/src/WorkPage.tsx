@@ -1,889 +1,114 @@
-/** 工作 — 干活的一条线，三个标签：**产出**（写一份交付 + 六个引擎的成品清单）、
- *  **引擎**（工作流 + 会议，定时任务从「设置」搬来当一等对象）、**跟进**（「事」，
- *  材料与成品挂到同一件事上，`?tab=follow`）。
+/** 工作 — 干活的一条线，**四个业务域**（方案 §一，2026-09-25 定稿）：
  *
- *  **工作流**：这条流程长什么样 / 上次跑到哪 / 为什么失败，同屏可见。每条运行带
- *  接地分（§4-10）：它是无人值守时唯一会说话的东西，「跑成功但悄悄变差」没有别的信号。
+ *  - **报告**（`?tab=report`）—— 写一个交得出去的东西。整域在 `ReportPage.tsx`。
+ *  - **提示词**（`?tab=prompt`）—— 攒 → 试 → 量，一页闭环。库/对打/评测/技能/数据形态五区。
+ *  - **工作流**（`?tab=workflow`）—— 让它自己跑的事。链的定义与它的运行同屏。
+ *  - **事项**（`?tab=thread`）—— 这件事我到哪了。
  *
- *  **产出**：六个引擎的成品落在 vault 的几个目录里（成文在 notes/，靠日期前缀分辨），
- *  这里把它们列出来、能筛、能点开。
+ *  **这一页只剩「档」的分发与页头**：每个域的实现都在自己的文件里
+ *  （`ReportPage` / `PromptLibrary` / `PromptLab` / `CapabilityCandidate` / `FormPane` /
+ *  `DispatchPanel` / `ThreadsPage`）。判据是方案 §十二：**单一域职责即停手**。
  *
- *  **生成**：交付是唯一在这里就地生成的——其余引擎仍从各自的入口跑，成品自动落到这里。
+ *  **旧地址全部由 `routes.tsx` 的别名层接住**（`deliver→report`、`automation→workflow`、
+ *  `eval→prompt`，以及更早那六个技术构件名），所以这一页永远只见新 key。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Activity, Briefcase, Cpu, HeartPulse } from 'lucide-react'
 
-import {
-  api,
-  type DeliverCatalogue,
-  type JobHealth,
-  type MaterialHit,
-  type ScheduledTask,
-  type SkillCandidateResult,
-  type SkillCandidateRow,
-  type SkillEvalReport,
-  type SkillTrials,
-  type TaskRunItem,
-  type WorkMeeting,
-  type WorkOutput,
-} from './api'
-import AttachToThread from './AttachToThread'
+import { api, type JobHealth, type ScheduledTask, type TaskRunItem } from './api'
 import EmptyHint from './EmptyHint'
-import FeedbackButtons from './FeedbackButtons'
-import InjectedLine from './InjectedLine'
 import DispatchPanel from './DispatchPanel'
 import FormPane from './FormPane'
 import { useDeepLink } from './deeplink'
-import { Markdown, reportMarkdown, SourceList } from './markdown'
-import { KIND_BADGE } from './OutputCard'
-import OutputCard from './OutputCard'
 import PageShell from './PageShell'
+import { humanErr, useTaskCenter, useWorkMeetings, useWorkOutputs } from './workData'
+import CapabilityCandidate from './CapabilityCandidate'
 import PromptLab from './PromptLab'
+import PromptLibrary from './PromptLibrary'
+import ReportPage from './ReportPage'
+import WorkflowRow from './WorkflowRow'
 import { ago } from './reltime'
-import { WORK_TABS, type WorkTab } from './routes'
+import { resolveWorkTab, type WorkTab } from './routes'
 import StatRow from './StatRow'
 import StatTile from './StatTile'
-import { streamDeliver, type DeliverReport, type ReportDraft } from './stream'
 import ThreadsPage from './ThreadsPage'
 
-/** 能力候选（环一：学习 → 工作）。一份材料 → 一份 SKILL.md 草稿。
+
+
+/** 折叠区（方案 §8.3 的两块次要内容：运行视图 / 后台作业）。
  *
- *  两条规矩写在界面上，而不只写在代码注释里：
- *  ① **不是每份材料都能出能力** —— 出不了就直说理由，不硬凑；
- *  ② **落盘 ≠ 登记** —— 草稿没跑过对照、没有基线，所以不在这里叫它「技能」。
- */
-function CapabilityCandidate() {
-  const [path, setPath] = useState('')
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [res, setRes] = useState<SkillCandidateResult | null>(null)
-  const [rows, setRows] = useState<SkillCandidateRow[]>([])
-  const [measured, setMeasured] = useState(false)
-  // S3：试用计数的窗口（每个任务只留最近 N 条运行）。界面必须把它显示出来，
-  // 不许把「最近 20 次运行内被用过 3 次」写成「共 3 次」。
-  const [trialWindow, setTrialWindow] = useState(0)
-  const [trialName, setTrialName] = useState('')
-  const [trials, setTrials] = useState<SkillTrials | null>(null)
-  const [trialsBusy, setTrialsBusy] = useState(false)
-  // 「量一遍」：确定性的一条路，但**会花钱**，所以按钮上写清代价（tooltip），
-  // 结果里连 `calls` 一起报出来。区间太宽时不许当结论用（`tell=false`）。
-  const [busyName, setBusyName] = useState('')
-  const [evalRes, setEvalRes] = useState<SkillEvalReport | null>(null)
-  const [evalErr, setEvalErr] = useState('')
-  // 用例编辑器：**尺子得由人给**（模型自己出题自己考，考的是它会不会出题）。
-  // 打开哪一份、草稿是什么、存完给一句什么话，都在这一小块里。
-  const [editName, setEditName] = useState('')
-  const [draft, setDraft] = useState<{ id: string; intent: string; ask: string; checks: string[] }[]>([])
-  const [checks, setChecks] = useState<{ name: string; why: string }[]>([])
-  const [defaultChecks, setDefaultChecks] = useState<string[]>([])
-  const [casesBusy, setCasesBusy] = useState(false)
-  const [casesMsg, setCasesMsg] = useState('')
-
-  const refresh = useCallback(() => {
-    api
-      .listCandidates()
-      .then((r) => {
-        setRows(r.skills)
-        setMeasured(r.measured)
-        setTrialWindow(r.trial_window)
-      })
-      .catch(() => setRows([]))
-  }, [])
-
-  useEffect(() => {
-    refresh()
-  }, [refresh])
-
-  const measure = useCallback(
-    async (s: SkillCandidateRow) => {
-      setBusyName(s.name)
-      setEvalRes(null)
-      setEvalErr('')
-      try {
-        const r = await api.runSkillEval(s.name)
-        setEvalRes(r)
-        refresh()
-      } catch (e) {
-        setEvalErr(e instanceof Error ? e.message : String(e))
-      } finally {
-        setBusyName('')
-      }
-    },
-    [refresh]
-  )
-
-  /** 把盘上那份用例读进编辑器（断言清单与默认断言**由后端给**，前端不抄一份）。 */
-  const loadCases = useCallback(async (name: string) => {
-    setCasesMsg('')
-    try {
-      const p = await api.skillCases(name)
-      setChecks(p.checks)
-      setDefaultChecks(p.default_checks)
-      setDraft(
-        p.cases.length ? p.cases : [{ id: '', intent: '', ask: '', checks: p.default_checks }]
-      )
-      return p
-    } catch (e) {
-      setCasesMsg(e instanceof Error ? e.message : String(e))
-      return null
-    }
-  }, [])
-
-  /** 打开/收起某一份技能的用例编辑器：打开时把盘上那份读进来。 */
-  const editCases = useCallback(
-    async (name: string) => {
-      if (editName === name) {
-        setEditName('')
-        return
-      }
-      setEditName(name)
-      setDraft([])
-      await loadCases(name)
-    },
-    [editName, loadCases]
-  )
-
-  /** S3：展开一份草稿的**试用记录**（派生自运行日志；点了才拉）。 */
-  const openTrials = useCallback(
-    async (name: string) => {
-      if (trialName === name) {
-        setTrialName('')
-        setTrials(null)
-        return
-      }
-      setTrialName(name)
-      setTrials(null)
-      setTrialsBusy(true)
-      try {
-        setTrials(await api.skillTrials(name))
-      } catch {
-        setTrials(null) // 读不到就说读不到，不编一条空记录出来
-      } finally {
-        setTrialsBusy(false)
-      }
-    },
-    [trialName]
-  )
-
-  /** 「把这次当用例」：**只预填 `ask`（那次的题目）**，`intent` 留空给人写。
-   *
-   *  这是 S3 那条红线（PLAN3 §9.3 决策6）：`skill_eval` 明文「不自动生成用例」——模型自己
-   *  出题自己考，考的是它会不会出题。所以这里不生成 `intent`、也不挑断言（用后端给的那组
-   *  默认值）；人改完、人按保存，才写 `evals/skills/*.json`。
-   */
-  const addTrialAsCase = useCallback(
-    async (name: string, ask: string) => {
-      let defaults = defaultChecks
-      if (editName !== name) {
-        setEditName(name)
-        setDraft([])
-        const p = await loadCases(name)
-        if (!p) return
-        defaults = p.default_checks
-      }
-      setDraft((d) => [
-        // 顺手去掉还没写过的空行（那是「新开一份」的占位）
-        ...d.filter((c) => c.ask.trim() || c.intent.trim()),
-        { id: '', intent: '', ask, checks: defaults },
-      ])
-      setCasesMsg('这次的题目已经填进用例了 —— 「它当时应该怎样」留给你写，写完按「保存用例」。')
-    },
-    [defaultChecks, editName, loadCases]
-  )
-
-  const saveCases = useCallback(async () => {
-    if (!editName) return
-    setCasesBusy(true)
-    setCasesMsg('')
-    try {
-      const r = await api.saveSkillCases(
-        editName,
-        draft
-          .filter((c) => c.ask.trim())
-          .map((c) => ({
-            id: c.id.trim(),
-            intent: c.intent.trim(),
-            ask: c.ask.trim(),
-            checks: c.checks,
-          }))
-      )
-      setCasesMsg(`存好了：${r.cases} 条 → ${r.file}`)
-      refresh()
-    } catch (e) {
-      setCasesMsg(e instanceof Error ? e.message : String(e))
-    } finally {
-      setCasesBusy(false)
-    }
-  }, [editName, draft, refresh])
-
-  const make = useCallback(
-    async (overwrite: boolean) => {
-      if (!path.trim() && !text.trim()) return
-      setBusy(true)
-      setRes(null)
-      try {
-        const r = await api.makeCandidate(path.trim(), text.trim(), overwrite)
-        setRes(r)
-        if (r.written) refresh()
-      } catch (e) {
-        setRes({
-          ok: false,
-          usable: false,
-          name: '',
-          description: '',
-          instructions: '',
-          reason: e instanceof Error ? e.message : String(e),
-          existing: [],
-          source: '',
-          model_id: '',
-          written: false,
-          already: '',
-        })
-      } finally {
-        setBusy(false)
-      }
-    },
-    [path, text, refresh]
-  )
-
-  return (
-    <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
-      <div className="flex items-baseline justify-between pb-2">
-        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
-          🧰 读成能力
-        </h2>
-        <span className="text-xs text-neutral-400">
-          一份材料 → 一份 SKILL.md 草稿（有工序才出，没有就直说）
-        </span>
-      </div>
-
-      <div className="space-y-2">
-        <input
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="材料在哪（vault 路径 / repo:名/路径 / dir:名/路径）"
-          className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-        />
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={3}
-          placeholder="…或者直接粘一段材料（与上面二选一）"
-          className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-        />
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => void make(false)}
-            disabled={busy || (!path.trim() && !text.trim())}
-            className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-40"
-          >
-            {busy ? '读着…' : '读一读'}
-          </button>
-          {res && !res.written && res.already ? (
-            <button
-              onClick={() => void make(true)}
-              disabled={busy}
-              className="rounded-lg border border-amber-300 px-3 py-1.5 text-sm text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-40 dark:border-amber-700 dark:text-amber-300"
-            >
-              覆盖已有的「{res.already}」
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      {res ? (
-        <div className="mt-3 rounded-lg bg-neutral-50 p-3 text-xs dark:bg-neutral-900/50">
-          {res.written ? (
-            <>
-              <p className="text-emerald-700 dark:text-emerald-400">
-                出了一份草稿：<b>{res.name}</b>
-              </p>
-              <p className="pt-1 text-neutral-500 dark:text-neutral-400">{res.description}</p>
-              <p className="pt-1 text-neutral-400">
-                落在 <code>{res.path}</code>（{res.chars} 字）
-                {res.existing.length ? ` · 与已有技能重名/重叠：${res.existing.join('、')}` : ''}
-              </p>
-              <p className="pt-1 text-amber-700 dark:text-amber-400">
-                这是**草稿**：还没跑过对照、没有基线，所以不叫「技能卡」。要它算数，得先量一遍。
-              </p>
-            </>
-          ) : (
-            <>
-              <p
-                className={
-                  res.usable
-                    ? 'text-amber-700 dark:text-amber-400'
-                    : 'text-neutral-500 dark:text-neutral-400'
-                }
-              >
-                {res.usable ? '没落盘：' : '没出能力：'}
-                {res.reason}
-              </p>
-              {res.existing.length ? (
-                <p className="pt-1 text-neutral-400">已有的：{res.existing.join('、')}</p>
-              ) : null}
-            </>
-          )}
-        </div>
-      ) : null}
-
-      <div className="mt-4 border-t border-neutral-100 pt-3 dark:border-neutral-800/70">
-        <div className="flex items-baseline justify-between pb-1">
-          <h3 className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-            现有的能力包（{rows.length}）
-          </h3>
-          <span className="text-[11px] text-neutral-400">
-            {measured ? '量过的显示成绩' : '都还没有基线 —— 没量过的不算数'}
-          </span>
-        </div>
-        {rows.length === 0 ? (
-          <p className="text-[11px] text-neutral-400">一份都没有。读一份材料试试。</p>
-        ) : (
-          <ul className="space-y-1.5">
-            {rows.map((s) => (
-              <li key={s.name} className="text-[11px]">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-neutral-600 dark:text-neutral-300">{s.name}</span>
-                  <span className="min-w-0 flex-1 truncate text-neutral-400">{s.description}</span>
-                  <span className="shrink-0 text-neutral-400">{s.cases} 条用例</span>
-                  <button
-                    onClick={() => void editCases(s.name)}
-                    title="尺子得由人给：它会收到什么 + 它当时应该怎样"
-                    className="shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
-                  >
-                    {editName === s.name ? '收起用例' : '写用例'}
-                  </button>
-                  <button
-                    onClick={() => void measure(s)}
-                    disabled={busyName === s.name}
-                    title={
-                      s.cases
-                        ? `量一遍：每条用例问两次（没它 / 有它），共 ${s.cases * 2} 次生成 + 判分`
-                        : '先写用例才能量：没有尺子的分数不算数'
-                    }
-                    className="shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400"
-                  >
-                    {busyName === s.name ? '量着…' : '量一遍'}
-                  </button>
-                </div>
-                <div className="pt-0.5 text-[10px] text-neutral-400">
-                  {s.baseline ? (
-                    <>
-                      过了 {s.baseline.with_passed}/{s.baseline.cases}（区间{' '}
-                      {(s.baseline.ci_low * 100).toFixed(0)}–
-                      {(s.baseline.ci_high * 100).toFixed(0)}%）
-                      {' · '}有它多过 {s.baseline.helped} 条 / 少过 {s.baseline.hurt} 条
-                      {s.baseline.follows_method != null
-                        ? ` · 跟着工序做 ${s.baseline.follows_method}/5`
-                        : ' · 工序判分没跑成'}
-                      {s.stale ? ' · 内容改过了，这张分数是旧版的' : ''}
-                    </>
-                  ) : s.stale ? (
-                    '内容改过了：旧成绩不作数，得重新量一遍'
-                  ) : (
-                    '还没量过 —— 草稿'
-                  )}
-                </div>
-                {/* S3 草稿卡那一行事实：**不是等级**（没有熟练度、没有进度条）——只是
-                    「真实工作里被用过几次」。只摆非零；而且窗口一定跟着数字一起说。 */}
-                {s.trials.n > 0 ? (
-                  <div data-trials-line className="pt-0.5 text-[10px] text-neutral-400">
-                    最近 {trialWindow} 次运行内被用过{' '}
-                    <b className="text-neutral-600 dark:text-neutral-300">{s.trials.n}</b> 次
-                    {s.trials.last_ts ? ` · 最近一次 ${ago(s.trials.last_ts)}` : ''}
-                    <button
-                      onClick={() => void openTrials(s.name)}
-                      title="看这几次真实工作里它被用在哪、效果如何——挑几次当用例，就能量一遍了"
-                      className="ml-1.5 rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
-                    >
-                      {trialName === s.name ? '收起试用记录' : '看试用记录'}
-                    </button>
-                  </div>
-                ) : null}
-                {trialName === s.name ? (
-                  <div className="mt-1.5 rounded-lg border border-neutral-200 p-2 dark:border-neutral-800">
-                    {trialsBusy ? (
-                      <p className="text-[10px] text-neutral-400">读着…</p>
-                    ) : !trials || trials.n === 0 ? (
-                      <p className="text-[10px] text-neutral-400">还没在真实工作里被用过。</p>
-                    ) : (
-                      <>
-                        <p className="pb-1 text-[10px] text-neutral-400">
-                          这些是真实工作里吃过这份草稿的运行。数字只算最近 {trials.window} 次运行
-                          —— 更早的运行已经被删掉了，所以它只会变小、不会变大。
-                          挑进用例只是省了手打一遍：<b>题目照抄，「它当时应该怎样」由你写</b>。
-                        </p>
-                        <ul className="space-y-1.5">
-                          {trials.trials.map((t) => (
-                            <li
-                              key={t.run_id}
-                              data-trial={t.run_id}
-                              className="rounded border border-neutral-100 p-1.5 dark:border-neutral-800"
-                            >
-                              <div className="flex items-baseline gap-2">
-                                <span
-                                  className="min-w-0 flex-1 truncate text-neutral-700 dark:text-neutral-200"
-                                  title={t.topic}
-                                >
-                                  {t.topic || '（这次没有题目）'}
-                                </span>
-                                <span className="shrink-0 text-[10px] text-neutral-400">
-                                  运行 #{t.run_id} · {fmtWhen(t.started_at)}
-                                  {t.grounded == null ? ' · 未打分' : ` · 接地 ${t.grounded}/5`}
-                                </span>
-                                <button
-                                  onClick={() => void addTrialAsCase(s.name, t.topic)}
-                                  title="把这次试用的题目填进用例（intent 留给你写）"
-                                  className="shrink-0 rounded-full border border-violet-200 px-2 py-0.5 text-[10px] text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
-                                >
-                                  把这次当用例
-                                </button>
-                              </div>
-                              {t.answer ? (
-                                <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-[10px] text-neutral-400">
-                                  {t.answer}
-                                </p>
-                              ) : null}
-                            </li>
-                          ))}
-                        </ul>
-                      </>
-                    )}
-                  </div>
-                ) : null}
-                {editName === s.name ? (
-                  <div className="mt-1.5 rounded-lg border border-neutral-200 p-2 dark:border-neutral-800">
-                    <p className="pb-1 text-[10px] text-neutral-400">
-                      尺子得由人给 —— 模型自己出题自己考，考的是它会不会出题。
-                      「它会收到什么」是真会问它的那句话；「它当时应该怎样」写清这条用例凭什么在集合里。
-                    </p>
-                    {draft.map((c, i) => (
-                      <div key={i} className="pb-1.5">
-                        <div className="flex items-start gap-1">
-                          <textarea
-                            value={c.ask}
-                            onChange={(e) =>
-                              setDraft((d) =>
-                                d.map((x, j) => (j === i ? { ...x, ask: e.target.value } : x))
-                              )
-                            }
-                            rows={2}
-                            placeholder="它会收到什么（例：照着这篇论文复现它的评测口径）"
-                            className="min-w-0 flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                          />
-                          <button
-                            onClick={() => setDraft((d) => d.filter((_, j) => j !== i))}
-                            title="删掉这条用例"
-                            className="shrink-0 rounded border border-neutral-300 px-1.5 py-0.5 text-[10px] text-neutral-400 hover:text-rose-600 dark:border-neutral-700"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                        <input
-                          value={c.intent}
-                          onChange={(e) =>
-                            setDraft((d) =>
-                              d.map((x, j) => (j === i ? { ...x, intent: e.target.value } : x))
-                            )
-                          }
-                          placeholder="它当时应该怎样（一句话）"
-                          className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                        />
-                        <div className="flex flex-wrap gap-1 pt-1">
-                          {checks.map((k) => {
-                            const on = c.checks.includes(k.name)
-                            return (
-                              <button
-                                key={k.name}
-                                title={k.why}
-                                onClick={() =>
-                                  setDraft((d) =>
-                                    d.map((x, j) =>
-                                      j === i
-                                        ? {
-                                            ...x,
-                                            checks: on
-                                              ? x.checks.filter((n) => n !== k.name)
-                                              : [...x.checks, k.name],
-                                          }
-                                        : x
-                                    )
-                                  )
-                                }
-                                className={`rounded-full border px-1.5 py-0.5 text-[10px] ${
-                                  on
-                                    ? 'border-violet-300 text-violet-600 dark:border-violet-500/50 dark:text-violet-300'
-                                    : 'border-neutral-300 text-neutral-400 dark:border-neutral-700'
-                                }`}
-                              >
-                                {on ? '✓ ' : ''}
-                                {k.name}
-                              </button>
-                            )
-                          })}
-                          {c.checks.length === 0 && defaultChecks.length > 0 ? (
-                            <span className="text-[10px] text-neutral-400">
-                              不勾就用默认那条：{defaultChecks.join('、')}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        onClick={() =>
-                          setDraft((d) => [
-                            ...d,
-                            { id: '', intent: '', ask: '', checks: defaultChecks },
-                          ])
-                        }
-                        className="rounded border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-400"
-                      >
-                        ＋ 再加一条
-                      </button>
-                      <button
-                        onClick={() => void saveCases()}
-                        disabled={casesBusy || draft.every((c) => !c.ask.trim())}
-                        className="rounded bg-violet-600 px-2 py-0.5 text-[10px] text-white hover:bg-violet-500 disabled:opacity-40"
-                      >
-                        {casesBusy ? '存着…' : '存进金标集'}
-                      </button>
-                      {casesMsg ? <span className="text-[10px] text-neutral-500">{casesMsg}</span> : null}
-                    </div>
-                  </div>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {evalRes ? (
-          <div className="mt-2 rounded-lg bg-neutral-50 p-2 text-[11px] dark:bg-neutral-900/50">
-            <p className="text-neutral-600 dark:text-neutral-300">
-              「{evalRes.skill}」跑了 {evalRes.calls} 次调用（{evalRes.seconds}s）：过了{' '}
-              {evalRes.with_passed}/{evalRes.total}，区间 {(evalRes.ci[0] * 100).toFixed(0)}–
-              {(evalRes.ci[1] * 100).toFixed(0)}%
-            </p>
-            <p className="text-neutral-500 dark:text-neutral-400">
-              有它多过 {evalRes.deltas.helped} 条、少过 {evalRes.deltas.hurt} 条、一样{' '}
-              {evalRes.deltas.same} 条
-              {evalRes.follows_method != null ? ` · 跟着工序做 ${evalRes.follows_method}/5` : ''}
-            </p>
-            {!evalRes.tell ? (
-              <p className="pt-1 text-amber-700 dark:text-amber-400">
-                这个 n 下不了结论{evalRes.cases_needed > 0 ? `（还差 ${evalRes.cases_needed} 条用例才到能开口的量）` : ''}
-                ：区间太宽，别拿它当好坏的证据。
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        {evalErr ? <p className="pt-1 text-[11px] text-rose-600 dark:text-rose-400">{evalErr}</p> : null}
-      </div>
-    </section>
-  )
-}
-
-/** 筛选条的固定顺序——和产出的种类一一对应，不随数据变。 */
-const KINDS: { kind: WorkOutput['kind']; label: string }[] = [
-  { kind: 'research', label: '研究' },
-  { kind: 'compose', label: '成文' },
-  { kind: 'recap', label: '复盘' },
-  { kind: 'decide', label: '方案' },
-  { kind: 'conflict', label: '对质' },
-  { kind: 'deliver', label: '交付' },
-  { kind: 'task', label: '工作流' },
-]
-
-/** 每一种产出的颜色在 OutputCard 里统一定义（产出清单 / 资产页 / 学页回执共用）。 */
-
-const TRIGGER_LABEL: Record<string, string> = {
-  cron: '定时',
-  watch: '监听',
-  chain: '链',
-  manual: '手动',
-}
-
-/** ISO → "09-12 08:00"（工作流只看得到最近这些，年份没用）。 */
-function fmtWhen(iso: string | null): string {
-  return iso ? iso.slice(5, 16).replace('T', ' ') : ''
-}
-
-/** 这次运行怎么样。`running` / 待审优先——它们还没结束，谈不上成败。 */
-function runTone(r: TaskRunItem): { tone: 'bad' | 'warn' | 'good' | 'info'; text: string } {
-  if (r.status === 'running') return { tone: 'warn', text: '运行中' }
-  if (r.status === 'awaiting_approval') return { tone: 'warn', text: '等你点头' }
-  if (r.status === 'ok') return { tone: 'good', text: '✓' }
-  if (r.status === 'rejected') return { tone: 'info', text: '已驳回' }
-  return { tone: 'bad', text: '✗' }
-}
-
-/** S1（PLAN3 §2 S1 第 6 条）：这次运行吃到了哪份工序——从运行日志里读。
- *
- *  没注入就没有这一项，所以这里返回空数组、界面上**一个字都不摆**（不写「注入：无」：
- *  日志只记真发生过的事）。它是 S3 试用期的同一份真值，界面这边只是它的只读视图。
- */
-function injectedSkills(run: TaskRunItem): string[] {
-  const entry = (run.log ?? []).find((e) => e.tool === 'skill_inject')
-  const names = entry?.args?.skills
-  return Array.isArray(names) ? names.map(String) : []
-}
-
-/** S2（PLAN3 §2 S2）：这次运行的一行小结——成没成、落在哪、为什么。 */
-function readAsSkillLine(res: SkillCandidateResult, run: TaskRunItem): { text: string; tone: string } {
-  if (res.written) {
-    const n = (res.runs ?? [run.id]).length
-    return {
-      text: `✓ 落了草稿「${res.name}」→ ${res.path}（按 ${n} 次运行判断 · 还是草稿：没基线不算能力）`,
-      tone: 'text-emerald-700 dark:text-emerald-400',
-    }
-  }
-  if (res.already) return { text: `没落盘：同名「${res.already}」已经在了，不覆盖`, tone: 'text-amber-700 dark:text-amber-400' }
-  if (!res.usable && res.ok) return { text: `没出能力：${res.reason}`, tone: 'text-neutral-500 dark:text-neutral-400' }
-  return { text: `✗ ${res.reason}`, tone: 'text-rose-600 dark:text-rose-400' }
-}
-
-function RunRow({ run }: { run: TaskRunItem }) {
-  const tone = runTone(run)
-  const injected = injectedSkills(run)
-  // S2 的入口：**运行记录是唯一同时给得出「题目」与「产出」的地方**（成品页只有路径，
-  // 拿不到那次的题目与注入痕迹）。点了才跑——拉取式，与 deliver 的护栏同一条。
-  const [busy, setBusy] = useState(false)
-  const [res, setRes] = useState<SkillCandidateResult | null>(null)
-
-  const readAsSkill = useCallback(
-    async (overwrite: boolean) => {
-      setBusy(true)
-      try {
-        setRes(await api.draftFromRun(run.id, overwrite))
-      } catch (e) {
-        setRes({
-          ok: false,
-          usable: false,
-          name: '',
-          description: '',
-          instructions: '',
-          reason: e instanceof Error ? e.message : String(e),
-          existing: [],
-          source: '',
-          model_id: '',
-          written: false,
-          already: '',
-        })
-      } finally {
-        setBusy(false)
-      }
-    },
-    [run.id]
-  )
-
-  return (
-    <li className="py-1">
-      {/* 一次运行 = 一行事实。排布交给 StatRow，和今日概览同一套。 */}
-      <StatRow
-        items={[
-          { label: tone.text, tone: tone.tone },
-          { label: fmtWhen(run.started_at) },
-          { label: TRIGGER_LABEL[run.trigger] ?? run.trigger },
-          // 接地分：够不着材料的那几次没有分，直说「未打分」而不是显示 0
-          {
-            label: run.grounded == null ? '未打分' : `接地 ${run.grounded}/5`,
-            title: run.judge_reason || '这次没有可判的材料',
-          },
-          // S1 的注入痕迹：**匹配出来的**工序，不是人指的
-          ...(injected.length
-            ? [{ label: `注入 ${injected.join('、')}`, title: '这次运行吃到的技能（按话题匹配出来的）' }]
-            : []),
-          ...(run.tool_calls > 0
-            ? [{ label: `${run.rounds} 轮 · ${run.tool_calls} 次工具` }]
-            : []),
-        ]}
-        trailing={
-          run.error ? (
-            <span className="min-w-0 basis-full truncate text-rose-600 dark:text-rose-400" title={run.error}>
-              {run.error}
-            </span>
-          ) : undefined
-        }
-      />
-      <div className="mt-0.5 flex flex-wrap items-center gap-2 pl-1">
-        <button
-          onClick={() => void readAsSkill(false)}
-          disabled={busy}
-          title="读这次运行的过程与产出，判断有没有一套下次还能照着做的工序（会调一次模型）"
-          className="rounded-full border border-violet-200 px-2 py-0.5 text-[10px] text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-500/30 dark:text-violet-300 dark:hover:bg-violet-500/10"
-        >
-          {busy ? '读着…' : '读成技能 →'}
-        </button>
-        {res && !res.written && res.already ? (
-          <button
-            onClick={() => void readAsSkill(true)}
-            disabled={busy}
-            className="rounded-full border border-amber-300 px-2 py-0.5 text-[10px] text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-40 dark:border-amber-700 dark:text-amber-300"
-          >
-            覆盖已有的「{res.already}」
-          </button>
-        ) : null}
-        {res ? (
-          <span data-read-skill className={`text-[10px] ${readAsSkillLine(res, run).tone}`}>
-            {readAsSkillLine(res, run).text}
-          </span>
-        ) : null}
-      </div>
-    </li>
-  )
-}
-
-function WorkflowRow({
-  task,
-  nextName,
-  open,
-  runs,
-  busy,
-  reviewBusy,
-  onToggle,
-  onRerun,
-  onReview,
+ *  **默认收起**：它们是「想查的时候才看」的东西，摊在首屏会把主体（清单）挤下去。
+ *  用原生 `<details>` 而不是手写开合状态——键盘、读屏、锚点跳转全都白拿，
+ *  也不必为一个纯展示的分组引一份 state。 */
+function Fold({
+  title,
+  hint,
+  children,
 }: {
-  task: ScheduledTask
-  nextName: string
-  open: boolean
-  runs: TaskRunItem[]
-  busy: boolean
-  reviewBusy: boolean
-  onToggle: () => void
-  onRerun: () => void
-  onReview: (approve: boolean) => void
+  title: string
+  hint?: string
+  children: ReactNode
 }) {
-  const waiting = task.awaiting_run_id ?? null
-  const tone = task.running
-    ? { cls: 'text-amber-600 dark:text-amber-400', text: '运行中' }
-    : waiting
-      ? { cls: 'text-amber-600 dark:text-amber-400', text: '等你点头' }
-      : task.last_status === 'ok'
-        ? { cls: 'text-emerald-600 dark:text-emerald-400', text: '✓' }
-        : task.last_status === 'error'
-          ? { cls: 'text-rose-600 dark:text-rose-400', text: '✗' }
-          : { cls: 'text-neutral-400', text: '—' }
-
   return (
-    <li id={`task-${task.id}`} className="py-2.5">
-      <div className="flex items-center gap-2">
-        <span
-          className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
-            task.enabled
-              ? 'border-neutral-300 text-neutral-500 dark:border-neutral-700 dark:text-neutral-400'
-              : 'border-neutral-200 text-neutral-300 dark:border-neutral-800 dark:text-neutral-600'
-          }`}
-        >
-          {task.trigger_kind === 'watch' ? '监听' : task.mode === 'agent' ? '自主' : '定时'}
-        </span>
-        <button onClick={onToggle} className="min-w-0 flex-1 text-left" title={task.prompt}>
-          <span className="block truncate text-sm text-neutral-700 dark:text-neutral-200">
-            {task.name}
-            {task.require_approval ? (
-              <span className="pl-1.5 text-[11px] text-neutral-400">卡点</span>
-            ) : null}
-            {!task.enabled ? <span className="pl-1.5 text-[11px] text-neutral-400">已停用</span> : null}
-          </span>
-          <span className="block truncate text-[11px] text-neutral-400">
-            {task.trigger_kind === 'watch' ? `监听 ${task.watch_path || '（未设路径）'}` : task.cron}
-            {nextName ? ` → ${nextName}` : ''}
-            {task.last_run ? ` · 上次 ${fmtWhen(task.last_run)}` : ' · 还没跑过'}
-          </span>
-        </button>
-        {/* M2：这条流程的成品挂在哪件「事」上——挂接是自动发生的，但得看得见，
-            否则「产物去哪了」又变成一个要猜的问题。 */}
-        {task.thread_id ? (
-          <Link
-            to={`/work?tab=follow&thread=${task.thread_id}`}
-            title="这条流程的成品都挂在这件事上"
-            className="shrink-0 rounded-full border border-violet-200 px-2 py-0.5 text-[11px] text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
-          >
-            🗂 这件事
-          </Link>
-        ) : null}
-        <span className={`shrink-0 text-[11px] ${tone.cls}`}>{tone.text}</span>
-        {/* 停在卡点上时，这里就该是放行/驳回——它才是此刻唯一该做的动作 */}
-        {waiting ? (
-          <>
-            <button
-              onClick={() => onReview(true)}
-              disabled={reviewBusy}
-              className="shrink-0 rounded-full border border-emerald-300 px-2 py-0.5 text-[11px] text-emerald-700 transition-colors hover:bg-emerald-50 disabled:opacity-40 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
-            >
-              通过
-            </button>
-            <button
-              onClick={() => onReview(false)}
-              disabled={reviewBusy}
-              className="shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 transition-colors hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            >
-              驳回
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={onRerun}
-            disabled={busy || task.running}
-            className="shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400"
-          >
-            {busy ? '跑着…' : '重跑'}
-          </button>
-        )}
-      </div>
-
-      {/* 失败原因直接摊在行下——「为什么失败」不该要再点一次才看得到 */}
-      {task.last_status === 'error' && task.last_result ? (
-        <p className="mt-1 truncate text-[11px] text-rose-600 dark:text-rose-400" title={task.last_result}>
-          {task.last_result}
-        </p>
-      ) : null}
-      {waiting ? (
-        <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
-          这一步跑完了，等你点头才交给下游{nextName ? `（${nextName}）` : ''}——展开可以看它的产出。
-        </p>
-      ) : null}
-
-      {open ? (
-        runs.length === 0 ? (
-          <p className="mt-1 pl-1 text-[11px] text-neutral-400">还没有运行记录。</p>
-        ) : (
-          <ul className="mt-1 divide-y divide-neutral-100 border-l-2 border-neutral-100 pl-2 dark:divide-neutral-800/70 dark:border-neutral-800">
-            {runs.map((r) => (
-              <RunRow key={r.id} run={r} />
-            ))}
-          </ul>
-        )
-      ) : null}
-    </li>
+    <details className="wb-card mb-4 px-4 py-3">
+      <summary className="flex cursor-pointer items-baseline gap-2">
+        <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">{title}</span>
+        {hint ? <span className="text-xs text-neutral-400">{hint}</span> : null}
+      </summary>
+      <div className="pt-3">{children}</div>
+    </details>
   )
+}
+
+/** 页头那三块统计砖要的数（方案 §8.3：**统计砖并入页头 stats**）。
+ *
+ *  `null` 一律表示「还没读到」——砖上摆 `—`，**不摆 0**（「读不到」与「零」是两件事）。 */
+type PulseStats = {
+  /** 有几条工作流；`null` = 还没读到 */
+  tasks: number | null
+  /** 其中几条停在人工卡点上等你点头 */
+  waiting: number
+  /** 30 天成功率；`null` = 还没跑过（**不是 0%**） */
+  rate: string | null
+  runs30d: number
+  /** 后台作业：共几个 / 正常几个 / 连续失败几个；`null` = 还没读到 */
+  jobs: { total: number; normal: number; failing: number } | null
 }
 
 /** 引擎那一档的「这台机器现在什么状态」（2026-09-18 内容太少那一轮加的）。
  *
- *  2026-09-19 起顶部先摆一排**状态计数卡**（工作流 / 30 天成功率 / 后台作业），
  *  数据全部是现成接口的聚合：任务清单（`/api/tasks`）、30 天运行成败（`/api/dashboard`
  *  的 `task_stats`，这一页此前从没读过）、作业健康（`/api/health/jobs`）。
  *
- *  下面两块，各自取、各自坏：
- *   · **最近几次运行**：把每个任务最近一条运行摊出来（与工作流行里那份同一个接口），
- *     一行说清「谁 · 什么时候 · 成没成 · 用了什么模型 · 接地分」；
- *   · **后台作业**：八个常驻作业的注册/开关/下次跑/连续失败（`/api/health/jobs`）。
+ *  **它现在只画折叠区里那两块**（最近几次运行 / 后台作业）——三块统计砖搬去了页头
+ *  （方案 §8.3 的原话：「EnginePulse 统计砖**并入页头 stats**」）。取数仍在这一块，
+ *  因为它是唯一同时读那三个接口的地方；数字通过 `onPulse` 交上去。
  *
  *  **只陈述**：不给成功率评级、不排名、不催（§4-2）。读不到就不摆这一块（§4-8/§4-9）。
  */
-function EnginePulse() {
+function EnginePulse({
+  tasks,
+  lastRuns,
+  onTaskStats,
+  onPulse,
+}: {
+  /** 工作流定义。**由页面给**（`useTaskCenter` 拉的）——这一块以前自己再拉一遍，
+   *  同一份数据两个请求；顺手把「最近一次运行」也一起拿到了（每行要写耗时）。 */
+  tasks: ScheduledTask[]
+  /** 每条最近一次运行（批量接口给的，没跑过的任务不在里面）。 */
+  lastRuns: Record<string, TaskRunItem>
+  /** 把「按任务的 30 天统计」回报给页面——工作流清单每行要自己的成功率（方案 §8.3）。
+   *  **不新增请求**：`task_stats` 这一份本来就是这一块在读的。 */
+  onTaskStats?: (m: Record<string, { runs: number; ok: number; rate: number | null }>) => void
+  /** 把页头那三块砖要的数回报上去。 */
+  onPulse?: (p: PulseStats) => void
+}) {
   const [jobs, setJobs] = useState<JobHealth[] | null>(null)
-  const [recent, setRecent] = useState<{ task: ScheduledTask; run: TaskRunItem }[] | null>(null)
-  const [tasks, setTasks] = useState<ScheduledTask[] | null>(null)
   const [stats, setStats] = useState<{ runs_30d: number; rate: number | null } | null>(null)
 
-  /* 只跑一次：曾经依赖 `[tasks]`，而 effect 自己每次 `setTasks(新数组)` 改引用，
-   * 造成无限重跑；且 dashboard 是三个请求里最慢的，其响应总落在下一轮 cleanup
-   * 之后（live 已 false），`setStats` 永远执行不到——30 天成功率恒为「—」，
-   * 后端被每秒上百次打 `/api/dashboard`。所以「最近运行」改用本次取到的 `t`
-   * 直接算，不再绕 state。 */
+  /* 只跑一次。**`tasks` 与运行记录不再在这里拉**——那是页面的活（`useTaskCenter`），
+   *  同一份数据两个组件各拉一遍，就是两次请求换同一屏东西。 */
   useEffect(() => {
     let live = true
     api
@@ -891,28 +116,12 @@ function EnginePulse() {
       .then((r) => live && setJobs(r.jobs))
       .catch(() => {})
     api
-      .listTasks()
-      .then((t) => {
-        if (!live) return
-        setTasks(t)
-        void (async () => {
-          try {
-            const rows = await Promise.all(
-              t.slice(0, 8).map(async (task) => {
-                const runs = await api.listTaskRuns(task.id)
-                return runs[0] ? { task, run: runs[0] } : null
-              })
-            )
-            if (live) setRecent(rows.filter((r): r is { task: ScheduledTask; run: TaskRunItem } => !!r))
-          } catch {
-            /* 读不到就不摆这一块 */
-          }
-        })()
-      })
-      .catch(() => {})
-    api
       .dashboard()
-      .then((d) => live && setStats(d.task_stats))
+      .then((d) => {
+        if (!live) return
+        setStats(d.task_stats)
+        onTaskStats?.(d.task_stats.by_task ?? {})
+      })
       .catch(() => {})
     return () => {
       live = false
@@ -920,50 +129,62 @@ function EnginePulse() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  /** 「最近几次运行」：取前 8 条任务里**跑过的**那些（与清单同一个批量数据）。 */
+  const recent = useMemo(
+    () =>
+      tasks
+        .slice(0, 8)
+        .map((task) => {
+          const run = lastRuns[String(task.id)]
+          return run ? { task, run } : null
+        })
+        .filter((r): r is { task: ScheduledTask; run: TaskRunItem } => !!r),
+    [tasks, lastRuns]
+  )
+
   const shownJobs = (jobs ?? []).filter((j) => j.registered)
   const normalJobs = shownJobs.filter((j) => !j.disabled && j.consecutive_failures === 0).length
   const failJobs = shownJobs.filter((j) => j.consecutive_failures > 0).length
-  const waiting = (tasks ?? []).filter((t) => t.awaiting_run_id != null).length
+  const waiting = tasks.filter((t) => t.awaiting_run_id != null).length
 
-  const pulseEmpty =
-    !shownJobs.length && !(recent && recent.length > 0) && !(tasks && tasks.length > 0) && !stats
+  /** 三块统计砖的那几个数（方案 §8.3：**砖并入页头 stats**，别埋在折叠区里）。 */
+  const pulse: PulseStats = useMemo(
+    () => ({
+      tasks: tasks.length,
+      waiting,
+      rate:
+        stats && stats.runs_30d > 0 && stats.rate != null
+          ? `${Math.round(stats.rate * 100)}%`
+          : null,
+      runs30d: stats && stats.runs_30d > 0 ? stats.runs_30d : 0,
+      jobs: jobs ? { total: shownJobs.length, normal: normalJobs, failing: failJobs } : null,
+    }),
+    [tasks, stats, jobs, waiting, shownJobs.length, normalJobs, failJobs]
+  )
+  // 数字是这一块取的，砖画在页头上——**取数与呈现分开**，所以得把它们报上去。
+  // 放在 `pulseEmpty` 那个提前 return **之前**：那一块整体不显示时，页头照样该有数。
+  //
+  // **一个都还没回来就先不报**：砖上 `—` 的意思是「读不到」，不是「还没读到」。
+  // 挂载瞬间报一次空的，会让页头在每次进这一档时闪三块 `—`。
+  useEffect(() => {
+    if (!jobs && !tasks.length && !stats) return
+    onPulse?.(pulse)
+  }, [pulse, onPulse, jobs, tasks, stats])
+
+  const pulseEmpty = !shownJobs.length && !recent.length && !tasks.length && !stats
   if (pulseEmpty) return null
 
   return (
-    <div className="mb-6 space-y-4" data-engine-pulse>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatTile
-          icon={<Cpu className="h-3.5 w-3.5" />}
-          accent="bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"
-          label="工作流"
-          value={tasks ? tasks.length : null}
-          sub={waiting > 0 ? `${waiting} 条在等点头` : undefined}
-        />
-        <StatTile
-          icon={<Activity className="h-3.5 w-3.5" />}
-          accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300"
-          label="30 天成功率"
-          value={stats && stats.runs_30d > 0 && stats.rate != null ? `${Math.round(stats.rate * 100)}%` : null}
-          sub={stats && stats.runs_30d > 0 ? `${stats.runs_30d} 次运行` : undefined}
-        />
-        <StatTile
-          icon={<HeartPulse className="h-3.5 w-3.5" />}
-          accent="bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"
-          label="后台作业"
-          value={jobs ? normalJobs : null}
-          sub={jobs ? `共 ${shownJobs.length} 个${failJobs ? ` · 连挂 ${failJobs}` : ''}` : undefined}
-        />
-      </div>
-
+    <div className="space-y-4" data-engine-pulse>
       <div className="grid items-start gap-4 xl:grid-cols-2">
-        {recent && recent.length > 0 ? (
+        {recent.length > 0 ? (
           <section>
             <h2 className="pb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
               最近几次运行
             </h2>
-            <ul className="wb-card divide-y divide-neutral-100 px-3 dark:divide-neutral-800/70">
+            <ul className="wb-card divide-y divide-neutral-100 dark:divide-neutral-800/70">
               {recent.map(({ task, run }) => (
-                <li key={run.id} className="py-2">
+                <li key={run.id} className="px-3 py-2">
                   <div className="flex items-center gap-2">
                     <span
                       aria-hidden="true"
@@ -981,7 +202,7 @@ function EnginePulse() {
                       {task.name}
                     </span>
                     <span
-                      className={`shrink-0 text-[11px] font-medium ${
+                      className={`shrink-0 text-xs font-medium ${
                         run.status === 'ok'
                           ? 'text-emerald-600 dark:text-emerald-400'
                           : run.status === 'running'
@@ -991,7 +212,7 @@ function EnginePulse() {
                     >
                       {run.status}
                     </span>
-                    <span className="shrink-0 text-[10px] text-neutral-400">
+                    <span className="shrink-0 text-xs text-neutral-400">
                       {run.started_at ? ago(Date.parse(run.started_at) / 1000) : ''}
                     </span>
                   </div>
@@ -1024,26 +245,26 @@ function EnginePulse() {
             <h2 className="pb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
               后台作业
             </h2>
-            <ul className="wb-card divide-y divide-neutral-100 px-3 dark:divide-neutral-800/70">
+            <ul className="wb-card divide-y divide-neutral-100 dark:divide-neutral-800/70">
               {shownJobs.map((j) => (
-                <li key={j.job_id} className="flex items-center gap-2 py-2">
-                  <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-neutral-600 dark:text-neutral-300">
+                <li key={j.job_id} className="flex items-center gap-2 px-3 py-2">
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-neutral-600 dark:text-neutral-300">
                     {j.job_id}
                   </span>
                   {j.disabled ? (
-                    <span className="shrink-0 rounded-full border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-400 dark:border-neutral-700">
+                    <span className="shrink-0 rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-400 dark:border-neutral-700">
                       已关
                     </span>
                   ) : j.consecutive_failures > 0 ? (
-                    <span className="shrink-0 rounded-full border border-rose-200 bg-rose-50/70 px-2 py-0.5 text-[10px] font-medium text-rose-600 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-400">
+                    <span className="shrink-0 rounded-full border border-rose-200 bg-rose-50/70 px-2 py-0.5 text-xs font-medium text-rose-600 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-400">
                       连挂 {j.consecutive_failures} 次
                     </span>
                   ) : (
-                    <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50/70 px-2 py-0.5 text-[10px] text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400">
+                    <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50/70 px-2 py-0.5 text-xs text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400">
                       正常
                     </span>
                   )}
-                  <span className="shrink-0 text-[10px] text-neutral-400">
+                  <span className="shrink-0 text-xs text-neutral-400">
                     {j.last?.at ? `上次 ${ago(Date.parse(j.last.at) / 1000)}` : '还没跑过'}
                   </span>
                 </li>
@@ -1056,14 +277,73 @@ function EnginePulse() {
   )
 }
 
+/** 页头那句说明**按档换**（方案 §六：每页顶部一句人话主题句）。
+ *
+ *  原来它在每一档都写着同一句话——在提示词、工作流、事项这几档，
+ *  那句话一个字都没说到你眼前这屏在干什么。**页头说的和页面做的对不上**，
+ *  和那个「写一份报告」按钮是同一类毛病。
+ */
+const WORK_DESC: Record<WorkTab, string> = {
+  report: '写一个交得出去的东西。',
+  prompt: '攒 → 试 → 量，一页闭环。',
+  workflow: '让它自己跑的事。',
+  thread: '这件事我到哪了。',
+}
+/** 提示词页的五区（方案 §8.2）。**id 与锚点导航同一份定义**——
+ *  两处各写一份的那天，点了没反应还没人报错（同 `WORK_TABS` 那条纪律）。 */
+const PROMPT_SECTIONS = [
+  { id: 'prompt-lib', label: '库' },
+  { id: 'prompt-duel', label: '对打' },
+  { id: 'prompt-eval', label: '评测' },
+  { id: 'prompt-skill', label: '技能' },
+  { id: 'prompt-form', label: '数据形态' },
+] as const
+
+/** 提示词页的**一个区**：标题 + 副标题 + 落点（方案 §8.2 给五区各写了一句副标题）。
+
+ *  **为什么包一层而不是改那三个组件**：评测 / 技能草稿 / 数据形态是**现成组件原样并入**的
+ *  （方案原话）。它们自己有内容，但没有「这一区叫什么、它是干嘛的」。把标题写进它们里面，
+ *  等于为了一个页头去动三个各有各的家的文件；包一层则谁都不动。
+ *
+ *  副标题那句话**照抄方案**——它是用户走查时「看标签名猜中页面内容」那条验收的一部分，
+ *  不是随便写的说明。
+ */
+function PromptSection({
+  id,
+  title,
+  sub,
+  children,
+}: {
+  id: string
+  title: string
+  sub: string
+  children: ReactNode
+}) {
+  return (
+    <section id={id} className="scroll-mt-14">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 pb-1">
+        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">{title}</h2>
+        <span className="text-xs text-neutral-400">{sub}</span>
+      </div>
+      {children}
+    </section>
+  )
+}
+
 export default function WorkPage() {
-  const [outputs, setOutputs] = useState<WorkOutput[]>([])
-  const [filter, setFilter] = useState<WorkOutput['kind'] | ''>('')
   const [err, setErr] = useState('')
-  const navigate = useNavigate()
+  /** 每条的 30 天成绩（`/api/dashboard` 的 `task_stats.by_task`）。
+   *  由 `EnginePulse` 回报——那一份数据本来就是它在读，不新增请求。 */
+  const [taskStats, setTaskStats] = useState<
+    Record<string, { runs: number; ok: number; rate: number | null }>
+  >({})
+
+  /** 页头那三块统计砖的数（方案 §8.3：砖并入页头）。取数仍在 `EnginePulse` 里，
+   *  它算好了报上来——**取数与呈现分开**，但只读一次那三个接口。 */
+  const [pulse, setPulse] = useState<PulseStats | null>(null)
 
   // 标签挂在 ?tab= 上：/threads 的旧链接重定向过来带的就是 tab=follow；
-  // 工作流深链 ?task=7 没写 tab，直接落「引擎」才对得上。
+  // 工作流深链 ?task=7 没写 tab，直接落「工作流」才对得上。
   // `lab`（Q1 的提示词对照台）、`form`（Q3 的形态）和 `dispatch`（Q4 的调度台）刻意放在
   // **工作模块**里：提示词工程、数据集、编排都是「非编程的那部分工作」，它们和产出、工作流
   // 是同一张桌子上的事。
@@ -1071,9 +351,7 @@ export default function WorkPage() {
   const tabParam = params.get('tab')
   // 标签清单在 `routes.tsx`（侧栏与这一页**同一份**）：`?tab=` 是唯一入口，
   // 页面里那排标签按钮已经删掉（2026-09-18 导航改版）。
-  const tab: WorkTab =
-    (WORK_TABS.find((t) => t.key === tabParam)?.key as WorkTab | undefined) ??
-    (params.get('task') ? 'engine' : 'output')
+  const tab: WorkTab = resolveWorkTab(tabParam) ?? (params.get('task') ? 'workflow' : 'report')
   const setTab = (t: WorkTab) =>
     setParams(
       (p) => {
@@ -1085,9 +363,9 @@ export default function WorkPage() {
     )
 
   // 工作流（§4-11）：定义、最近运行、失败原因同屏
-  const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [openRuns, setOpenRuns] = useState<number | null>(null)
-  const [runs, setRuns] = useState<TaskRunItem[]>([])
+  /** `null` = **还不知道**（正在拉 / 拉不到），`[]` = 拉到了、确实没有。 */
+  const [runs, setRuns] = useState<TaskRunItem[] | null>(null)
   const [wfBusy, setWfBusy] = useState<number | null>(null)
   const [wfrBusy, setWfrBusy] = useState<number | null>(null) // 正在放行/驳回的那次运行
   const [presetBusy, setPresetBusy] = useState(false)
@@ -1101,66 +379,25 @@ export default function WorkPage() {
   // 不必再拉一次详情——「挂到哪了」是运行期就知道的事，不该等下一次刷新。
   const [workThread, setWorkThread] = useState<{ id: number; name: string } | null>(null)
 
-  // 从「一件事」点一条工作流过来（`?task=7`）：滚到那条流程并亮一下
+  // **域级取数收在 "workData.ts"**：加载、错误、刷新一处管。原来这里是三个各写各的
+  // "useCallback"，错误处理三种写法——"refreshOutputs" 报错、"refreshTasks" 与
+  // "refreshMeetings" 静默吞。同一页面上「读不到」有时候说话有时候不说，没人故意这么定。
+  const { outputs, refresh: refreshOutputs } = useWorkOutputs(setErr)
+  const { tasks, lastRuns, refresh: refreshTasks } = useTaskCenter(setErr)
+  // 会议只在挂载时拉一次（这一页没有手动刷新会议的动作）——所以不取它的 refresh
+  const { meetings } = useWorkMeetings(setErr)
+
+  // 从「一件事」点一条工作流过来（`?task=7`）：滚到那条流程并亮一下。
+  // **必须在 `tasks` 之后**——它按「任务到没到」决定要不要找那一行。
   useDeepLink('task', tasks.length > 0)
 
-  // 会议（§4-13）：一场一个文件夹，录音能回听
-  const [meetings, setMeetings] = useState<WorkMeeting[]>([])
-
-  // 交付：体裁 × 读者的定义来自后端（唯一真值），话题由你给。
-  const [catalogue, setCatalogue] = useState<DeliverCatalogue | null>(null)
-  const [genOpen, setGenOpen] = useState(false)
-  const [genre, setGenre] = useState('')
-  const [audience, setAudience] = useState('')
-  const [topic, setTopic] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState('')
-  // 「加进这次产出」（§4-14）：钉进来的材料排在取材结果最前
-  const [pinned, setPinned] = useState<{ spec: string; title: string }[]>([])
-  const [pinOpen, setPinOpen] = useState(false)
-  const [pinQuery, setPinQuery] = useState('')
-  const [pinHits, setPinHits] = useState<MaterialHit[]>([])
-  const [pinBusy, setPinBusy] = useState(false)
-  const [draft, setDraft] = useState<ReportDraft | null>(null)
-  const [report, setReport] = useState<DeliverReport | null>(null)
-  const [saved, setSaved] = useState('')
-  // S1：这次生成吃到了哪份工序（引擎匹配出来的）。手动这条路没有运行记录，
-  // 所以它是「看不见注入」的唯一补丁——不留它，用得最多的这条路人永远不知道自己吃到了什么。
-  const [injected, setInjected] = useState<string[]>([])
-  const abort = useRef<AbortController | null>(null)
-
-  const refreshOutputs = useCallback(() => {
-    // best-effort：列不出来时给一句实话，不把整页弄成错误页
-    api
-      .workOutputs()
-      .then((r) => setOutputs(r.outputs))
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
-  }, [])
-
-  const refreshTasks = useCallback(() => {
-    api.listTasks().then(setTasks).catch(() => {})
-  }, [])
-
-  const refreshMeetings = useCallback(() => {
-    api.workMeetings().then((r) => setMeetings(r.meetings)).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    refreshOutputs()
-    refreshTasks()
-    refreshMeetings()
-    api
-      .deliverGenres()
-      .then((c) => {
-        setCatalogue(c)
-        setGenre(c.default_genre)
-        setAudience(c.default_audience)
-      })
-      .catch(() => {}) // 体裁拉不到就不显示生成面板，清单照常用
-  }, [refreshOutputs, refreshTasks, refreshMeetings])
-
-  // 切页时掐断还在跑的生成（照 tutor 页）
-  useEffect(() => () => abort.current?.abort(), [])
+  /** 页头那个「＋ 新建提示词」推给 PromptLibrary 的信号（按钮在页头、草稿状态在那一层）。 */
+  const [promptNewSignal, setPromptNewSignal] = useState(0)
+  /** 同上，给「写一份报告」推给 `ReportPage`——面板的展开状态归它自己，
+   *  页头只管把信号推过去（同 PromptLibrary 的写法）。 */
+  const [reportNewSignal, setReportNewSignal] = useState(0)
+  /** 同上，给事项页的「＋ 新的一件事」（方案 §8.4）。 */
+  const [threadNewSignal, setThreadNewSignal] = useState(0)
 
   const toggleRuns = useCallback(
     async (id: number) => {
@@ -1169,26 +406,39 @@ export default function WorkPage() {
         return
       }
       setOpenRuns(id)
-      setRuns([])
+      // `null` = **还不知道**（正在拉 / 拉不到），`[]` = 拉到了、确实没有。
+      // 这个区别就是「读不到 ≠ 没有」在类型上的落点。
+      setRuns(null)
       try {
         setRuns(await api.listTaskRuns(id))
-      } catch {
-        setRuns([])
+      } catch (e) {
+        // **别把「拉不到」摆成「没有」**：要是这里 `setRuns([])`，页级错误条刚说完
+        // 「运行记录拉不出来」，紧挨着下面一行又斩钉截铁地说「还没有运行记录」——
+        // 两句话矛盾，而用户会信下面那句具体的。留在 `null` 上，那一行就不出现，
+        // 由错误条独家解释为什么这一栏是空的。
+        setErr(`运行记录拉不出来：${humanErr(e)}`)
       }
     },
     [openRuns]
   )
 
   const rerun = useCallback(
-    async (id: number) => {
+    /** `topic` 非空 = **这次运行换一个题目**（`runTask` 的运行期覆盖，不改任务模板）。
+     *  方案 §8.3 第 5 条：重跑要能改本次参数——否则「想换个说法再跑一次」只能去设置里改任务。 */
+    async (id: number, topic = '') => {
       setWfBusy(id)
       try {
-        await api.runTask(id)
+        // **没传 topic 就只传 id**：这次运行与「改参数」之前逐字一致，
+        // 后端也照旧用任务自己的 prompt（不是「传一个空题目覆盖掉」）。
+        if (topic) await api.runTask(id, topic)
+        else await api.runTask(id)
         refreshTasks()
         if (openRuns === id) setRuns(await api.listTaskRuns(id))
         refreshOutputs() // 任务可能落 vault——产出清单跟着刷新
-      } catch {
-        /* 失败原因会落在 run 记录里，下一次展开就看得见 */
+      } catch (e) {
+        // 原来这里是空 catch，注释写着「失败原因会落在 run 记录里」——可后端不可达时
+        // **连 run 记录都不会产生**，于是点了重跑、什么都没发生、也没人说一句。
+        setErr(`重跑没起来：${humanErr(e)}`)
       } finally {
         setWfBusy(null)
       }
@@ -1204,8 +454,10 @@ export default function WorkPage() {
         if (approve) await api.approveRun(runId)
         else await api.rejectRun(runId)
         refreshOutputs() // 放行后下游可能落 vault
-      } catch {
-        /* 见上：状态早就变了，刷新即可 */
+      } catch (e) {
+        // 「状态早就变了，刷新即可」只对**冲突**成立。后端不可达时状态根本没变，
+        // 而用户点的是「通过 / 驳回」——那一下没生效，必须说。
+        setErr(`没成功：${humanErr(e)}`)
       } finally {
         setWfrBusy(null)
         refreshTasks()
@@ -1227,8 +479,10 @@ export default function WorkPage() {
     try {
       await api.installMeetingPreset()
       refreshTasks()
-    } catch {
-      /* 装不上就什么都不变 */
+    } catch (e) {
+      // 原来是空 catch，注释写「装不上就什么都不变」——**UI 上真的什么都不变**，
+      // 用户只会以为按钮坏了。装了要说、装不上更要说。
+      setErr(`会议流程装不上：${humanErr(e)}`)
     } finally {
       setPresetBusy(false)
     }
@@ -1241,8 +495,10 @@ export default function WorkPage() {
     try {
       await api.installVoicePreset()
       refreshTasks()
-    } catch {
-      /* 装不上就什么都不变 */
+    } catch (e) {
+      // 原来是空 catch，注释写「装不上就什么都不变」——**UI 上真的什么都不变**，
+      // 用户只会以为按钮坏了。装了要说、装不上更要说。
+      setErr(`会议流程装不上：${humanErr(e)}`)
     } finally {
       setVoiceBusy(false)
     }
@@ -1263,16 +519,24 @@ export default function WorkPage() {
     setWorkThread(null)
     try {
       const r = await api.installWorkPreset()
-      const step1 = r.tasks.find((x) => x.name === '工作·调研')
+      // **认链头，不认名字**。原来是 `find((x) => x.name === '工作·调研')`——preset 里的
+      // 任务名一改（那是后端的事），这个 find 会静默返回 undefined，用户只看到
+      // 「装不出第一步」，没人知道是前端硬编码的名字过期了。
+      // 链头 = **没有任何一条把它当作下游**的那一步；这是链本身的结构，不是名字。
+      const downstream = new Set(
+        r.tasks.map((x) => x.chain_next_id).filter((x): x is number => x != null)
+      )
+      const step1 = r.tasks.find((x) => !downstream.has(x.id)) ?? r.tasks[0]
       if (!step1) {
-        setWorkMsg('装不出第一步，去「引擎」标签看看。')
+        setWorkMsg('装不出第一步——preset 返回了空的任务清单。')
         return
       }
       const ran = await api.runTask(step1.id, t, t)
       setWorkTopic('')
       setWorkOpen(false)
       setWorkThread(ran.thread ? { id: ran.thread.id, name: ran.thread.name } : null)
-      setWorkMsg('调研跑起来了——跑完停下，去「引擎」标签通过。')
+      // 按钮本来就在这一页（「自动化」＝原「引擎」），别再把人支使到别处去
+      setWorkMsg('调研跑起来了——跑完会在这页停下等你通过。')
       refreshTasks()
     } catch (e) {
       setWorkMsg(e instanceof Error ? e.message : String(e))
@@ -1280,314 +544,163 @@ export default function WorkPage() {
       setWorkBusy(false)
     }
   }, [workTopic, refreshTasks])
-
-  /** 搜一条自己的材料钉进这次产出——检索命中的 `spec` 后端认（vault 路径 / repo: / dir:）。 */
-  const searchPin = useCallback(async () => {
-    const q = pinQuery.trim()
-    if (!q) return
-    setPinBusy(true)
-    try {
-      setPinHits((await api.searchMaterial(q)).hits)
-    } catch {
-      setPinHits([])
-    } finally {
-      setPinBusy(false)
-    }
-  }, [pinQuery])
-
-  const addPin = useCallback((h: MaterialHit) => {
-    if (!h.spec) return
-    setPinned((cur) =>
-      cur.some((p) => p.spec === h.spec) ? cur : [...cur, { spec: h.spec, title: h.title || h.spec }]
-    )
-    setPinOpen(false)
-    setPinHits([])
-    setPinQuery('')
-  }, [])
-
-  /** 改写成：拿一件产出当**钉住材料**，开交付流换个体裁重写（周报 / 短稿 / 一页纸提案）。
-   *  J4 的缺口——产出别只躺在清单里，要能变成「交得出去的那一版」。 */
-  const rewriteAs = useCallback((o: WorkOutput) => {
-    setTab('output')
-    setGenOpen(true)
-    setTopic(`把《${o.title}》改写成`)
-    setPinned([{ spec: o.path, title: o.title }])
-    setReport(null)
-    setDraft(null)
-    setSaved('')
-    setMsg('')
-    window.scrollTo({ top: 0 })
-  }, [])
-
-  const run = useCallback(async () => {
-    const t = topic.trim()
-    if (!t || busy || !genre || !audience) return
-    abort.current?.abort()
-    const ctl = new AbortController()
-    abort.current = ctl
-    setBusy(true)
-    setReport(null)
-    setDraft(null)
-    setSaved('')
-    setInjected([])
-    setMsg('取材中…')
-    try {
-      const r = await streamDeliver(
-        t,
-        genre,
-        audience,
-        (event, data) => {
-          if (event === 'gathering') setMsg('在你自己的材料里找…')
-          else if (event === 'sources') setMsg('材料到手，开始写…')
-          else if (event === 'skills')
-            // S1：命中即注入。只说事实——没命中这一帧根本不发
-            setInjected(((data.skills ?? []) as unknown[]).map(String))
-          else if (event === 'writing') setMsg('成文中…')
-          else if (event === 'draft')
-            // draft 一帧帧来，正文边生成边渲染；`report` 到了才算数
-            setDraft({
-              title: String(data.title ?? ''),
-              sections: (data.sections ?? []) as ReportDraft['sections'],
-            })
-        },
-        ctl.signal,
-        pinned.map((p) => p.spec)
-      )
-      if (r.ok && r.report) {
-        setReport(r.report)
-        setMsg('')
-      } else {
-        setMsg(r.error || '成文失败')
-      }
-    } catch (e) {
-      if (!ctl.signal.aborted) setMsg(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }, [topic, genre, audience, busy, pinned])
-
-  const save = useCallback(async () => {
-    if (!report || busy || saved) return
-    setBusy(true)
-    try {
-      const r = await api.deliverSave({
-        title: report.title,
-        sections: report.sections,
-        used: report.used,
-        sources: report.sources,
-        // M5：体裁与读者一起存进文件头——「这份是给谁写的」以前存完就丢了，
-        // 而交付的事后见证（`deliverWitness`）要靠它说清「交给谁的那份」。
-        genre,
-        audience,
-      })
-      setSaved(r.filename)
-      refreshOutputs()
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }, [report, busy, saved, refreshOutputs])
-
-  const shown = filter ? outputs.filter((o) => o.kind === filter) : outputs
-  const present = KINDS.filter((k) => outputs.some((o) => o.kind === k.kind))
   const nameOf = (id: number | null) =>
     id == null ? '' : (tasks.find((t) => t.id === id)?.name ?? '')
-
-  function openPath(rel: string) {
-    navigate(`/notes?path=${encodeURIComponent(rel)}`)
-  }
+  /** 停在人工卡点上、等你放行的那些步（方案 §8.3：置顶横幅）。 */
+  const waiting = tasks.filter((t) => t.awaiting_run_id != null)
+  /** 清单顺序：**待放行的排最前**（方案 §8.3），其余保持后端给的顺序。
+   *  用 sort 而不是两次 filter 拼接：两次拼接会丢掉「后端顺序」这个稳定前提。 */
+  const orderedTasks = [...tasks].sort((a, b) => {
+    const aw = a.awaiting_run_id != null ? 0 : 1
+    const bw = b.awaiting_run_id != null ? 0 : 1
+    return aw - bw
+  })
 
   return (
     <PageShell
       title="工作"
-      description="写一份交付、跑后台流程、跟进一件事——干活这条线。"
+      description={WORK_DESC[tab]}
+      // 方案 §8.3：三块统计砖**并入页头 stats**——它们是「这台机器现在什么状态」，
+      // 埋在折叠区里等于每次都要先展开才看得见。砖本身仍是 §七 说的 `<StatTile>`。
+      stats={
+        tab === 'workflow' && pulse ? (
+          <div className="flex flex-wrap gap-3 pt-2">
+            <StatTile
+              icon={<Cpu className="h-3.5 w-3.5" />}
+              accent="bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300"
+              label="工作流"
+              value={pulse.tasks}
+              sub={pulse.waiting > 0 ? `${pulse.waiting} 条在等点头` : undefined}
+            />
+            <StatTile
+              icon={<Activity className="h-3.5 w-3.5" />}
+              accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300"
+              label="30 天成功率"
+              value={pulse.rate}
+              sub={pulse.runs30d > 0 ? `${pulse.runs30d} 次运行` : undefined}
+            />
+            <StatTile
+              icon={<HeartPulse className="h-3.5 w-3.5" />}
+              accent="bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"
+              label="后台作业"
+              value={pulse.jobs ? pulse.jobs.normal : null}
+              sub={
+                pulse.jobs
+                  ? `共 ${pulse.jobs.total} 个${pulse.jobs.failing ? ` · 连挂 ${pulse.jobs.failing}` : ''}`
+                  : undefined
+              }
+            />
+          </div>
+        ) : undefined
+      }
+      // 方案 §七：内容区 `space-y-4`。**间距归容器管，不归每个区块自己管**——
+      // 原来是每块各写一个 `mb-6`，于是「两块之间到底多远」要读完所有区块才知道，
+      // 而且条件渲染（`? : null`）一多，空隙就会在没人注意的时候叠起来。
+      bodyClassName="space-y-4"
       actions={
-        catalogue ? (
+        /* **页头主操作按档换**。原来它在每一档都写着「写一份交付」——
+           在提示词那一档点下去会跳去交付，是「按钮说的」和「按钮做的」对不上。
+           现在三档各有自己的主操作（方案 §8.1/§8.3：主操作一个实心按钮）。 */
+        tab === 'prompt' ? (
+          <button
+            onClick={() => setPromptNewSignal((n) => n + 1)}
+            className="shrink-0 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+          >
+            ＋ 新建提示词
+          </button>
+        ) : tab === 'workflow' ? (
+          <button
+            onClick={() => setWorkOpen(true)}
+            className="shrink-0 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+          >
+            起一个题目
+          </button>
+        ) : tab === 'thread' ? (
+          <button
+            onClick={() => setThreadNewSignal((n) => n + 1)}
+            className="shrink-0 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+          >
+            ＋ 新的一件事
+          </button>
+        ) : (
+          /* 报告页的主操作（方案 §8.1）。**实心 teal**——它是这一页的主操作，
+             不是次要动作（契约：主操作一个实心按钮，其余收为次要）。
+             点它：当前不在报告档就先切过去，再推一个信号让生成面板展开。
+             按钮字面**不跟着面板开合变**：面板的开合状态归 `ReportPage` 自己，
+             为了改一个按钮字而把状态提上来，是拿两处的耦合换四个字。 */
           <button
             onClick={() => {
-              if (tab !== 'output') setTab('output')
-              setGenOpen((v) => !v)
+              if (tab !== 'report') setTab('report')
+              setReportNewSignal((n) => n + 1)
             }}
-            className="shrink-0 rounded-xl border border-teal-300 px-3 py-1.5 text-xs text-teal-700 transition-colors hover:bg-teal-50 dark:border-teal-700 dark:text-teal-300 dark:hover:bg-teal-500/10"
+            className="shrink-0 rounded-md bg-teal-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-teal-700"
           >
-            {genOpen && tab === 'output' ? '收起' : '写一份交付'}
+            写一份报告
           </button>
-        ) : null
+        )
       }
     >
       {/* 那排标签（产出 / 引擎 / 实验室 / 形态 / 调度台 / 跟进）已经搬到**侧栏**
           （2026-09-18 导航改版）：同一件事不留两个入口，页面上只剩内容。
-          切页仍然走 `?tab=`，所以旧书签、深链、`/threads` → `/work?tab=follow` 都不破。 */}
-      {tab === 'output' && genOpen && catalogue ? (
-        <section className="mb-6 rounded-xl border border-teal-200 bg-teal-50/40 p-4 dark:border-teal-500/30 dark:bg-teal-500/10">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {catalogue.genres.map((g) => (
-              <button
-                key={g.id}
-                onClick={() => setGenre(g.id)}
-                className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
-                  genre === g.id
-                    ? KIND_BADGE.deliver
-                    : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
-                }`}
-              >
-                {g.label}
-              </button>
-            ))}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-neutral-400">读者</span>
-            {catalogue.audiences.map((a) => (
-              <button
-                key={a.id}
-                onClick={() => setAudience(a.id)}
-                className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
-                  audience === a.id
-                    ? 'border-teal-400 text-teal-700 dark:border-teal-600 dark:text-teal-300'
-                    : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
-                }`}
-              >
-                {a.label}
-              </button>
-            ))}
-          </div>
+          切页仍然走 `?tab=`，所以旧书签、深链、`/threads` → `/work?tab=thread` 都不破。 */}
 
-          <div className="mt-3 flex gap-2">
-            <input
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void run()
-              }}
-              placeholder="写什么？（例：这周的 RAG 调研）"
-              className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-neutral-400 focus:border-teal-400 dark:border-neutral-700 dark:bg-neutral-900"
-            />
-            <button
-              onClick={() => void run()}
-              disabled={!topic.trim() || busy}
-              className="shrink-0 rounded-xl bg-teal-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-teal-700 disabled:opacity-40"
-            >
-              {busy ? '生成中…' : '生成'}
-            </button>
-          </div>
-
-          {/* 「加进这次产出」（§4-14）：钉进来的材料排在取材结果最前 */}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {pinned.map((p) => (
-              <span
-                key={p.spec}
-                title={p.spec}
-                className="flex items-center gap-1 rounded-full border border-teal-300 px-2 py-0.5 text-[11px] text-teal-700 dark:border-teal-600 dark:text-teal-300"
-              >
-                {p.title}
+      {/* 方案 §8.3：**等你放行置顶**（仿 GitHub Actions 的 Waiting + Review deployments）。
+          停在卡点上的步骤是此刻唯一非做不可的事，摆在清单顶上就地放行，
+          省掉「先去清单里找到那一行」。没有待放行时整块不出现。 */}
+      {tab === 'workflow' && waiting.length > 0 ? (
+        <section
+          data-waiting-banner
+          className="rounded-lg border border-amber-300 bg-amber-50/60 p-4 dark:border-amber-500/40 dark:bg-amber-500/10"
+        >
+          <h2 className="pb-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
+            {waiting.length} 步等你放行
+          </h2>
+          <ul className="divide-y divide-amber-200/70 dark:divide-amber-500/20">
+            {waiting.map((t) => (
+              <li key={t.id} className="flex flex-wrap items-center gap-2 py-2">
+                <span className="min-w-0 flex-1 truncate text-sm text-neutral-700 dark:text-neutral-200">
+                  {t.name}
+                  {nameOf(t.chain_next_id) ? (
+                    <span className="pl-1.5 text-xs text-neutral-400">
+                      → {nameOf(t.chain_next_id)}
+                    </span>
+                  ) : null}
+                </span>
+                {t.last_result ? (
+                  <span
+                    className="min-w-0 max-w-[280px] truncate text-xs text-neutral-500"
+                    title={t.last_result}
+                  >
+                    {t.last_result}
+                  </span>
+                ) : null}
                 <button
-                  onClick={() => setPinned((c) => c.filter((x) => x.spec !== p.spec))}
-                  title="取消钉住"
-                  className="text-teal-500 hover:text-rose-500"
+                  onClick={() => void review(t.id, t.awaiting_run_id!, true)}
+                  disabled={wfrBusy === t.awaiting_run_id}
+                  className="shrink-0 rounded-full border border-emerald-300 px-2.5 py-0.5 text-xs text-emerald-700 transition-colors hover:bg-emerald-50 disabled:opacity-40 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
                 >
-                  ✕
+                  通过
                 </button>
-              </span>
-            ))}
-            <button
-              onClick={() => setPinOpen((v) => !v)}
-              className="rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 transition-colors hover:border-teal-300 hover:text-teal-600 dark:border-neutral-700 dark:text-neutral-400"
-            >
-              {pinOpen ? '收起' : '＋ 钉一条材料'}
-            </button>
-          </div>
-          {pinOpen ? (
-            <div className="mt-2">
-              <div className="flex gap-2">
-                <input
-                  autoFocus
-                  value={pinQuery}
-                  onChange={(e) => setPinQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void searchPin()
-                  }}
-                  placeholder="在你自己的材料里搜一条…"
-                  className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-[11px] outline-none placeholder:text-neutral-400 focus:border-teal-400 dark:border-neutral-700 dark:bg-neutral-900"
-                />
                 <button
-                  onClick={() => void searchPin()}
-                  disabled={pinBusy || !pinQuery.trim()}
-                  className="shrink-0 rounded-lg border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+                  onClick={() => void review(t.id, t.awaiting_run_id!, false)}
+                  disabled={wfrBusy === t.awaiting_run_id}
+                  className="shrink-0 rounded-full border border-neutral-300 px-2.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800"
                 >
-                  {pinBusy ? '搜…' : '搜'}
+                  驳回
                 </button>
-              </div>
-              {pinHits.length > 0 ? (
-                <ul className="mt-1.5 space-y-0.5">
-                  {pinHits.map((h) => (
-                    <li key={h.spec || h.source}>
-                      <button
-                        onClick={() => addPin(h)}
-                        title={h.text}
-                        className="block w-full truncate rounded px-1.5 py-1 text-left text-[11px] text-neutral-600 transition-colors hover:bg-teal-50 hover:text-teal-700 dark:text-neutral-300 dark:hover:bg-teal-500/10"
-                      >
-                        {h.title || h.source}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
-
-          {msg ? <p className="mt-2 text-[11px] text-neutral-500">{msg}</p> : null}
-
-          {injected.length ? (
-            <InjectedLine
-              names={injected}
-              className="mt-2 block text-[11px] text-teal-700 dark:text-teal-300"
-            />
-          ) : null}
-
-          {report || draft ? (
-            <div className="mt-3 rounded-lg border border-teal-200/70 bg-white p-3 dark:border-teal-500/20 dark:bg-neutral-900/60">
-              <Markdown sources={report?.sources}>{reportMarkdown(report ?? draft!)}</Markdown>
-              {report ? (
-                <SourceList
-                  sources={report.sources}
-                  used={report.used}
-                  className="border-teal-200/70 dark:border-teal-500/20"
-                />
-              ) : null}
-            </div>
-          ) : null}
-
-          {report ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => void save()}
-                disabled={busy || !!saved}
-                className="rounded-full border border-teal-300 px-2.5 py-0.5 text-[11px] text-teal-700 transition-colors hover:bg-teal-100 disabled:opacity-40 dark:border-teal-600 dark:text-teal-300 dark:hover:bg-teal-500/20"
-              >
-                {saved ? '已存进 vault' : busy ? '保存中…' : '存进 vault'}
-              </button>
-              {saved ? (
-                <span className="text-[11px] text-emerald-600 dark:text-emerald-400">已存到 {saved}</span>
-              ) : null}
-              <FeedbackButtons
-                kind="deliver"
-                promptSha={report.prompt_sha}
-                modelId={report.model_id}
-                artifactRef={saved}
-                // 这一页说得出「有没有注入」：流走完了，`injected` 就是那一次的答案
-                injected={injected}
-              />
-            </div>
-          ) : null}
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
 
-      {tab === 'engine' ? (
+      {tab === 'workflow' ? (
       <>
       {/* 处理一项工作：给一个题目，三步（调研 → 方案 → 汇报稿）各跑各的、各停下等点头。
-          这是「工作」作为一条线的正面入口——不必先去设置里拼任务。 */}
-      <section className="wb-card-hero mb-6 rounded-2xl p-4">
+          这是「工作」作为一条线的正面入口——不必先去设置里拼任务。
+          `p-5`：方案 §8.3 给 hero 定的是这个（§七 也写着「页面主入口/hero `wb-card-hero p-5`」），
+          与报告页那块生成面板同一个档。 */}
+      <section className="wb-card-hero rounded-lg p-5">
         <div className="flex items-center justify-between gap-3 pb-2">
           <h2 className="flex items-center gap-2.5 text-sm font-semibold text-neutral-800 dark:text-neutral-100">
             <span className="wb-chip h-7 w-7 rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300">
@@ -1628,6 +741,7 @@ export default function WorkPage() {
           </div>
         ) : (
           <button
+            data-open-work
             onClick={() => setWorkOpen(true)}
             className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-violet-500"
           >
@@ -1641,7 +755,7 @@ export default function WorkPage() {
           <p className="pt-1 text-xs text-neutral-500">
             产物会挂到「
             <Link
-              to={`/work?tab=follow&thread=${workThread.id}`}
+              to={`/work?tab=thread&thread=${workThread.id}`}
               className="text-violet-600 hover:underline dark:text-violet-400"
             >
               {workThread.name}
@@ -1651,7 +765,7 @@ export default function WorkPage() {
         ) : null}
       </section>
 
-      <section className="mb-6">
+      <section>
         <div className="flex items-baseline justify-between pb-1">
           <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">工作流</h2>
           <span className="text-xs text-neutral-400">跑完带接地分 —— 「跑成功但变差」只有它看得见</span>
@@ -1666,7 +780,7 @@ export default function WorkPage() {
                 <button
                   onClick={() => void installPreset()}
                   disabled={presetBusy}
-                  className="rounded-xl border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+                  className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
                 >
                   {presetBusy ? '正在装…' : '装一条会议流程'}
                 </button>
@@ -1676,7 +790,7 @@ export default function WorkPage() {
                   data-install-voice
                   onClick={() => void installVoice()}
                   disabled={voiceBusy}
-                  className="rounded-xl border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+                  className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
                 >
                   {voiceBusy ? '正在装…' : '装一条语音备忘'}
                 </button>
@@ -1684,18 +798,20 @@ export default function WorkPage() {
             }
           />
         ) : (
-          <ul className="wb-card divide-y divide-neutral-100 px-4 dark:divide-neutral-800/70">
-            {tasks.map((t) => (
+          <ul className="wb-card divide-y divide-neutral-100 dark:divide-neutral-800/70">
+            {orderedTasks.map((t) => (
               <WorkflowRow
                 key={t.id}
                 task={t}
                 nextName={nameOf(t.chain_next_id)}
                 open={openRuns === t.id}
                 runs={runs}
+                rate={taskStats[String(t.id)]}
+                lastRun={lastRuns[String(t.id)]}
                 busy={wfBusy === t.id}
                 reviewBusy={wfrBusy === t.awaiting_run_id}
                 onToggle={() => void toggleRuns(t.id)}
-                onRerun={() => void rerun(t.id)}
+                onRerun={(topic) => void rerun(t.id, topic)}
                 onReview={(approve) => {
                   if (t.awaiting_run_id != null) void review(t.id, t.awaiting_run_id, approve)
                 }}
@@ -1707,14 +823,8 @@ export default function WorkPage() {
       </>
       ) : null}
 
-      {/* 2026-09-18「内容太少」那一轮：引擎这一档原来只有「交付 + 工作流清单」，
-          量下来整页 175 字——全站最空的一页。补两块**这台机器上已经有的事实**：
-          最近几次运行（`/api/tasks` 的运行记录，与工作流行里那份同一来源）、
-          八个后台作业的健康（`/api/health/jobs`）。各自 catch，读不到就不摆。 */}
-      {tab === 'engine' ? <EnginePulse /> : null}
-
-      {tab === 'engine' && meetings.length > 0 ? (
-        <section className="mb-6">
+      {tab === 'workflow' && meetings.length > 0 ? (
+        <section>
           <div className="flex items-baseline justify-between pb-1">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">会议</h2>
             <span className="text-xs text-neutral-400">一场一个文件夹，原声留着可回听</span>
@@ -1726,7 +836,7 @@ export default function WorkPage() {
                   <span className="min-w-0 flex-1 truncate text-sm text-neutral-700 dark:text-neutral-200">
                     {m.title}
                   </span>
-                  <span className="shrink-0 text-[11px] text-neutral-400">{m.date.slice(5)}</span>
+                  <span className="shrink-0 text-xs text-neutral-400">{m.date.slice(5)}</span>
                 </div>
                 {m.audio ? (
                   <audio
@@ -1738,14 +848,14 @@ export default function WorkPage() {
                 ) : null}
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {m.files.map((f) => (
-                    <button
+                    <Link
                       key={f.path}
-                      onClick={() => openPath(f.path)}
+                      to={`/notes?path=${encodeURIComponent(f.path)}`}
                       title={f.path}
-                      className="rounded-full border border-neutral-200 px-2.5 py-0.5 text-[11px] text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300"
+                      className="rounded-full border border-neutral-200 px-2.5 py-0.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300"
                     >
                       {f.title}
-                    </button>
+                    </Link>
                   ))}
                 </div>
               </li>
@@ -1754,104 +864,120 @@ export default function WorkPage() {
         </section>
       ) : null}
 
-      {tab === 'output' && err ? (
-        <p className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-          产出清单拉不出来：{err}
+      {/* 方案 §8.3 的排列：**清单是主体**，这两块排在它后面、**默认收起**，
+          于是首屏只剩「等你放行 + 起题目 + 清单」。
+          EnginePulse 给统计砖（工作流数 / 30 天成功率 / 后台作业）与作业健康；
+          DispatchPanel 是「谁在跑、卡在哪」。两者都是「想查才看」。 */}
+      {tab === 'workflow' ? (
+        <Fold title="运行视图 · 谁在跑、卡在哪">
+          <DispatchPanel />
+        </Fold>
+      ) : null}
+
+      {tab === 'workflow' ? (
+        <Fold title="后台作业" hint="这台机器上常驻的那几个，以及最近几次运行">
+          <EnginePulse
+            tasks={tasks}
+            lastRuns={lastRuns}
+            onTaskStats={setTaskStats}
+            onPulse={setPulse}
+          />
+        </Fold>
+      ) : null}
+
+      {/* 页级错误条。**不按 tab 门控**——原来它只在「交付」档渲染，于是别的档里
+          `setErr` 写进去却永远不显示：错误被静默吞掉，切回那一档还会突然弹一条陈旧的。
+          文案也不再写死「产出清单拉不出来」：现在它要报的重跑失败、放行失败、
+          装流程失败、搜材料失败……**说话的是写入方**，这里只管显示。 */}
+      {err ? (
+        <p
+          data-work-err
+          className="flex items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300"
+        >
+          <span className="min-w-0">{err}</span>
+          <button
+            onClick={() => setErr('')}
+            className="shrink-0 text-xs text-rose-500 underline hover:text-rose-700 dark:hover:text-rose-200"
+          >
+            知道了
+          </button>
         </p>
       ) : null}
 
-      {tab === 'output' ? (
-      <section>
-        <div className="flex items-baseline justify-between gap-3 pb-2">
-          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">产出</h2>
-          {/* 去哪做——这里的产出是**归宿**，不是起点。交付在上面就地写，
-              其余三个引擎在学页、复盘在仪表盘。做成可点的，别只是句说明。 */}
-          <span className="text-[11px] text-neutral-400">
-            研究 / 方案 / 对质 在
-            <Link to="/tutor" className="text-violet-500 hover:underline">
-              学
-            </Link>
-            · 复盘在
-            <Link to="/dashboard" className="text-violet-500 hover:underline">
-              仪表盘
-            </Link>
-          </span>
-        </div>
 
-        {present.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1.5 pb-4">
-            <button
-              onClick={() => setFilter('')}
-              className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
-                filter === ''
-                  ? 'border-neutral-400 text-neutral-700 dark:border-neutral-500 dark:text-neutral-200'
-                  : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
-              }`}
-            >
-              全部 {outputs.length}
-            </button>
-            {present.map((k) => (
-              <button
-                key={k.kind}
-                onClick={() => setFilter(k.kind)}
-                className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
-                  filter === k.kind
-                    ? KIND_BADGE[k.kind]
-                    : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400'
-                }`}
-              >
-                {k.label} {outputs.filter((o) => o.kind === k.kind).length}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        {outputs.length === 0 ? (
-          <EmptyHint
-            pad="lg"
-            title="还没有产出。"
-            hint="在上面「写一份交付」，或去「学」「仪表盘」跑一轮；成品会自动落到这里。"
-          />
-        ) : (
-          <ul className="divide-y divide-neutral-100 dark:divide-neutral-800/70">
-            {shown.map((o) => (
-              <li key={o.path}>
-                <OutputCard
-                  kind={o.kind}
-                  label={o.label}
-                  title={o.title}
-                  meta={o.path}
-                  onOpen={() => openPath(o.path)}
-                  actions={
-                    <>
-                      <button
-                        onClick={() => rewriteAs(o)}
-                        title="拿它当材料，换个体裁重写（周报 / 短稿 / 一页纸提案）"
-                        className="hidden shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-violet-300 hover:text-violet-600 group-hover:block dark:border-neutral-700 dark:text-neutral-400"
-                      >
-                        改写成
-                      </button>
-                      <AttachToThread
-                        kind="output"
-                        ref={o.path}
-                        className="hidden shrink-0 group-hover:block"
-                      />
-                      <span className="text-[11px] text-neutral-400">{o.date.slice(5)}</span>
-                    </>
-                  }
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* 报告 = 生成面板 + 报告清单 + 阅读视图，整域在 ReportPage.tsx */}
+      {tab === 'report' ? (
+        <ReportPage
+          newSignal={reportNewSignal}
+          outputs={outputs}
+          refresh={refreshOutputs}
+          onError={setErr}
+        />
       ) : null}
+      {tab === 'thread' ? (
+        <ThreadsPage
+          chromeless
+          newSignal={threadNewSignal}
+          /* 就地起工作链（方案 §8.4）：把事名带过去预填题目，然后切到工作流页——
+             **只预填、不起链**：起链要花模型钱，最后那一下得由人按。 */
+          onStartWork={(name) => {
+            setWorkTopic(name)
+            setWorkOpen(true)
+            setWorkMsg('')
+            setTab('workflow')
+          }}
+        />
+      ) : null}
+      {/* 提示词页 = 五区同页（方案 §8.2）：库 / 对打 / 评测 / 技能 / 数据形态。
+          前三区里的「库 + 对打」在 `PromptLibrary` 里（那两区本来就归它），
+          后三块是现成组件原样并入——**不把它们 import 进 PromptLibrary**：
+          那会凭空造一个「谁编排谁」的耦合，而它们的家各自清楚。
 
-      {tab === 'follow' ? <ThreadsPage chromeless /> : null}
-      {tab === 'lab' ? <PromptLab /> : null}
-      {tab === 'lab' ? <CapabilityCandidate /> : null}
-      {tab === 'form' ? <FormPane /> : null}
-      {tab === 'dispatch' ? <DispatchPanel /> : null}
+          锚点导航放在这一层，因为**五区的挂载点在这里**；id 与 `PROMPT_SECTIONS`
+          同一份定义（两处各写一份的那天，点了没反应还没人报错）。 */}
+      {tab === 'prompt' ? (
+        <>
+          <nav
+            data-prompt-sections
+            className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-1.5 bg-white/95 px-1 py-2 backdrop-blur dark:bg-neutral-950/95"
+          >
+            {PROMPT_SECTIONS.map((s) => (
+              <a
+                key={s.id}
+                href={`#${s.id}`}
+                className="rounded-full border border-neutral-200 px-2.5 py-0.5 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-600 dark:hover:text-violet-300"
+              >
+                {s.label}
+              </a>
+            ))}
+          </nav>
+
+          {/* 库与对打两块在 `PromptLibrary` 里渲染（对打要用它手上那份提示词清单，
+              所以只能在那儿）——它们的 id 因此也**跟着各自的内容走**，写在
+              `PromptLibrary` / `PromptDuel` 里。`PROMPT_SECTIONS` 是这五个 id 的清单，
+              而 `WorkPage.test` 与 `PromptLibrary.test` 各查自己拥有的那几个。 */}
+          <div id="prompt-lib" className="scroll-mt-14">
+            <PromptLibrary newSignal={promptNewSignal} />
+          </div>
+          <PromptSection
+            id="prompt-eval"
+            title="评测"
+            sub="系统提示词的对照台——改了有没有变好，拿金标题量"
+          >
+            <PromptLab />
+          </PromptSection>
+          <PromptSection
+            id="prompt-skill"
+            title="技能草稿"
+            sub="把材料读成 SKILL.md 草稿，跑过对照才算数"
+          >
+            <CapabilityCandidate />
+          </PromptSection>
+          <PromptSection id="prompt-form" title="数据形态" sub="金标题集的领域分布">
+            <FormPane />
+          </PromptSection>
+        </>
+      ) : null}
     </PageShell>
   )
 }

@@ -1,4 +1,4 @@
-/** 成长页：把「你和这件事的关系」摆一屏 —— 学习 / 工作 / 习惯三条线的积累。
+﻿/** 成长页：把「你和这件事的关系」摆一屏 —— 学习 / 工作 / 习惯三条线的积累。
  *
  *  这一页的数据**全部是派生、全部是累计**（`pet.growth` + 掌握事件 + 习惯 + 产出 +
  *  小屋的里程碑），所以它只会往上走。刻意没有「还欠 N 个」「连续 0 天」这种欠债口吻
@@ -135,7 +135,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
           「哪条线在养它」一张图说完。卡上只写累计与「正在靠近」，不写「还差 N」。 */}
       <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
         <section
-          className={`wb-card-hero flex items-center gap-5 rounded-2xl p-5 ${
+          className={`wb-card-hero flex items-center gap-5 rounded-lg p-5 ${
             hasAnything && growth.parts.length > 0 ? 'xl:col-span-8' : 'xl:col-span-12'
           }`}
         >
@@ -170,7 +170,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
         {hasAnything && growth.parts.length > 0 ? (
           <section className="wb-card flex flex-col p-4 xl:col-span-4">
             <h2 className="pb-1 text-sm font-semibold text-neutral-700 dark:text-neutral-200">EXP 来源</h2>
-            <p className="pb-1 text-[11px] text-neutral-400">哪条线在养它</p>
+            <p className="pb-1 text-xs text-neutral-400">哪条线在养它</p>
             <div className="min-h-0 flex-1">
               <EChart
                 height={Math.max(140, growth.parts.length * 40)}
@@ -221,7 +221,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
               <div className="mt-1 text-2xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">
                 +{p.exp}
               </div>
-              <div className="mt-0.5 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+              <div className="mt-0.5 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
                 {partDetail(p.key, growth.counts)}
               </div>
             </div>
@@ -253,10 +253,10 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
                   <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
                     <span>{t.icon}</span>
                     <span className="text-neutral-700 dark:text-neutral-200">{t.label}</span>
-                    <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                    <span className="text-xs text-neutral-400 dark:text-neutral-500">
                       {t.detail}
                     </span>
-                    <span className="ml-auto shrink-0 text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+                    <span className="ml-auto shrink-0 text-xs tabular-nums text-neutral-400 dark:text-neutral-500">
                       {t.at.slice(0, 10)}
                     </span>
                   </div>
@@ -285,7 +285,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
                 <li key={e.concept} className="flex items-center gap-2 px-4 py-2.5 text-sm">
                   <span className="text-neutral-700 dark:text-neutral-200">{e.concept}</span>
                   {e.from_half && (
-                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400">
+                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400">
                       从半懂到懂
                     </span>
                   )}
@@ -398,7 +398,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
             <ul className="-mx-4 divide-y divide-neutral-100 dark:divide-neutral-800/70">
               {outputs.map((o) => (
                 <li key={o.path} className="flex items-center gap-2 px-4 py-2.5 text-sm">
-                  <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                  <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
                     {o.label}
                   </span>
                   <span className="truncate text-neutral-700 dark:text-neutral-200">{o.title}</span>
