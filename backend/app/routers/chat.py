@@ -311,16 +311,72 @@ def _replay_message(m: Message) -> dict:
     return {"role": m.role, "content": content}
 
 
-async def _generate(req: ChatRequest):
+class _SseAbort(Exception):
+    """回合准备阶段的终止：等价于原来的 `yield error + return`（CTO review #4）。
+
+    只在 `_prepare_turn` 里用——它要开自己的 db 会话，没法在会话作用域里 yield。
+    调用方把它转回一帧 error 事件，对外协议一个字没变。
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+@dataclass
+class _TurnSetup:
+    """`_prepare_turn` 的产物：后续阶段需要的全部会话级事实。"""
+
+    conv: Conversation
+    model_id: str
+    agent: object | None
+    query_text: str
+    history: list
+    draft: dict | None
+    resolved: ResolvedModel
+
+
+@dataclass
+class _AssembledContext:
+    """`_assemble_context` 的产物：最终 llm_messages + 后续阶段要用的开关与结论。
+
+    `events` 是**保序**的信息性事件（compacted / images_attached / context_files），
+    由调用方按原顺序 yield——它们都发生在工具循环开始之前，不存在与 delta 的交错。
+    """
+
+    llm_messages: list
+    prefs: dict
+    tools_on: bool
+    profile: dict
+    use_rag: bool
+    route_decision: object
+    memory_on: bool
+    events: list
+
+
+@dataclass
+class _RagOutcome:
+    """`_retrieve_rag` 的产物：检索结果、质量门与通道结论、注入后的 llm_messages、事件。"""
+
+    sources: list
+    gate: object | None
+    chan: object | None
+    llm_messages: list
+    events: list
+
+
+async def _prepare_turn(req: ChatRequest) -> _TurnSetup:
+    """阶段一（原 _generate 开头，CTO review #4 切分 · 纯搬移）：会话/模型/agent 解析、
+    回合账本开表、用户消息落库、历史装载、auto-title、commit。
+    这里要开自己的 db 会话（原 `async with` 层），所以错误以 `_SseAbort` 抛出，
+    由调用方转回一帧 error——对外协议一个字没变。"""
     async with SessionLocal() as db:
         conv = await db.get(Conversation, req.conversation_id)
         if not conv:
-            yield _sse("error", {"message": "conversation not found"})
-            return
+            raise _SseAbort("conversation not found")
         model_id = req.model_id or conv.model_id
         if not model_id:
-            yield _sse("error", {"message": "no model selected"})
-            return
+            raise _SseAbort("no model selected")
 
         agent = None
         if req.agent_id is not None:
@@ -328,8 +384,7 @@ async def _generate(req: ChatRequest):
 
             agent = await db.get(Agent, req.agent_id)
             if not agent or not agent.enabled:
-                yield _sse("error", {"message": "agent not found"})
-                return
+                raise _SseAbort("agent not found")
             if agent.model_id:  # agent preset may pin a model
                 model_id = agent.model_id
 
@@ -347,14 +402,12 @@ async def _generate(req: ChatRequest):
         try:
             resolved = await resolve_model(model_id)
         except HTTPException as e:
-            yield _sse("error", {"message": e.detail})
-            return
+            raise _SseAbort(e.detail)
 
         # persist user message (unless regenerating — then last user msg stays)
         if not req.regenerate:
             if not req.content.strip():
-                yield _sse("error", {"message": "empty content"})
-                return
+                raise _SseAbort("empty content")
             user_msg = Message(conversation_id=conv.id, role="user", content=req.content)
             db.add(user_msg)
             query_text = req.content
@@ -368,8 +421,7 @@ async def _generate(req: ChatRequest):
                 )
             ).scalar_one_or_none()
             if not last_user:
-                yield _sse("error", {"message": "nothing to regenerate"})
-                return
+                raise _SseAbort("nothing to regenerate")
             query_text = last_user.content
 
         # auto-title from first exchange
@@ -391,16 +443,25 @@ async def _generate(req: ChatRequest):
             while history and history[-1].role == "assistant":
                 history.pop()
         await db.commit()
+    return _TurnSetup(
+        conv=conv, model_id=model_id, agent=agent, query_text=query_text,
+        history=history, draft=draft, resolved=resolved,
+    )
 
-    llm_messages = [_replay_message(m) for m in history]
 
+async def _assemble_context(
+    *, req: ChatRequest, conv, agent, resolved: ResolvedModel,
+    model_id: str, query_text: str, draft: dict | None, llm_messages: list,
+) -> _AssembledContext:
+    """阶段二（原 _generate 中段，CTO review #4 切分 · 纯搬移）：确定性路由、历史压缩、
+    系统块组装（规矩/摘要/全局提示词/agent 人设/记忆/这件事上下文/技能索引）、
+    图片与 # 文件注入。信息性事件走 `events` 保序列表，由调用方按原顺序 yield。"""
     # ---- W3：确定性路由（把「这一轮算不算交付型」从模型手里拿走）----
     # 每级都记决策与依据（level / confidence / reason），写进回合账本，可离线复算。
     # 它现在决定两件事：W2a 的补跑要不要动手，以及账本上这一轮是哪一类。
-    from app.core import length_budget, routing
+    from app.core import routing
 
     route_decision = routing.route(req.content or query_text)
-    turn_budget = length_budget.parse_budget(req.content or query_text)
     if draft is not None:
         draft["route_level"] = route_decision.level
         draft["route_kind"] = route_decision.kind
@@ -410,6 +471,7 @@ async def _generate(req: ChatRequest):
     summary_block: str | None = None
     from app.core import compaction
 
+    events: list[tuple[str, dict]] = []
     if compaction.needs_compaction(llm_messages):
         p0 = resolved.provider
         try:
@@ -423,7 +485,7 @@ async def _generate(req: ChatRequest):
                 timeout=30,
             )
             if kept is not None and len(kept) < len(llm_messages):
-                yield _sse("compacted", {"kept": len(kept), "total": len(llm_messages)})
+                events.append(("compacted", {"kept": len(kept), "total": len(llm_messages)}))
                 llm_messages = kept
         except Exception:  # noqa: BLE001 - compaction must never break chat
             summary_block = None
@@ -498,7 +560,7 @@ async def _generate(req: ChatRequest):
 
     attached_images = _attach_local_images(llm_messages)
     if attached_images:
-        yield _sse("images_attached", {"images": attached_images})
+        events.append(("images_attached", {"images": attached_images}))
 
     # explicit # file attachments: inject whole file(s) as context (full-context mode)
     if req.context_files:
@@ -508,17 +570,28 @@ async def _generate(req: ChatRequest):
                 f"[文件 {rel}]\n{text}" for rel, text in attached
             )
             llm_messages = [{"role": "system", "content": block}] + llm_messages
-            yield _sse("context_files", {"files": [rel for rel, _ in attached]})
+            events.append(("context_files", {"files": [rel for rel, _ in attached]}))
+    return _AssembledContext(
+        llm_messages=llm_messages, prefs=prefs, tools_on=tools_on, profile=profile,
+        use_rag=use_rag, route_decision=route_decision, memory_on=memory_on, events=events,
+    )
 
+
+async def _retrieve_rag(
+    *, req_top_k: int, use_rag: bool, prefs: dict, query_text: str, llm_messages: list,
+) -> _RagOutcome:
+    """阶段三（原 _generate 中段，CTO review #4 切分 · 纯搬移）：通道预判、KG 主通道、
+    混合检索、质量门、fullctx 展开、上下文注入。信息性事件走 `events` 保序列表。"""
     # RAG: retrieve from knowledge base and inject as a system message.
     sources: list[dict] = []
-    if req.top_k != 5:
-        top_k = req.top_k
+    if req_top_k != 5:
+        top_k = req_top_k
     else:
         try:
             top_k = int(prefs.get("rag_top_k") or 5)
         except (TypeError, ValueError):
             top_k = 5
+    events: list[tuple[str, dict]] = []
     rag_gate = None  # 质量门的判定，供 _build_rag_context 用，也记进本轮台账
     chan = None  # 通道预判的结论（P2），同样记进台账
     if use_rag:
@@ -537,12 +610,12 @@ async def _generate(req: ChatRequest):
                 kg_block = ""
             if kg_block:
                 llm_messages = [{"role": "system", "content": kg_block}] + llm_messages
-                yield _sse("kg_used", {"ok": True})
+                events.append(("kg_used", {"ok": True}))
 
         if chan.channel == "skip":
-            yield _sse(
-                "rag_skipped",
-                {"channel": "skip", "level": chan.level, "reason": chan.reason},
+            events.append(
+                ("rag_skipped",
+                 {"channel": "skip", "level": chan.level, "reason": chan.reason})
             )
         elif kg_block:
             pass  # 图谱那条通道已经给了材料，不再跑块检索（「为主」就是这个意思）
@@ -550,11 +623,11 @@ async def _generate(req: ChatRequest):
             if chan.channel == "kg":
                 # 图谱那边没给出东西 → **回退到混合检索**，别让关系型问题空手而归。
                 # 这条也解释了为什么 kg 判错不贵：它的失败是可见的、且自动降级。
-                yield _sse("kg_fallback", {"reason": "图谱没有给出材料，回退混合检索"})
+                events.append(("kg_fallback", {"reason": "图谱没有给出材料，回退混合检索"}))
             try:
                 sources = await indexer_retrieve(query_text, top_k)
             except Exception as e:  # noqa: BLE001 - RAG failure should not break chat
-                yield _sse("rag_error", {"message": f"{type(e).__name__}: {e}"})
+                events.append(("rag_error", {"message": f"{type(e).__name__}: {e}"}))
                 sources = []
             # 质量门判的是**检索**，所以在 fullctx 把片段换成整文件之前跑（那一步会重写文本）
             rag_gate = retrieval_gate.assess(sources)
@@ -569,7 +642,7 @@ async def _generate(req: ChatRequest):
                         pass
                 context = _build_rag_context(sources, quality=rag_gate)
                 llm_messages = [{"role": "system", "content": context}] + llm_messages
-                yield _sse("sources", {"sources": sources})
+                events.append(("sources", {"sources": sources}))
             else:
                 # 一条都没检索到（P2 的边界①，2026-09-20 补齐）：门算出的「没有检索到任何
                 # 材料」原来只进账本，模型那边一个字都没有 —— 它会拿常识硬答，而用户以为
@@ -578,7 +651,7 @@ async def _generate(req: ChatRequest):
                 llm_messages = [
                     {"role": "system", "content": _build_rag_context([], quality=rag_gate)}
                 ] + llm_messages
-                yield _sse("rag_empty", {"reason": rag_gate.reason})
+                events.append(("rag_empty", {"reason": rag_gate.reason}))
 
             # knowledge-graph channel (local Neo4j): entity/relation context on
             # top of chunk RAG — silent no-op when the feature is off or the
@@ -590,8 +663,151 @@ async def _generate(req: ChatRequest):
                     kg_block = ""
                 if kg_block:
                     llm_messages = [{"role": "system", "content": kg_block}] + llm_messages
-                    yield _sse("kg_used", {"ok": True})
+                    events.append(("kg_used", {"ok": True}))
+    return _RagOutcome(
+        sources=sources, gate=rag_gate, chan=chan, llm_messages=llm_messages, events=events,
+    )
 
+
+async def _finish_turn(
+    *, req: ChatRequest, conv, model_id: str, resolved: ResolvedModel, info: ProviderInfo,
+    compare_resolved: ResolvedModel | None, sources: list[dict],
+    saved_by_uid: dict, turn_traces: dict, quality_by_uid: dict, draft: dict | None,
+    status: str, final_text: str, final_usage: dict, answers: dict, usages: dict,
+    llm_messages: list, memory_on: bool, prefs: dict, query_text: str, partial_parts: list,
+):
+    """阶段四（原 _generate 尾段，CTO review #4 切分 · 纯搬移）：助手消息落库、回合账本
+    记账、saved/done 帧、automemory、追问建议；错误路径保留半截正文与已落盘产出。
+    是 async 生成器——调用方 `async for ev in _finish_turn(...): yield ev`。"""
+    if status == "ok":
+        if compare_resolved is not None:
+            # comparison mode: persist each answer tagged with its model
+            for uid, res in answers.items():
+                mid = model_id if uid == "a" else req.compare_model
+                u = usages.get(uid) or {}
+                content = _without_placeholder(res.strip())
+                artifacts = saved_by_uid.get(uid) or []
+                truthful = not claims_a_save_without_one(content, artifacts)
+                if not truthful:
+                    log.warning(
+                        "uid=%s 声称已存入产出，但这一轮没有落盘（conv=%s）", uid, conv.id
+                    )
+                # 判据是「有没有东西可说」而不是「正文非空」：只调工具、正文空着的
+                # 那一轮也有产出要记，否则刷新后这一轮整个消失。
+                msg_id = None
+                if content or artifacts:
+                    msg_id = await _save_assistant_message(
+                        conv.id, content, mid, sources,
+                        tokens_in=u.get("input"), tokens_out=u.get("output"),
+                        artifacts=artifacts,
+                    )
+                await _record_turn(
+                    conv.id, msg_id, mid, turn_traces.get(uid) or {},
+                    content=content, artifacts=artifacts, usage=u, truthful=truthful,
+                    draft=draft, quality=quality_by_uid.get(uid) or {},
+                )
+                yield _sse("saved", {"uid": uid, "message_id": msg_id})
+        else:
+            content = _without_placeholder(final_text or "")
+            artifacts = saved_by_uid.get(None) or []
+            truthful = not claims_a_save_without_one(content, artifacts)
+            if not truthful:
+                log.warning("声称已存入产出，但这一轮没有落盘（conv=%s）", conv.id)
+            msg_id = None
+            if content or artifacts:
+                msg_id = await _save_assistant_message(
+                    conv.id, content, model_id, sources,
+                    tokens_in=final_usage.get("input"), tokens_out=final_usage.get("output"),
+                    artifacts=artifacts,
+                )
+            await _record_turn(
+                conv.id, msg_id, model_id, turn_traces.get(None) or {},
+                content=content, artifacts=artifacts, usage=final_usage, truthful=truthful,
+                draft=draft, quality=quality_by_uid.get(None) or {},
+            )
+            # 把这一轮的 message id 交给界面：它手里的气泡还没有后端 id，而「📄 存进
+            # 产出」那条人工出口是按 id 存的。不交出去，用户得先刷新才能点那一下。
+            yield _sse("saved", {"message_id": msg_id})
+        yield _sse("done", {})
+        # automemory: let the model decide whether this exchange was worth
+        # remembering (Khoj automemory style). Best-effort, after done so the
+        # UI already shows the answer; result surfaces via SSE to a toast.
+        base_answer = (
+            answers.get("a") or answers.get("b") or (final_text or "")
+        ).strip()
+        user_text = (req.content or "").strip() or query_text
+        if (
+            memory_on
+            and prefs.get("automemory_enabled")
+            and not req.regenerate
+            and compare_resolved is None
+            and base_answer
+        ):
+            try:
+                from app.core import memory
+
+                yield _sse("memorizing", {})
+                facts = await asyncio.wait_for(
+                    memory.auto_extract(
+                        info,
+                        resolved.model,
+                        user_text,
+                        base_answer,
+                    ),
+                    timeout=40,
+                )
+                if facts:
+                    yield _sse("memorized", {"facts": facts})
+            except Exception:  # noqa: BLE001 - automemory must never break chat
+                pass
+        # follow-up suggestions: best-effort, after done so UI renders answer first
+        if base_answer and not req.regenerate:
+            try:
+                fups = await _generate_followups(resolved, llm_messages, base_answer)
+                if fups:
+                    yield _sse("followups", {"questions": fups})
+            except Exception:  # noqa: BLE001 - suggestions must never break chat
+                pass
+    else:
+        # provider/tool error — keep whatever text streamed before it failed.
+        # 已经落盘的产出也算数：文件真在 vault 里，界面得能指回去。
+        partial = _without_placeholder(answers.get("a") or "".join(partial_parts) or "")
+        artifacts = saved_by_uid.get(None) or saved_by_uid.get("a") or []
+        if partial or artifacts:
+            await _save_assistant_message(conv.id, partial, model_id, sources, artifacts=artifacts)
+
+
+async def _generate(req: ChatRequest):
+    try:
+        setup = await _prepare_turn(req)
+    except _SseAbort as e:
+        yield _sse("error", {"message": e.message})
+        return
+    conv, model_id, agent = setup.conv, setup.model_id, setup.agent
+    query_text, draft, resolved = setup.query_text, setup.draft, setup.resolved
+    from app.core import length_budget  # 主流程后段还引用它（原有重复 parse，保持原样）
+    llm_messages = [_replay_message(m) for m in setup.history]
+
+    # 上下文组装（阶段二，CTO review #4 切分）：信息性事件保序交还
+    assembled = await _assemble_context(
+        req=req, conv=conv, agent=agent, resolved=resolved, model_id=model_id,
+        query_text=query_text, draft=draft, llm_messages=llm_messages,
+    )
+    llm_messages = assembled.llm_messages
+    prefs, tools_on, profile = assembled.prefs, assembled.tools_on, assembled.profile
+    use_rag, route_decision, memory_on = assembled.use_rag, assembled.route_decision, assembled.memory_on
+    for _ev in assembled.events:
+        yield _sse(*_ev)
+
+    # 检索（阶段三，CTO review #4 切分）：通道预判 / KG / 混合检索 / 质量门
+    rag = await _retrieve_rag(
+        req_top_k=req.top_k, use_rag=use_rag, prefs=prefs,
+        query_text=query_text, llm_messages=llm_messages,
+    )
+    sources, rag_gate, chan = rag.sources, rag.gate, rag.chan
+    llm_messages = rag.llm_messages
+    for _ev in rag.events:
+        yield _sse(*_ev)
     p = resolved.provider
     info = ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key)
 
@@ -1056,102 +1272,16 @@ async def _generate(req: ChatRequest):
         except (asyncio.CancelledError, Exception):
             pass
 
-    if status == "ok":
-        if compare_resolved is not None:
-            # comparison mode: persist each answer tagged with its model
-            for uid, res in answers.items():
-                mid = model_id if uid == "a" else req.compare_model
-                u = usages.get(uid) or {}
-                content = _without_placeholder(res.strip())
-                artifacts = saved_by_uid.get(uid) or []
-                truthful = not claims_a_save_without_one(content, artifacts)
-                if not truthful:
-                    log.warning(
-                        "uid=%s 声称已存入产出，但这一轮没有落盘（conv=%s）", uid, conv.id
-                    )
-                # 判据是「有没有东西可说」而不是「正文非空」：只调工具、正文空着的
-                # 那一轮也有产出要记，否则刷新后这一轮整个消失。
-                msg_id = None
-                if content or artifacts:
-                    msg_id = await _save_assistant_message(
-                        conv.id, content, mid, sources,
-                        tokens_in=u.get("input"), tokens_out=u.get("output"),
-                        artifacts=artifacts,
-                    )
-                await _record_turn(
-                    conv.id, msg_id, mid, turn_traces.get(uid) or {},
-                    content=content, artifacts=artifacts, usage=u, truthful=truthful,
-                    draft=draft, quality=quality_by_uid.get(uid) or {},
-                )
-                yield _sse("saved", {"uid": uid, "message_id": msg_id})
-        else:
-            content = _without_placeholder(final_text or "")
-            artifacts = saved_by_uid.get(None) or []
-            truthful = not claims_a_save_without_one(content, artifacts)
-            if not truthful:
-                log.warning("声称已存入产出，但这一轮没有落盘（conv=%s）", conv.id)
-            msg_id = None
-            if content or artifacts:
-                msg_id = await _save_assistant_message(
-                    conv.id, content, model_id, sources,
-                    tokens_in=final_usage.get("input"), tokens_out=final_usage.get("output"),
-                    artifacts=artifacts,
-                )
-            await _record_turn(
-                conv.id, msg_id, model_id, turn_traces.get(None) or {},
-                content=content, artifacts=artifacts, usage=final_usage, truthful=truthful,
-                draft=draft, quality=quality_by_uid.get(None) or {},
-            )
-            # 把这一轮的 message id 交给界面：它手里的气泡还没有后端 id，而「📄 存进
-            # 产出」那条人工出口是按 id 存的。不交出去，用户得先刷新才能点那一下。
-            yield _sse("saved", {"message_id": msg_id})
-        yield _sse("done", {})
-        # automemory: let the model decide whether this exchange was worth
-        # remembering (Khoj automemory style). Best-effort, after done so the
-        # UI already shows the answer; result surfaces via SSE to a toast.
-        base_answer = (
-            answers.get("a") or answers.get("b") or (final_text or "")
-        ).strip()
-        user_text = (req.content or "").strip() or query_text
-        if (
-            memory_on
-            and prefs.get("automemory_enabled")
-            and not req.regenerate
-            and compare_resolved is None
-            and base_answer
-        ):
-            try:
-                from app.core import memory
-
-                yield _sse("memorizing", {})
-                facts = await asyncio.wait_for(
-                    memory.auto_extract(
-                        info,
-                        resolved.model,
-                        user_text,
-                        base_answer,
-                    ),
-                    timeout=40,
-                )
-                if facts:
-                    yield _sse("memorized", {"facts": facts})
-            except Exception:  # noqa: BLE001 - automemory must never break chat
-                pass
-        # follow-up suggestions: best-effort, after done so UI renders answer first
-        if base_answer and not req.regenerate:
-            try:
-                fups = await _generate_followups(resolved, llm_messages, base_answer)
-                if fups:
-                    yield _sse("followups", {"questions": fups})
-            except Exception:  # noqa: BLE001 - suggestions must never break chat
-                pass
-    else:
-        # provider/tool error — keep whatever text streamed before it failed.
-        # 已经落盘的产出也算数：文件真在 vault 里，界面得能指回去。
-        partial = _without_placeholder(answers.get("a") or "".join(partial_parts) or "")
-        artifacts = saved_by_uid.get(None) or saved_by_uid.get("a") or []
-        if partial or artifacts:
-            await _save_assistant_message(conv.id, partial, model_id, sources, artifacts=artifacts)
+    # 收尾（阶段四，CTO review #4 切分）：落库 / 账本 / automemory / 追问
+    async for ev in _finish_turn(
+        req=req, conv=conv, model_id=model_id, resolved=resolved, info=info,
+        compare_resolved=compare_resolved, sources=sources,
+        saved_by_uid=saved_by_uid, turn_traces=turn_traces, quality_by_uid=quality_by_uid,
+        draft=draft, status=status, final_text=final_text, final_usage=final_usage,
+        answers=answers, usages=usages, llm_messages=llm_messages,
+        memory_on=memory_on, prefs=prefs, query_text=query_text, partial_parts=partial_parts,
+    ):
+        yield ev
 
 
 class Followups(BaseModel):
