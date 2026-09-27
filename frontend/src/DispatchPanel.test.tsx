@@ -155,3 +155,24 @@ describe('DispatchPanel · 看板', () => {
     }
   })
 })
+
+describe('DispatchPanel · 跟着页面心跳重读（活性，2026-09-26）', () => {
+  it('refreshKey 跳一次就重读一次看板——只在挂载时读一次的看板，摆的是打开那一刻的世界', async () => {
+    const { rerender } = render(<DispatchPanel refreshKey={0} />)
+    await waitFor(() => expect(api.dispatch).toHaveBeenCalledTimes(1))
+
+    rerender(<DispatchPanel refreshKey={1} />)
+    await waitFor(() => expect(api.dispatch).toHaveBeenCalledTimes(2))
+
+    // refreshKey 不动就不读——没有心跳时它不该自己抖
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.dispatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('不传 refreshKey（旧调用点）照旧只读一次', async () => {
+    render(<DispatchPanel />)
+    await waitFor(() => expect(api.dispatch).toHaveBeenCalledTimes(1))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.dispatch).toHaveBeenCalledTimes(1)
+  })
+})

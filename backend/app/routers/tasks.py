@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import VAULT_DIR
 from app.core import tasks as core
 from app.db import get_db
-from app.models import ScheduledTask, TaskRun, iso_utc
+from datetime import timedelta
+
+from app.models import ScheduledTask, TaskRun, iso_utc, utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -44,8 +46,32 @@ class TaskIn(BaseModel):
     watch_path: str = ""
     chain_next_id: int | None = None
     require_approval: bool = False  # 人工卡点：跑完等人点头再触发下游
+    # 步级超时（秒）：一次执行最多等多久。空 = 默认 900（转写长录音的那条自己配大）。
+    timeout_seconds: int | None = None
+    # 接地分门禁（0-5）：低于它停在卡点等人，不自动流向下游。空 = 不设（只记分）。
+    gate_min_grounded: float | None = None
     action: str = "prompt"  # prompt | transcribe | 引擎名（research/compose/recap/decide/conflict）
     landing_dir: str = ""  # 产物落哪个 vault 子目录（空 = tasks/）
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _timeout_ok(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        v = int(v)
+        if not (10 <= v <= 7200):
+            raise ValueError("超时要在 10–7200 秒之间")
+        return v
+
+    @field_validator("gate_min_grounded")
+    @classmethod
+    def _gate_ok(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        v = round(float(v), 2)
+        if not (0 <= v <= 5):
+            raise ValueError("门禁是 0–5 的接地分")
+        return v
 
     @field_validator("name")
     @classmethod
@@ -135,6 +161,8 @@ class TaskPatch(BaseModel):
     watch_path: str | None = None
     chain_next_id: int | None = None
     require_approval: bool | None = None
+    timeout_seconds: int | None = None
+    gate_min_grounded: float | None = None
     action: str | None = None
     landing_dir: str | None = None
 
@@ -294,8 +322,8 @@ async def list_tools():
 
 
 @router.get("/recent-runs")
-async def recent_runs(ids: str = "", db: AsyncSession = Depends(get_db)):
-    """**一批任务各自的最近一次运行**——把前端那 8 次请求合成 1 次。
+async def recent_runs(ids: str = "", n: int = 1, db: AsyncSession = Depends(get_db)):
+    """**一批任务各自的最近运行**——把前端那 8 次请求合成 1 次。
 
     「工作」页顶那块「最近几次运行」是逐条任务去问 `/api/tasks/{id}/runs` 的
     （`WorkPage.tsx` 的 `EnginePulse`，`t.slice(0, 8)`），**8 个并发请求换 8 条数据**，
@@ -306,12 +334,18 @@ async def recent_runs(ids: str = "", db: AsyncSession = Depends(get_db)):
     取每组最新**——`core/tasks._RUNS_KEEP = 20` 保证每任务最多 20 行，所以这一次查询
     的上界是 `20 × len(ids)`，封顶 50 个 id 就是最多 1000 行，很小。
 
-    返回**按 task_id 分组的一个对象**（JSON 的键是字符串）：`{"7": {...run...}}`。
+    返回**按 task_id 分组的一个对象**（JSON 的键是字符串）：
+
+    - 默认（`n=1`）：`{"7": {...run...}}` —— 每任务最近一次（形状与从前一致，调用方不用改）；
+    - `n>1`（2026-09-26，给清单行的「最近运行结果条」用）：`{"7": [{...最新...}, ...]}` ——
+      每任务最近 n 条，**新在前**；n 截到 [1, 20]（20 就是 `_RUNS_KEEP`，再多也没有了）。
+
     没有运行记录的任务**不出现**在结果里——调用方据此区分「没跑过」与「跑了但读不到」。
     """
     wanted = sorted({int(x) for x in ids.split(",") if x.strip().isdigit()})[:50]
     if not wanted:
         return {}
+    keep = max(1, min(n, 20))
     rows = (
         await db.execute(
             select(TaskRun)
@@ -319,11 +353,15 @@ async def recent_runs(ids: str = "", db: AsyncSession = Depends(get_db)):
             .order_by(TaskRun.id.desc())
         )
     ).scalars().all()
-    latest: dict[int, TaskRun] = {}
+    # 按 id 倒序扫，**每条第 k 次遇到的**就是它第 k 近的那一次
+    grouped: dict[int, list[TaskRun]] = {}
     for r in rows:
-        # 按 id 倒序扫，**每条第一次遇到的**就是它最近的那一次
-        latest.setdefault(r.task_id, r)
-    return {str(k): _run_out(v) for k, v in latest.items()}
+        bucket = grouped.setdefault(r.task_id, [])
+        if len(bucket) < keep:
+            bucket.append(r)
+    if keep == 1:
+        return {str(k): _run_out(v[0]) for k, v in grouped.items()}
+    return {str(k): [_run_out(r) for r in v] for k, v in grouped.items()}
 
 
 @router.get("/{task_id}/runs")
@@ -360,6 +398,12 @@ async def update_task(task_id: int, body: TaskPatch, db: AsyncSession = Depends(
     changes = body.model_dump(exclude_none=True)
     # chain_next_id 需要能置空（解除任务链）：exclude_none=True 会把显式传的 null 丢掉，
     # 这里单独补上，让「取消下游」能真正生效。
+    # 显式传 null = 清空（exclude_none 会把 null 当「没传」丢掉，这里单独接住）
+    # ——与 chain_next_id 同一模式：清空门禁/超时是合法操作，不能静默无效。
+    if "timeout_seconds" in body.model_fields_set and body.timeout_seconds is None:
+        row.timeout_seconds = None
+    if "gate_min_grounded" in body.model_fields_set and body.gate_min_grounded is None:
+        row.gate_min_grounded = None
     if "chain_next_id" in body.model_fields_set and body.chain_next_id is None:
         changes["chain_next_id"] = None
     if changes.get("chain_next_id") == task_id:
@@ -460,7 +504,64 @@ async def run_now(
     out = await core.run_task(
         task_id, manual=True, trigger="manual", topic=(body.topic if body else "")
     )
+    if out.get("status") == "skipped":
+        # 并发守卫拦下的：**要说话**——从前第二趟会静默并发烧钱，现在明确拒绝。
+        raise HTTPException(409, "这条任务上一趟还没跑完——等它结束再重跑")
     out["thread"] = thread
+    return out
+
+
+class TriggerIn(BaseModel):
+    """外部触发的负载（webhook，2026-09-26）。全部可选。"""
+
+    topic: str = ""
+    dedupe_seconds: int = 0
+
+    @field_validator("dedupe_seconds")
+    @classmethod
+    def _dedupe_ok(cls, v: int) -> int:
+        v = int(v or 0)
+        if not (0 <= v <= 86400):
+            raise ValueError("dedupe_seconds 取 0–86400（秒）")
+        return v
+
+
+@router.post("/{task_id}/trigger")
+async def trigger_task(
+    task_id: int, body: TriggerIn | None = None, db: AsyncSession = Depends(get_db)
+):
+    """**外部事件起一次运行**（webhook 触发器，2026-09-26）。
+
+    给脚本 / git hook / 手机快捷指令一个稳定的入口——同机信任域内带 token 调：
+
+        curl -s -X POST -H "X-WB-Token: $TOKEN" -H "Content-Type: application/json" \
+          --data '{"topic": "本周盘点", "dedupe_seconds": 300}' \
+          http://127.0.0.1:8000/api/tasks/7/trigger
+
+    `topic` 运行期覆盖题目（同手动重跑）；`dedupe_seconds` > 0 是**去重窗口**：
+    这条任务在窗口内已经起过一趟就直接返回那一趟——外部源重发同一事件不烧两次钱
+    （Trigger.dev idempotency 的轻量版）。与 `POST /{id}/run` 的分野：这条给**机器**
+    （去重、不落「这件事」），run 给人点（可挂 thread）。
+    """
+    row = await db.get(ScheduledTask, task_id)
+    if not row:
+        raise HTTPException(404, "task not found")
+    payload = body or TriggerIn()
+    if payload.dedupe_seconds > 0:
+        cutoff = utcnow() - timedelta(seconds=payload.dedupe_seconds)
+        recent = (
+            await db.execute(
+                select(TaskRun)
+                .where(TaskRun.task_id == task_id, TaskRun.started_at >= cutoff)
+                .order_by(TaskRun.id.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if recent is not None:
+            return {"status": "deduped", "run": _run_out(recent)}
+    out = await core.run_task(task_id, manual=True, trigger="manual", topic=payload.topic.strip())
+    if out.get("status") == "skipped":
+        raise HTTPException(409, "上一趟还没跑完——等它结束再触发（同一条任务同时只跑一趟）")
     return out
 
 

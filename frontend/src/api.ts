@@ -741,6 +741,10 @@ export interface ScheduledTask {
   last_result: string
   next_run: string | null
   running?: boolean
+  /** 步级超时（秒）：一次执行最多等多久。null/缺省 = 引擎默认（900）。 */
+  timeout_seconds?: number | null
+  /** 接地分门禁（0-5）：低于它停在卡点等人，不自动流向下游。null/缺省 = 只记分。 */
+  gate_min_grounded?: number | null
 }
 
 export interface SkillItem {
@@ -3135,6 +3139,20 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
    *  **没跑过的任务不出现**在结果里——那不叫「跑了但没记录」，叫「没跑过」。 */
   recentTaskRuns: (ids: number[]) =>
     request<Record<string, TaskRunItem>>(`/api/tasks/recent-runs?ids=${ids.join(',')}`),
+  /** **一批任务各自的最近 n 条运行**（`n>1` 时后端返回的是数组、新在前）。
+   *
+   *  工作流清单每行的「最近运行结果条」（Buildkite 式：颜色=结果、高度=耗时）要的
+   *  就是这个小历史——展开行才能看到的 20 条它不背，每行扫一眼要的只是最近这几条。
+   *  同一个端点：`n` 缺省 1 时返回的是单条（`recentTaskRuns`），形状不动。 */
+  recentTaskRunBatches: (ids: number[], n = 10) =>
+    request<Record<string, TaskRunItem[]>>(`/api/tasks/recent-runs?ids=${ids.join(',')}&n=${n}`),
+  /** 外部事件起一次运行（webhook 触发器，2026-09-26）。`dedupe_seconds > 0`：
+   *  窗口内已起过一趟就直接返回那一趟（幂等，不烧两次钱）。 */
+  triggerTask: (id: number, body?: { topic?: string; dedupe_seconds?: number }) =>
+    request<{ status: string; run?: TaskRunItem }>(`/api/tasks/${id}/trigger`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
   /** Q4 调度台：确定性编排的看板（状态全部由后端从 tasks/task_runs 算出来） */
   dispatch: (limit = 20) => request<DispatchBoard>(`/api/dispatch?limit=${limit}`),
   parseTask: (text: string) =>

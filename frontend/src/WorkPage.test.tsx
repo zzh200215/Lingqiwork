@@ -2,7 +2,7 @@
 // 已经生成出来的产出（能筛、能点开）、以及在页内「写一份交付」。
 // 真数据要跑一次引擎才产生（跑一次既慢又烧钱），所以这里用固定数据把这层钉住。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import WorkPage from './WorkPage'
@@ -31,10 +31,21 @@ vi.mock('./api', () => ({
     listTaskRuns: vi.fn(),
     // 引擎档那块「最近几次运行」走的批量接口（P2：8 次请求合成 1 次）。
     // 默认给空对象：没跑过的任务不在里面，界面就不摆那一块。
+    // 2026-09-26：清单行的「结果条」也要历史，取数换 `recentTaskRunBatches`（n=10）。
     recentTaskRuns: vi.fn().mockResolvedValue({}),
+    recentTaskRunBatches: vi.fn().mockResolvedValue({}),
     runTask: vi.fn(),
     approveRun: vi.fn(),
     rejectRun: vi.fn(),
+    // 调度台跟着工作流页的心跳重读（活性，2026-09-26）——给个空板免得撞 undefined。
+    dispatch: vi
+      .fn()
+      .mockResolvedValue({
+        chains: [],
+        counts: { chains: 0, steps: 0, needs_attention: 0, running: 0 },
+        states: {},
+        broadcast: '',
+      }),
     searchMaterial: vi.fn(),
     listCandidates: vi.fn(),
     makeCandidate: vi.fn(),
@@ -255,14 +266,14 @@ describe('WorkPage · 最近几次运行（P2）', () => {
     // 这一条防的是**退化**：批量接口的价值全在「一次」上，
     // 改回逐条 `listTaskRuns` 的话功能一模一样、测试全绿，只有请求数悄悄变回 8。
     renderPage({ tab: 'engine' })
-    await waitFor(() => expect(api.recentTaskRuns).toHaveBeenCalled())
+    await waitFor(() => expect(api.recentTaskRunBatches).toHaveBeenCalled())
     expect(api.listTaskRuns).not.toHaveBeenCalled()
   })
 
   it('只问前 8 条任务——那块地方就摆得下 8 条', async () => {
     renderPage({ tab: 'engine' })
-    await waitFor(() => expect(api.recentTaskRuns).toHaveBeenCalled())
-    const ids = vi.mocked(api.recentTaskRuns).mock.calls[0][0]
+    await waitFor(() => expect(api.recentTaskRunBatches).toHaveBeenCalled())
+    const ids = vi.mocked(api.recentTaskRunBatches).mock.calls[0][0]
     expect(ids.length).toBeLessThanOrEqual(8)
   })
 })
@@ -361,7 +372,9 @@ describe('WorkPage · 工作流', () => {
   it('定义、上次跑到哪、链下游、失败原因同屏', async () => {
     renderPage({ tab: 'engine' })
     expect((await screen.findAllByText('每日抓取')).length).toBeGreaterThan(0)
-    expect(screen.getByText(/0 8 \* \* \*/)).toBeTruthy()
+    // 触发器说人话（2026-09-26，学 GitHub Actions 的触发句式）：
+    // `0 8 * * *` 摆成「每天 08:00」，原式悬停在 title 上
+    expect(screen.getByText('每天 08:00').getAttribute('title')).toBe('0 8 * * *')
     expect(screen.getByText(/→ 总结成稿/)).toBeTruthy() // 任务链看得见
     expect(screen.getByText('ConnectionError: 域名解析失败')).toBeTruthy() // 不必再点一次
     // 链下游那个名字现在两处都有（工作流清单 + 引擎档的「最近几次运行」），取第一个即可
@@ -598,7 +611,7 @@ describe('WorkPage · 工作流页（P2 · §8.3）', () => {
   it('行内写「上次跑于何时、跑了多久」——耗时只活在运行记录上（§8.3 每行）', async () => {
     // 方案原话是「上次运行**+耗时**」。任务的 `last_run` 只有开始时刻，
     // 耗时得从那次运行上拿（批量只读接口，`useTaskCenter` 拉的）。
-    vi.mocked(api.recentTaskRuns).mockResolvedValue({ '1': RUN })
+    vi.mocked(api.recentTaskRunBatches).mockResolvedValue({ '1': [RUN] })
     renderPage({ tab: 'workflow' })
 
     // 「每日抓取」现在会出现两处（清单行 + 折叠区里的「最近几次运行」），所以用 findAll
@@ -608,7 +621,7 @@ describe('WorkPage · 工作流页（P2 · §8.3）', () => {
   })
 
   it('读不到那次运行就**不摆耗时**——不编一个「0 秒」出来', async () => {
-    vi.mocked(api.recentTaskRuns).mockRejectedValue(new Error('500: 读不到'))
+    vi.mocked(api.recentTaskRunBatches).mockRejectedValue(new Error('500: 读不到'))
     renderPage({ tab: 'workflow' })
 
     await screen.findAllByText('每日抓取')
@@ -674,6 +687,118 @@ describe('WorkPage · 工作流页（P2 · §8.3）', () => {
     const titles = folds.map((d) => d.querySelector('summary')?.textContent ?? '')
     expect(titles[0]).toContain('运行视图')
     expect(titles[1]).toContain('后台作业')
+  })
+})
+
+describe('WorkPage · 活性（2026-09-26）', () => {
+  /** 在跑的那条：`running` + 刚起步的 last_run（运行中的那次没有 finished_at）。 */
+  const RUNNING = task(1, '每日抓取', { running: true, last_run: new Date().toISOString() })
+
+  it('有任务在跑：每 5 秒自己重读，页面不用人推（GH Actions 对 in-progress 的同款行为）', async () => {
+    // 这一页的主角是「让它自己跑的事」——页面自己却只在挂载时读一次，
+    // 跑完了、卡住了，屏幕上全都无感。这条钉住「会自己动」别再退回去。
+    vi.mocked(api.listTasks).mockResolvedValue([RUNNING])
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      renderPage({ tab: 'workflow' })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const afterMount = vi.mocked(api.listTasks).mock.calls.length
+      expect(afterMount).toBeGreaterThan(0)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(vi.mocked(api.listTasks).mock.calls.length).toBeGreaterThan(afterMount)
+      // 调度台看板跟着同一颗心跳重读——只在挂载时读一次的看板，摆的是打开页面那一刻的世界
+      expect(vi.mocked(api.dispatch).mock.calls.length).toBeGreaterThan(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('没人跑也不死：闲时 30 秒一拍，「上次跑于」不至于变成旧闻', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      renderPage({ tab: 'workflow' })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const afterMount = vi.mocked(api.listTasks).mock.calls.length
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      // 5 秒那一拍不该响——闲时没有「看推进」的需求
+      expect(vi.mocked(api.listTasks).mock.calls.length).toBe(afterMount)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(25000)
+      })
+      expect(vi.mocked(api.listTasks).mock.calls.length).toBeGreaterThan(afterMount)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('展开的那条在跑：运行记录跟着心跳重读，步骤条才会长出新的一步', async () => {
+    vi.mocked(api.listTasks).mockResolvedValue([RUNNING])
+    vi.mocked(api.listTaskRuns).mockResolvedValue([
+      { ...RUN, status: 'running', finished_at: null, started_at: new Date().toISOString() },
+    ])
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      renderPage({ tab: 'workflow' })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      fireEvent.click(screen.getAllByText('每日抓取')[0])
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const afterOpen = vi.mocked(api.listTaskRuns).mock.calls.length
+      expect(afterOpen).toBeGreaterThan(0)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(vi.mocked(api.listTaskRuns).mock.calls.length).toBeGreaterThan(afterOpen)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('在跑的那条，行内就有会走的「已跑」——不展开也看得到推进', async () => {
+    vi.mocked(api.listTasks).mockResolvedValue([RUNNING])
+    renderPage({ tab: 'workflow' })
+    expect(await screen.findByText(/已跑 \d+ 秒/)).toBeTruthy()
+  })
+
+  it('「最近几次运行」说人话：状态与触发器不再是英文码（同一屏两种语言是粗糙）', async () => {
+    vi.mocked(api.recentTaskRunBatches).mockResolvedValue({
+      '1': [{ ...RUN, status: 'awaiting_approval', trigger: 'chain' }],
+    })
+    renderPage({ tab: 'workflow' })
+    expect(await screen.findByText('等你点头')).toBeTruthy()
+    expect(screen.getByText('上游触发')).toBeTruthy()
+    expect(screen.queryByText('awaiting_approval')).toBeNull()
+  })
+
+  it('30 天成功率的分子分母悬停可见——「82%」与「82%（11 里成 9）」不是同一句话', async () => {
+    vi.mocked(api.dashboard).mockResolvedValue({
+      task_stats: {
+        runs_30d: 11,
+        ok: 9,
+        error: 2,
+        rate: 0.82,
+        by_task: { '1': { runs: 11, ok: 9, error: 2, rate: 0.82 } },
+      },
+    } as never)
+    renderPage({ tab: 'workflow' })
+    const el = await screen.findByText(/30 天 82%/)
+    expect(el.getAttribute('title')).toContain('11 次运行')
+    expect(el.getAttribute('title')).toContain('9 次成功')
   })
 })
 
@@ -1344,5 +1469,34 @@ describe('WorkPage · 量一遍（技能包的成绩）', () => {
         { id: '', intent: '', ask: '给领导汇报这次项目的结论', checks: ['not_a_wall_of_text'] },
       ])
     )
+  })
+})
+
+describe('WorkPage · 最近运行结果条（2026-09-26 · 借 Buildkite）', () => {
+  it('跑过的行画一条：颜色=结果、高度=耗时、新在前；没跑过的行不画空架子', async () => {
+    vi.mocked(api.recentTaskRunBatches).mockResolvedValue({
+      '1': [
+        { ...RUN, id: 23, status: 'running', started_at: '2026-09-22T08:00:00', finished_at: null },
+        { ...RUN, id: 21, status: 'ok', started_at: '2026-09-20T08:00:00', finished_at: '2026-09-20T08:01:00' },
+        { ...RUN, id: 22, status: 'error', started_at: '2026-09-21T08:00:00', finished_at: '2026-09-21T08:00:10' },
+      ],
+      // 任务 2 没跑过 —— 不出现在结果里
+    })
+    const { container } = renderPage({ tab: 'workflow' })
+    await screen.findAllByText('每日抓取')
+
+    const strip = container.querySelector('#task-1 [data-run-strip]') as HTMLElement
+    expect(strip, '跑过的那条该有结果条').toBeTruthy()
+    const bars = [...strip.children] as HTMLElement[]
+    expect(bars.length).toBe(3)
+    expect(bars[0].className).toContain('bg-sky-500') // 在跑
+    expect(bars[1].className).toContain('bg-emerald-500') // 成
+    expect(bars[2].className).toContain('bg-rose-500') // 败
+    // 高度映射耗时：60 秒那根要比 10 秒那根高（「耗时是不是在变长」看得见）
+    expect(parseInt(bars[1].style.height, 10)).toBeGreaterThan(parseInt(bars[2].style.height, 10))
+    // 每根的悬停提示是事实：时刻 · 结果 · 耗时
+    expect(bars[2].getAttribute('title')).toContain('10 秒')
+
+    expect(container.querySelector('#task-2 [data-run-strip]')).toBeNull()
   })
 })

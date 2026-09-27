@@ -56,6 +56,43 @@ MEETING_DIR = "meetings"
 MEETING_INBOX = "inbox"
 _PER_INSTANCE_DIRS = (MEETING_DIR,)
 _RETRY_DELAY_SECONDS = 30
+_RETRY_DELAY_CAP_SECONDS = 300  # 退避封顶：5 分钟还不过就该人来看了，不是继续等
+_STEP_TIMEOUT_SECONDS = 900  # 步级超时默认：15 分钟（转写长录音也够）
+
+
+def _retry_delay(attempt: int) -> float:
+    """指数退避：30s → 60s → 120s…封顶 5 分钟（Temporal 的 initial_interval + 倍率）。
+
+    固定 30 秒的问题：服务端限流（429）时三趟全撞在同一个窗口里，一趟比一趟贵。
+    """
+    return min(float(_RETRY_DELAY_SECONDS) * (2 ** (attempt - 1)), float(_RETRY_DELAY_CAP_SECONDS))
+
+
+# 可重试的「抖动」特征（2026-09-26）。**白名单制**：认得出是抖动才重试——
+# 配置类错误（鉴权 401 / 参数 400 / 提示词本身的问题）重试一万次也是同一个错，
+# 白烧三趟钱。参照 Temporal RetryPolicy 的 non_retryable_errors，只是反过来列。
+_RETRYABLE_MARKERS = (
+    "429",
+    "502",
+    "503",
+    "504",
+    "overloaded",
+    "timeout",
+    "timed out",
+    "temporarily unavailable",
+    "connection",
+)
+
+
+def _retryable(e: BaseException) -> bool:
+    """这次失败值不值得再花一次钱。"""
+    if isinstance(e, (TimeoutError, ConnectionError)):
+        return True
+    name = type(e).__name__
+    if any(k in name for k in ("Timeout", "Connect", "Transport", "RateLimit", "Overloaded")):
+        return True
+    text = str(e)[:400].lower()
+    return any(k in text for k in _RETRYABLE_MARKERS)
 DEFAULT_AGENT_ROUNDS = 12
 MAX_AGENT_ROUNDS = 30
 
@@ -273,6 +310,23 @@ def _resolve_run_dir(t: dict, watch_files: list[str]) -> str:
     return f"{base}/{datetime.now():%Y-%m-%d}-{_safe_name(Path(audio).stem)[:40]}"
 
 
+async def _has_running_run(task_id: int) -> bool:
+    """这条任务此刻有没有一趟还在跑（并发守卫的判据）。"""
+    from sqlalchemy import select
+
+    from app.models import TaskRun
+
+    async with SessionLocal() as db:
+        row = (
+            await db.execute(
+                select(TaskRun.id)
+                .where(TaskRun.task_id == task_id, TaskRun.status == "running")
+                .limit(1)
+            )
+        ).first()
+    return row is not None
+
+
 async def run_task(
     task_id: int,
     manual: bool = False,
@@ -299,6 +353,17 @@ async def run_task(
         task = await db.get(ScheduledTask, task_id)
         if not task:
             return {"status": "error", "error": "task not found"}
+        # 并发守卫（2026-09-26）：同一条任务**已在跑**时，再来的触发不再起第二趟——
+        # watch 连发 / cron 撞上手动 / 双击重跑，从前是并发两趟一起烧钱、各写一份产物
+        # （GHA `concurrency: 1` 同一语义）。跳过要有声音：返回带 reason，日志留一行。
+        if await _has_running_run(task_id):
+            log.warning("task %s (%s) skipped: a run is already in flight", task_id, task.name)
+            return {
+                "status": "skipped",
+                "reason": "already_running",
+                "task_id": task_id,
+                "name": task.name,
+            }
         snapshot = {
             "task_id": task_id,
             "name": task.name,
@@ -312,6 +377,10 @@ async def run_task(
             "tool_whitelist": task.tool_whitelist or "",
             "max_rounds": task.max_rounds or DEFAULT_AGENT_ROUNDS,
             "retry": task.retry if task.retry is not None else 1,
+            # 步级超时（秒）：空 = 默认 900。转写一小时录音的那条该自己配大一点。
+            "timeout_seconds": int(task.timeout_seconds) if task.timeout_seconds else _STEP_TIMEOUT_SECONDS,
+            # 接地分门禁（0-5）：空 = 不设（打分照旧，只是不挡道）。
+            "gate_min_grounded": task.gate_min_grounded,
             "notify_on_error": bool(task.notify_on_error),
             "trigger_kind": task.trigger_kind or "cron",
             "chain_next_id": task.chain_next_id,
@@ -368,7 +437,11 @@ async def run_task(
         for attempt in range(1, attempts + 1):
             log_entries = []
             try:
-                result = await _execute(snapshot, log_entries)
+                # 步级超时（2026-09-26）：本地最常见的死法不是报错，是**不返回**——
+                # 一个挂死的请求把整条链冻在夜里。超时才是重试的总闸，次数只是兜底。
+                result = await asyncio.wait_for(
+                    _execute(snapshot, log_entries), timeout=snapshot["timeout_seconds"]
+                )
                 answer, sources, model_id = result["answer"], result["sources"], result["model_id"]
                 rounds, tool_calls = result["rounds"], result["tool_calls"]
                 tokens_in = result.get("tokens_in")
@@ -378,8 +451,12 @@ async def run_task(
             except Exception as e:  # noqa: BLE001 - report, never propagate to scheduler
                 log.exception("task %s attempt %d/%d failed", task_id, attempt, attempts)
                 error = f"{type(e).__name__}: {e}"
-                if attempt < attempts:
-                    await asyncio.sleep(_RETRY_DELAY_SECONDS)
+                if isinstance(e, asyncio.TimeoutError):
+                    error = f"TimeoutError: 单次执行超过 {snapshot['timeout_seconds']} 秒"
+                # 只对「抖动」重试（超时 / 连不上 / 限流）；配置类错误再跑一趟
+                # 也是同一个错——停，把钱省下来（Temporal non_retryable 同一口径）。
+                if attempt < attempts and _retryable(e):
+                    await asyncio.sleep(_retry_delay(attempt))
 
         if status == "ok":
             conv_id = await _persist(
@@ -402,6 +479,29 @@ async def run_task(
             # 人工卡点（§4-12）：这一步跑完了，但**不**往下走——等人点头。
             # 这一步的产出照样落盘/进会话，因为它正是要给人看的东西。
             gate = bool(snapshot["require_approval"])
+            # 接地分门禁（required checks，2026-09-26）：配了阈值就**先打分再决定放行**——
+            # 低于阈值的产物停在卡点等人处置，不自动流向下游。没配门禁的照旧把打分
+            # 排在最后（一次额外的模型调用，别拖住 `_fire_chain`）。
+            gate_min = snapshot.get("gate_min_grounded")
+            gate_score: float | None = None
+            if gate_min is not None:
+                gate_score = await _score_run(run_id, snapshot, sources, answer)
+                if gate_score is None:
+                    # 没打出分（没材料 / 判分挂了）：**不挡道**——门禁只挡「量出来不合格」
+                    # 的，不编一个不合格出来。留一条日志让人知道这次门禁没生效。
+                    log_entries.append({"step": "gate", "ok": True, "note": "未打分：门禁这次不生效"})
+                else:
+                    low = gate_score < float(gate_min)
+                    log_entries.append(
+                        {
+                            "step": "gate",
+                            "ok": not low,
+                            "note": f"接地 {gate_score}/5，门禁 ≥{gate_min}"
+                            + ("——停在卡点等人" if low else ""),
+                        }
+                    )
+                    if low:
+                        gate = True
             await _finish_run(
                 run_id, _GATE_STATUS if gate else "ok", answer=answer, model_id=model_id,
                 rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
@@ -417,10 +517,16 @@ async def run_task(
                 if snapshot["trigger_kind"] == "watch" and WATCH_HOOK:
                     WATCH_HOOK(task_id)
             await _distill(snapshot, answer)
-            # 打分管在最后：它是一次额外的模型调用，别让它拖住下游任务（`_fire_chain`）
-            await _score_run(run_id, snapshot, sources, answer)
+            if gate_min is None:
+                # 打分管在最后：它是一次额外的模型调用，别让它拖住下游任务（`_fire_chain`）
+                await _score_run(run_id, snapshot, sources, answer)
             if gate and not manual:
-                await _notify_gate(snapshot)
+                if gate_min is not None:
+                    # 门禁拦下的：把分数带进通知，人不用拆开两处才知道为什么停。
+                    await _notify_gate(snapshot, gate_score=gate_score, gate_min=gate_min)
+                else:
+                    # 没配门禁的纯人工卡点：维持旧签名（既有替身/测试都按单参走）。
+                    await _notify_gate(snapshot)
         else:
             await _finish_run(
                 run_id, "error", error=error, model_id=model_id,
@@ -769,8 +875,12 @@ def _judge_sources(hits: list[dict]) -> list[dict]:
     return out
 
 
-async def _score_run(run_id: int, t: dict, sources: list[dict], answer: str) -> None:
+async def _score_run(
+    run_id: int, t: dict, sources: list[dict], answer: str
+) -> float | None:
     """跑完给这次产出打一个**接地分**（0-5）并落在 run 上——工作流的网。
+    **返回分**（2026-09-26，门禁要用这个数）：没材料 / 判分挂了返回 `None`——
+    「没分」和「0 分」是两件事，门禁只挡「量出来不合格」，不编一个不合格出来。
 
     为什么是它（§4-10）：工作流在你不看的时候跑，「跑成功但悄悄变差」不进 `last_status`。
     分数掉下来是唯一看得见的信号。判据复用 `engine_eval` 的 LLM 判分，与五个成文引擎同一套。
@@ -780,14 +890,14 @@ async def _score_run(run_id: int, t: dict, sources: list[dict], answer: str) -> 
     """
     pairs = _judge_sources(sources)
     if not pairs or not (answer or "").strip():
-        return
+        return None
     try:
         candidates = await _candidates(t.get("model_id") or "")
     except Exception:  # noqa: BLE001 - 解析不到 provider，就只是这次没有分
         log.debug("task grounding judge skipped: no provider", exc_info=True)
-        return
+        return None
     if not candidates:
-        return
+        return None
     info, model, _label = candidates[0]
 
     from app.core import engine_eval
@@ -798,7 +908,7 @@ async def _score_run(run_id: int, t: dict, sources: list[dict], answer: str) -> 
         )
     except Exception:  # noqa: BLE001
         log.warning("task grounding judge failed", exc_info=True)
-        return
+        return None
 
     try:
         async with SessionLocal() as db:
@@ -809,14 +919,27 @@ async def _score_run(run_id: int, t: dict, sources: list[dict], answer: str) -> 
                 await db.commit()
     except Exception:  # noqa: BLE001
         log.warning("task grounding score write failed", exc_info=True)
+    return float(grounded)
 
 
 _GATE_STATUS = "awaiting_approval"  # 人工卡点：跑完了，等人点头
 
 
-async def _notify_gate(t: dict) -> None:
-    """卡点等人要响一声。不响它可能永远停在那儿——这正是 §6-1 说的静默。"""
+async def _notify_gate(
+    t: dict, gate_score: float | None = None, gate_min: float | None = None
+) -> None:
+    """卡点等人要响一声。不响它可能永远停在那儿——这正是 §6-1 说的静默。
+
+    门禁拦下的（分数不够）把**为什么**放进同一句话里——人不该拆开两处才知道
+    这次为什么要自己来看。"""
+    why = (
+        f"接地 {gate_score}/5 低于门禁 {gate_min}。"
+        if gate_score is not None and gate_min is not None
+        else ""
+    )
     body = f"「{t['name']}」跑完了，等你点头才交给下游——在 /work 上放行或驳回。"
+    if why:
+        body = f"{why}{body}"
     if load_config().get("desktop_notify", True):
         try:
             from app.core import notify

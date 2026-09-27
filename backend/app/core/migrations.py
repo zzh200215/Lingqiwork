@@ -631,6 +631,33 @@ async def _m024_run_timestamps_to_utc(conn) -> None:
     log.info("迁移 v24：%s 行时间戳搬回 UTC（本地偏移 %s 秒）", moved, secs)
 
 
+async def _m025_task_timeout_gate(conn) -> None:
+    """v25：工作流的「可靠地跑一次」（2026-09-26，批次一）。
+
+    只加两列：
+
+    - `tasks.timeout_seconds`（步级超时，秒）：重试解决不了「**不返回**」——
+      一个挂死的请求会把整条链冻在夜里，Temporal 的口径是**超时才是重试的总闸**，
+      次数只是兜底。空 = 引擎默认（900 秒）。
+    - `tasks.gate_min_grounded`（接地分门禁，0-5）：配了数，这一步跑完**先打分**，
+      低于它就停在人工卡点等人处置，不自动流向下游（required checks 的语义）。
+      空 = 不设——打分照旧只记分、不挡道。
+    """
+    # 走 `_add_column`（PRAGMA 自检）：新库 `create_all` 已建全列，裸 ALTER 会撞
+    # 一句 duplicate column name——老库才需要真正的 ALTER。
+    if await _add_column(
+        conn, "tasks", "timeout_seconds", "ALTER TABLE tasks ADD COLUMN timeout_seconds INTEGER"
+    ):
+        log.info("迁移 v25：tasks 补上 timeout_seconds")
+    if await _add_column(
+        conn,
+        "tasks",
+        "gate_min_grounded",
+        "ALTER TABLE tasks ADD COLUMN gate_min_grounded REAL",
+    ):
+        log.info("迁移 v25：tasks 补上 gate_min_grounded")
+
+
 # 有序。**只增不改**：已经发出去的版本号不许改内容（谁跑过就永远跑过了）。
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline：补齐历史列（改动前那张写死的列表）", _m001_baseline),
@@ -657,6 +684,7 @@ MIGRATIONS: list[Migration] = [
     Migration(22, "报告页：自定义体裁模板（§8.1 行2）", _m022_deliver_templates),
     Migration(23, "事项页：收件箱的「忽略」（§8.4 行175）", _m023_thread_ignores),
     Migration(24, "运行时间戳统一到 UTC（耗时曾多八小时）", _m024_run_timestamps_to_utc),
+    Migration(25, "工作流：步级超时 + 接地分门禁（可靠地跑一次）", _m025_task_timeout_gate),
 ]
 
 

@@ -175,13 +175,15 @@ def _point_vault(monkeypatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    core.HANDOFF_DIR = _TMP / "handoff"
+    # 直接赋值会**泄漏到后面的测试文件**（fixture 拆除不还原）——全套件里
+    # research/skills/ritual 的顺序失败就是它。走 monkeypatch，拆除自动还原。
+    monkeypatch.setattr(core, "HANDOFF_DIR", _TMP / "handoff")
     # 落点写在**项目的 scratch** 里（`_write_vault` 读的是模块级 `TASK_DIR / VAULT_DIR`，
     # 而 `threads` 自己那份 `VAULT_DIR` 也要跟着指过来，否则「这份成品在不在产出目录里」
     # 会按另一个 vault 去算）。真 sandbox 的 vault 由 conftest 管，两边都写就串了。
     monkeypatch.setattr(core, "VAULT_DIR", _TMP / "vault")
     monkeypatch.setattr(core, "TASK_DIR", _TMP / "vault" / "tasks")
-    core._RETRY_DELAY_SECONDS = 0
+    monkeypatch.setattr(core, "_RETRY_DELAY_SECONDS", 0)
     CALLS.clear()
     asyncio.run(_clear())
     yield
@@ -1748,7 +1750,7 @@ async def _attached(thread_id: int) -> list[str]:
     return [r.ref for r in rows]
 
 
-def _fake_engine(vault: Path, filename: str):
+def _fake_engine(monkeypatch, vault: Path, filename: str):
     """假引擎：真写一个文件、真报它的落点（照引擎自己的 `save()` 那份回执）。
 
     只是把「模型写正文」那一步换成常量文本 —— **落盘这件事不假装**，因为 M2 的挂接
@@ -1770,8 +1772,11 @@ def _fake_engine(vault: Path, filename: str):
         p.write_text(f"# {rep.title}\n", encoding="utf-8")
         return {"filename": filename, "title": rep.title, "chunks": 1}
 
-    engine_mod.run = fake_run
-    engine_mod.save = fake_save
+    # 直接赋值会**泄漏到本文件之外**：research.run 被整体换成只收 topic 的假函数，
+    # 后面所有测试文件里带 kb_fn/search_fn 的真调用全部 TypeError——这就是
+    # 「全套件挂、单跑过」的顺序污染源。走 monkeypatch，测试结束自动还原。
+    monkeypatch.setattr(engine_mod, "run", fake_run)
+    monkeypatch.setattr(engine_mod, "save", fake_save)
 
 
 def _fake_saved_execute(filename: str):
@@ -1809,7 +1814,7 @@ async def test_work_chain_products_land_on_one_thread(monkeypatch):
 
     vault = _point_vault(monkeypatch)
     monkeypatch.setattr(core, "reschedule", lambda: None)
-    _fake_engine(vault, "research/2026-09-20-选型.md")
+    _fake_engine(monkeypatch, vault, "research/2026-09-20-选型.md")
     monkeypatch.setattr(core, "_execute", _fake_saved_execute("ignored.md"))
 
     from app.routers import tasks as tasks_router
@@ -2341,3 +2346,201 @@ async def test_recent_runs_tolerates_junk_and_caps_the_batch():
         # 超量：封顶 50 个，不为了一个前端请求把整张表捞出来
         many = ",".join(str(i) for i in range(1, 200))
         await recent_runs(ids=many, db=db)  # 不抛异常即可
+
+
+async def test_recent_runs_n_returns_a_history_per_task_newest_first():
+    """`n>1`：每任务最近 n 条、**新在前**——给清单行的「最近运行结果条」用
+    （Buildkite 式：颜色=结果、高度=耗时，趋势一眼扫出来）。"""
+    async with SessionLocal() as db:
+        a = ScheduledTask(name="甲", prompt="p")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        for i in (1, 2, 3, 4):
+            db.add(TaskRun(task_id=a.id, status="ok" if i % 2 else "error", answer=f"甲{i}"))
+        await db.commit()
+
+        out = await recent_runs(ids=str(a.id), n=3, db=db)
+
+    hist = out[str(a.id)]
+    assert isinstance(hist, list) and len(hist) == 3
+    assert [r["answer"] for r in hist] == ["甲4", "甲3", "甲2"], "要**新在前**"
+
+
+async def test_recent_runs_n_clamps_and_keeps_single_shape_at_n1():
+    """`n` 截到 [1, 20]；`n=1` 的形状与从前逐字一致（旧调用方不用改）。"""
+    async with SessionLocal() as db:
+        a = ScheduledTask(name="乙", prompt="p")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        for i in range(25):
+            db.add(TaskRun(task_id=a.id, status="ok", answer=f"乙{i}"))
+        await db.commit()
+
+        single = await recent_runs(ids=str(a.id), db=db)
+        assert isinstance(single[str(a.id)], dict), "n 缺省 = 旧形状，不是列表"
+        assert single[str(a.id)]["answer"] == "乙24"
+
+        capped = await recent_runs(ids=str(a.id), n=99, db=db)
+        assert len(capped[str(a.id)]) == 20, "20 就是 _RUNS_KEEP，再多也没有"
+        assert isinstance(capped[str(a.id)][0], dict)
+
+
+# ---------- 可靠性原语 + 门禁（2026-09-26 批次一） ----------
+
+
+def test_retryable_classification():
+    assert core._retryable(TimeoutError()) is True
+    assert core._retryable(ConnectionError("reset by peer")) is True
+    assert core._retryable(RuntimeError("HTTP 429 too many requests")) is True
+    assert core._retryable(RuntimeError("502 bad gateway")) is True
+    # 配置类错误再跑一趟也是同一个错——不重试，省下三趟钱
+    assert core._retryable(ValueError("bad cron")) is False
+    assert core._retryable(RuntimeError("401 unauthorized")) is False
+
+
+def test_retry_delay_backoff(monkeypatch):
+    # 这个文件在全局面板里把 `_RETRY_DELAY_SECONDS` 拧成 0 给重试提速——
+    # 曲线是策略不是旋钮：测它时把基准拧回真实值，测完自动还原。
+    monkeypatch.setattr(core, "_RETRY_DELAY_SECONDS", 30)
+    assert core._retry_delay(1) == 30
+    assert core._retry_delay(2) == 60
+    assert core._retry_delay(3) == 120
+    assert core._retry_delay(9) == 300  # 封顶 5 分钟
+
+
+async def test_step_timeout_marks_error(monkeypatch):
+    """挂死的请求不再冻住整条链：步级超时到点报 TimeoutError。"""
+
+    async def _hang(t, log_entries):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(core, "_execute", _hang)
+    tid = await _add_task("慢任务", timeout_seconds=1)
+    result = await core.run_task(tid, manual=True)
+    assert result["status"] == "error"
+    assert "超过 1 秒" in result["error"]
+
+
+async def test_gate_low_score_stops_chain(monkeypatch):
+    """接地分低于门禁：停在卡点等人，**不**流向下游（required checks）。"""
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+    scored = []
+
+    async def _low(run_id, t, sources, answer):
+        scored.append(run_id)
+        return 2.0
+
+    monkeypatch.setattr(core, "_score_run", _low)
+    a = await _add_task("门禁A", gate_min_grounded=3.0)
+    b = await _add_task("下游B")
+    async with SessionLocal() as db:
+        (await db.get(ScheduledTask, a)).chain_next_id = b
+        await db.commit()
+
+    result = await core.run_task(a, trigger="cron")
+    assert len(scored) == 1  # 门禁那趟先打分，不再重复打
+    async with SessionLocal() as db:
+        runs = (await db.execute(TaskRun.__table__.select())).mappings().all()
+    assert [(r["task_id"], r["status"]) for r in runs] == [(a, "awaiting_approval")]
+
+
+async def test_gate_pass_fires_chain(monkeypatch):
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+
+    async def _high(run_id, t, sources, answer):
+        return 4.0
+
+    monkeypatch.setattr(core, "_score_run", _high)
+    a = await _add_task("门禁过", gate_min_grounded=3.0)
+    b = await _add_task("下游C")
+    async with SessionLocal() as db:
+        (await db.get(ScheduledTask, a)).chain_next_id = b
+        await db.commit()
+
+    result = await core.run_task(a, trigger="cron")
+    assert result["status"] == "ok"
+    async with SessionLocal() as db:
+        runs = (await db.execute(TaskRun.__table__.select())).mappings().all()
+    assert sorted(r["task_id"] for r in runs) == sorted([a, b])
+
+
+async def test_concurrent_run_skipped(monkeypatch):
+    """同一条任务已在跑：再来的触发不起第二趟（GHA concurrency:1 同语义）。"""
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+    tid = await _add_task("忙任务")
+    async with SessionLocal() as db:
+        db.add(TaskRun(task_id=tid, status="running", trigger="cron"))
+        await db.commit()
+
+    result = await core.run_task(tid, trigger="cron")
+    assert result["status"] == "skipped" and result["reason"] == "already_running"
+
+
+async def test_trigger_endpoint_dedupes(monkeypatch):
+    """dedupe 窗口内的重复触发返回已有那一趟，不烧第二次钱。"""
+    from app.routers.tasks import TriggerIn, trigger_task
+
+    monkeypatch.setattr(core, "_execute", _fake_execute)
+    tid = await _add_task("触发任务")
+    async with SessionLocal() as db:
+        first = await trigger_task(tid, TriggerIn(dedupe_seconds=600), db)
+    assert first["status"] == "ok"
+    async with SessionLocal() as db:
+        again = await trigger_task(tid, TriggerIn(dedupe_seconds=600), db)
+    assert again["status"] == "deduped" and again["run"]["task_id"] == tid
+
+
+# ---------- 评测自动挡（批次二） ----------
+
+
+async def test_eval_regression_notifies_on_regression(monkeypatch):
+    from app.core import eval_regression, evals, notify
+
+    async def _fake_run_eval():
+        return {"id": 9}
+
+    async def _fake_compare():
+        return {"comparison": {"regressions": ["hit1"], "improvements": []}}
+
+    sent = []
+    monkeypatch.setattr(evals, "run_eval", _fake_run_eval)
+    monkeypatch.setattr(evals, "compare_history", _fake_compare)
+    monkeypatch.setattr(notify, "desktop", lambda title, body: sent.append(title))
+    out = await eval_regression.run_nightly()
+    assert out["regressions"] == ["hit1"]
+    assert sent == ["评测回归"]  # 回归要响——不响等于没跑
+
+
+async def test_eval_regression_silent_when_no_regression(monkeypatch):
+    from app.core import eval_regression, evals, notify
+
+    async def _fake_run_eval():
+        return {"id": 10}
+
+    async def _fake_compare():
+        return {"comparison": {"regressions": [], "improvements": ["hit1"]}}
+
+    sent = []
+    monkeypatch.setattr(evals, "run_eval", _fake_run_eval)
+    monkeypatch.setattr(evals, "compare_history", _fake_compare)
+    monkeypatch.setattr(notify, "desktop", lambda title, body: sent.append(title))
+    out = await eval_regression.run_nightly()
+    assert out["regressions"] == [] and sent == []  # 变好不吵
+
+
+def test_eval_regression_reschedule(monkeypatch):
+    from app.core import eval_regression
+    from app.core import scheduler as sched
+
+    calls = []
+    monkeypatch.setattr(sched, "set_cron", lambda job, fn, expr, args=None: calls.append(("set", job, expr)))
+    monkeypatch.setattr(sched, "prune_jobs", lambda prefix, keep: calls.append(("prune", prefix)))
+    monkeypatch.setattr("app.core.prefs.load_config", lambda: {"eval_regression_enabled": True, "eval_regression_cron": "0 5 * * *"})
+    eval_regression.reschedule()
+    assert calls == [("set", "eval-regression", "0 5 * * *")]
+    calls.clear()
+    monkeypatch.setattr("app.core.prefs.load_config", lambda: {})
+    eval_regression.reschedule()
+    assert calls == [("prune", "eval-regression")]  # 关掉就摘 job，不占调度

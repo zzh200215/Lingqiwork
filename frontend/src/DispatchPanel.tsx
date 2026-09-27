@@ -132,7 +132,7 @@ function CountChip({ label, value, tone }: { label: string; value: number; tone:
   )
 }
 
-export default function DispatchPanel() {
+export default function DispatchPanel({ refreshKey = 0 }: { refreshKey?: number }) {
   const [board, setBoard] = useState<DispatchBoard | null>(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -150,6 +150,13 @@ export default function DispatchPanel() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // 跟着工作流页的心跳重读（`refreshKey` 每跳一次 = 页面刚刷过一遍任务）。
+  // 「谁在跑、卡在哪」是一块**会过期的看板**——只有挂载那一次的看板，
+  // 摆的是打开页面那一刻的世界。动作之后 `load()` 自己会刷，两条路不打架。
+  useEffect(() => {
+    if (refreshKey > 0) void load()
+  }, [refreshKey, load])
 
   async function act(step: DispatchStep, kind: string, label: string) {
     const a = (step.actions ?? []).find((x) => x.kind === kind)

@@ -334,6 +334,15 @@ class ScheduledTask(Base):
     # 「这条流程在忙哪件事」是它的全部含义 —— 具体**哪一趟**处理的是哪件记在
     # `TaskRun.thread_id` 上（卡点续跑、手动重跑都读那一份）。
     thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 步级超时（秒，2026-09-26）：一次执行最多等多少秒。空 = 引擎默认（900）。
+    # 本地任务最常见的死法不是报错而是**不返回**——一个挂死的请求把整条链冻在
+    # 夜里，重试次数再多也救不了「根本没结束」的那一趟（Temporal 的口径：超时
+    # 才是重试的总闸，次数只是兜底）。
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 接地分门禁（required checks，2026-09-26）：配了数（0-5），这一步跑完先打分，
+    # 分数低于它就停在人工卡点（等人处置），**不自动流向下游**。空 = 不设——
+    # 打分照旧只记分、不挡道（「看板不是考核」的口径不变，门禁只挡自己配的线）。
+    gate_min_grounded: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class TaskRun(Base):

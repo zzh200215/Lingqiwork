@@ -22,7 +22,7 @@
  *  ```
  *  hook **自己会挂载时拉一次**，不用调用方再写 `useEffect`。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   api,
@@ -75,19 +75,21 @@ export function useWorkOutputs(onError?: (m: string) => void) {
   return { outputs, loading, refresh }
 }
 
-/** 工作流定义（`/api/tasks`）：定义 + **每条最近一次运行** + 刷新。
+/** 工作流定义（`/api/tasks`）：定义 + **每条最近一段运行历史** + 刷新。
  *
- *  **为什么顺手把最近一次运行也拉了**：工作流清单每行要写「上次跑于何时、跑了多久」
- *  （方案 §8.3 的原话是「上次运行**+耗时**」），而耗时只活在 `TaskRun` 上
- *  （任务的 `last_run` 只有开始时刻）。批量接口就是为这件事生的——**一次请求**，
- *  不是每条任务各来一次。
+ *  **为什么拉的是「历史」不是单条**：清单每行两处要用运行数据——行内「上次跑于何时、
+ *  跑了多久」（只活在某一次 `TaskRun` 上），以及「最近运行结果条」（Buildkite 式，
+ *  颜色=结果、高度=耗时，比「30 天 82%」一个聚合数看得见趋势）。一次批量请求
+ *  （`recent-runs?n=10`）两处都喂饱，`lastRuns` 从历史的第一条**派生**，
+ *  不另发一次请求。
  *
- *  `lastRuns` 按 task_id（字符串键，与后端的分组键一致）给；**没跑过的任务不在里面**
- *  ——调用方据此区分「没跑过」与「读不到」，别把两者都说成「没有耗时」。
+ *  `lastRuns` / `history` 按 task_id（字符串键，与后端的分组键一致）给；
+ *  **没跑过的任务不在里面**——调用方据此区分「没跑过」与「读不到」，
+ *  别把两者都说成「没有耗时」。
  */
 export function useTaskCenter(onError?: (m: string) => void) {
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
-  const [lastRuns, setLastRuns] = useState<Record<string, TaskRunItem>>({})
+  const [history, setHistory] = useState<Record<string, TaskRunItem[]>>({})
   const [loading, setLoading] = useState(true)
   const fail = useErrSink(onError)
 
@@ -96,14 +98,14 @@ export function useTaskCenter(onError?: (m: string) => void) {
       .listTasks()
       .then((t) => {
         setTasks(t)
-        // 批量只读（`recent-runs?ids=` 自己封顶 50 个 id）。**读不到就不摆耗时那一格**
-        // ——不是编一个 0 出来，也不是把整页弄成错误页。
+        // 批量只读（`recent-runs?ids=` 自己封顶 50 个 id；n=10 给结果条用）。
+        // **读不到就不摆耗时那一格**——不是编一个 0 出来，也不是把整页弄成错误页。
         const ids = t.slice(0, 50).map((x) => x.id)
         if (!ids.length) return
         api
-          .recentTaskRuns(ids)
-          .then(setLastRuns)
-          .catch(() => setLastRuns({}))
+          .recentTaskRunBatches(ids)
+          .then(setHistory)
+          .catch(() => setHistory({}))
       })
       // 原来是 `.catch(() => {})` —— 工作流拉不到，界面就摆一个空列表，
       // 看起来像「你一条都没建」。**拿失败冒充「没有」**，这一页点过名的毛病。
@@ -114,7 +116,15 @@ export function useTaskCenter(onError?: (m: string) => void) {
   useEffect(() => {
     refresh()
   }, [refresh])
-  return { tasks, lastRuns, loading, refresh }
+
+  /** 每条最近一次运行（= 历史的**第一条**，新在前）。 */
+  const lastRuns: Record<string, TaskRunItem> = useMemo(() => {
+    const out: Record<string, TaskRunItem> = {}
+    for (const [k, v] of Object.entries(history)) if (v[0]) out[k] = v[0]
+    return out
+  }, [history])
+
+  return { tasks, lastRuns, history, loading, refresh }
 }
 
 /** 会议（`/api/work/meetings`）：一场一个文件夹，录音能回听。 */

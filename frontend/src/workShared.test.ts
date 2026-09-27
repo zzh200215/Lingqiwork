@@ -6,7 +6,7 @@
 // 同一屏上任务行说「上次 13:58」、它自己的运行记录说「05:58」。
 import { describe, expect, it } from 'vitest'
 
-import { fmtWhen } from './workShared'
+import { cronLabel, fmtWhen, liveElapsed } from './workShared'
 
 describe('fmtWhen', () => {
   it('带偏移的 ISO 按**本地**时间摆出来', () => {
@@ -30,5 +30,33 @@ describe('fmtWhen', () => {
   it('取不到偏移的老字符串**照旧切片兜底**：原样摆出来，不猜一个时区', () => {
     // 那种值本来就没有时区信息，猜一个比原样摆更糟
     expect(fmtWhen('2026-09-17T05:58:54')).toBe('09-17 05:58')
+  })
+})
+
+describe('cronLabel —— 触发器说人话（学 GitHub Actions 的触发句式）', () => {
+  it('常见形状各给一句人话', () => {
+    expect(cronLabel('0 8 * * *')).toBe('每天 08:00')
+    expect(cronLabel('30 9 * * 1-5')).toBe('工作日 09:30')
+    expect(cronLabel('*/5 * * * *')).toBe('每 5 分钟')
+    expect(cronLabel('20 * * * *')).toBe('每小时第 20 分')
+    expect(cronLabel('0 */3 * * *')).toBe('每 3 小时（00:00 起）')
+  })
+
+  it('认不出的形状**原样摆 cron**——认不出还硬翻译才是编', () => {
+    expect(cronLabel('15 8,20 * * 1,3,5')).toBe('15 8,20 * * 1,3,5')
+    expect(cronLabel('0 8 1 * *')).toBe('0 8 1 * *')
+    expect(cronLabel('不是 cron')).toBe('不是 cron')
+  })
+})
+
+describe('liveElapsed —— 在跑的东西「此刻为止」跑了多久', () => {
+  it('从 started_at 到 now，与跑完的耗时同一套格式', () => {
+    const start = new Date(Date.now() - 65_000).toISOString()
+    expect(liveElapsed(start, Date.now())).toBe('1 分 5 秒')
+  })
+
+  it('没有起点（老运行行）给空串——不摆「0 秒」出来', () => {
+    expect(liveElapsed(null, Date.now())).toBe('')
+    expect(liveElapsed('乱串', Date.now())).toBe('')
   })
 })

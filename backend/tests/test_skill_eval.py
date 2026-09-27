@@ -33,9 +33,6 @@ from app.core import skills  # noqa: E402
 from app.db import SessionLocal, engine as _engine  # noqa: E402
 from app.models import Base as _Base  # noqa: E402
 
-skills.SKILLS_DIR = _TMP / "skills"
-se.FIXTURE_DIR = _TMP / "evals"
-skills.SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 async def _init_db() -> None:
@@ -47,7 +44,13 @@ asyncio.run(_init_db())
 
 
 @pytest.fixture(autouse=True)
-def _clean():
+def _clean(monkeypatch):
+    # 这两行原来是**模块级直接赋值**：import（收集阶段）即执行、永不还原——
+    # 全套件里 test_skills 的 install/index 两条因此必挂（SKILLS_DIR 指着本文件
+    # 的临时目录、单跑却全过）。收进 fixture 走 monkeypatch：本文件内照旧，
+    # 文件结束自动还原，不再外泄。
+    monkeypatch.setattr(skills, "SKILLS_DIR", _TMP / "skills")
+    monkeypatch.setattr(se, "FIXTURE_DIR", _TMP / "evals")
     from sqlalchemy import delete
 
     async def _go() -> None:

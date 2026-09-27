@@ -42,6 +42,10 @@ class PrefsIn(BaseModel):
     full_context: bool | None = None
     full_context_max_chars: int | None = None
     digest_enabled: bool | None = None
+    # 夜间评测回归（eval_regression，2026-09-26）：**默认关**——它每天烧一次
+    # 真金白银的模型调用。开关打开那一刻，钱花在哪就该写在明面上。
+    eval_regression_enabled: bool | None = None
+    eval_regression_cron: str | None = None
     digest_time: str | None = None
     memory_enabled: bool | None = None
     thread_context_enabled: bool | None = None
@@ -165,6 +169,15 @@ class PrefsIn(BaseModel):
         if v is not None and v not in VOICES:
             raise ValueError("播客音色不在可用列表中")
         return v
+
+    @field_validator("eval_regression_cron")
+    @classmethod
+    def _eval_cron_ok(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return v
+        from app.core.tasks import validate_cron
+
+        return validate_cron(v.strip())
 
     @field_validator("tts_engine")
     @classmethod

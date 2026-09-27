@@ -130,6 +130,8 @@ const EMPTY_TASK = {
   tool_whitelist: '',
   max_rounds: 12,
   retry: 1,
+  timeout_seconds: null as number | null,
+  gate_min_grounded: null as number | null,
   notify_on_error: false,
   trigger_kind: 'cron' as 'cron' | 'watch' | 'chain',
   watch_path: '',
@@ -620,6 +622,8 @@ export default function SettingsPage() {
       watch_path: t.watch_path || '',
       chain_next_id: t.chain_next_id,
       require_approval: !!t.require_approval,
+      timeout_seconds: t.timeout_seconds ?? null,
+      gate_min_grounded: t.gate_min_grounded ?? null,
       action: (t.action as TaskAction) || 'prompt',
       landing_dir: t.landing_dir || '',
     })
@@ -2015,6 +2019,8 @@ export default function SettingsPage() {
                   {t.action === 'transcribe' && ' · 转写'}
                   {ACTION_SHORT[t.action] && ` · ${ACTION_SHORT[t.action]}引擎`}
                   {t.require_approval && ' · 卡点'}
+                  {t.gate_min_grounded != null && ` · 门禁 ≥${t.gate_min_grounded}`}
+                  {(t.timeout_seconds ?? 0) > 0 && ` · 超时 ${t.timeout_seconds}s`}
                   {(t.retry ?? 0) > 0 && ` · 失败重试 ${t.retry}`}
                 </div>
               </div>
@@ -2196,6 +2202,35 @@ export default function SettingsPage() {
                   max={3}
                   value={taskDraft.retry}
                   onChange={(e) => setTaskDraft({ ...taskDraft, retry: Number(e.target.value) || 0 })}
+                  className={inputCls}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                步级超时秒数（留空 = 默认 900）
+                <input
+                  type="number"
+                  min={10}
+                  max={7200}
+                  value={taskDraft.timeout_seconds ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setTaskDraft({ ...taskDraft, timeout_seconds: v === '' ? null : Number(v) })
+                  }}
+                  className={inputCls}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                接地分门禁（0–5，留空 = 只记分不挡道）
+                <input
+                  type="number"
+                  step={0.5}
+                  min={0}
+                  max={5}
+                  value={taskDraft.gate_min_grounded ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setTaskDraft({ ...taskDraft, gate_min_grounded: v === '' ? null : Number(v) })
+                  }}
                   className={inputCls}
                 />
               </label>
