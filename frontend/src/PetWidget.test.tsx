@@ -640,6 +640,29 @@ describe('PetWidget · 给输入行让位', () => {
     expect(root.style.transform).toBe('')
   })
 
+  it('再怎么让位也不能被顶出屏幕：上移量夹在「面板顶离屏顶 8px」（§#19）', async () => {
+    // 视口 1024×768、面板高 700：自然 top = 748-700 = 48，夹紧上限 = 748-700-8 = 40。
+    // 不夹紧的话 lift=56，面板顶会被推到 -8——横屏矮视口上「让位」等于把整块扔出屏外。
+    renderWidget()
+    const root = document.querySelector('[data-pet-root]') as HTMLElement
+    Object.defineProperty(root, 'offsetWidth', { value: 96, configurable: true })
+    Object.defineProperty(root, 'offsetHeight', { value: 700, configurable: true })
+    await vi.advanceTimersByTimeAsync(400)
+    placeTarget({ left: 900, right: 1000, top: 700, bottom: 746 })
+    fireEvent.scroll(window)
+    await vi.advanceTimersByTimeAsync(0)
+    await act(async () => {})
+    expect(root.style.transform).toBe('translateY(-40px)')
+  })
+
+  it('挂件在 z-30 档（§H 弹层分级）：模态与命令面板（z-50）永远压得住它', async () => {
+    // 历史上它和命令面板同为 z-50 且 DOM 靠后，精灵盖住 Ctrl+K——降档是 P0 的一等事
+    await renderAndMeasure()
+    const root = document.querySelector('[data-pet-root]') as HTMLElement
+    expect(root.getAttribute('class')).toContain('z-30')
+    expect(root.getAttribute('class')).not.toContain('z-50')
+  })
+
   it('纵向够不着（输入行在宠物上方）→ 一动不动', async () => {
     placeTarget({ left: 900, right: 1000, top: 300, bottom: 400 })
     const root = await renderAndMeasure()
