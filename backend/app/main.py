@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import BASE_DIR, settings
+from app.config import BASE_DIR, DATA_DIR, settings
 from app.core import auth, mcp_server  # mount 在模块级跑，必须先于 lifespan 导入
 from app.routers import (
     agents,
@@ -69,6 +69,24 @@ from app.routers import (
 
 # surface app/core logs (watcher, indexer, embedder) — uvicorn sets root to WARNING
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
+# 文件日志（CTO review #9）：无人值守任务（cron / 夜间回归 / watcher）出事时，
+# stdout 早就没了——桌面壳与后台进程把控制台吞掉之后，这个文件是唯一的事后证据。
+# 2MB × 3 份轮转，写入失败不能挡启动（数据目录不可写时降级为只有控制台）。
+try:
+    from logging.handlers import RotatingFileHandler
+
+    _log_dir = DATA_DIR / "logs"
+    _log_dir.mkdir(exist_ok=True)
+    _file_handler = RotatingFileHandler(
+        _log_dir / "workbench.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    )
+    _file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s:%(name)s:%(message)s")
+    )
+    logging.getLogger().addHandler(_file_handler)
+except OSError:  # noqa: BLE001 - 日志文件开不出来照样跑
+    pass
 
 STATIC_DIR = BASE_DIR / "frontend" / "dist"
 
