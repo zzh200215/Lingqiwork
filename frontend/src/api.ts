@@ -1325,6 +1325,20 @@ export interface ArenaResult {
   tokens_out?: number | null
 }
 
+/** 功能真实用量（CTO review #6）：model_usage 按操作名聚合成的一行。 */
+export interface UsageFeatureRow {
+  /** 操作名（usage_ledger 的 span 标签，如 briefing / deliver / pet）。 */
+  kind: string
+  /** 发生次数（span 数）。 */
+  spans: number
+  /** 模型调用次数。 */
+  calls: number
+  /** tokens_in + tokens_out 合计。 */
+  tokens: number
+  first: string
+  last: string
+}
+
 /** 今日页「今天下一步」建议. */
 export interface TodayNext {
   text: string
@@ -3414,6 +3428,8 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       method: 'POST',
       body: JSON.stringify({ page }),
     }),
+  /** 功能真实用量（CTO review #6）：model_usage 按操作名聚合，「30 天自用窗口」的读数。 */
+  usageFeatures: () => request<{ features: UsageFeatureRow[] }>('/api/usage/features'),
   todayNext: () => request<TodayNext>('/api/today/next'),
   /** 今日概览五档：失败任务 / 未消化 / 到期卡 / 卡点 / 进行中产出。空档不返回。 */
   todaySummary: () => request<{ rows: TodaySummaryRow[] }>('/api/today/summary'),

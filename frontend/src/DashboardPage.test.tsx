@@ -11,7 +11,7 @@ import { MemoryRouter } from 'react-router-dom'
 // 只渲染卡片、不渲染整页：把 api 换成空的，模块引进来但一次都不会调
 vi.mock('./api', () => ({ api: {} }))
 
-import { NorthStarCard, CalibrationCard, GapRateCard, ProcessCard, SkillLoopCard, GroundedCard, TurnSummaryCard, SourceUsageCard, PromptEvalCard, AgentEvalCard } from './DashboardPage'
+import { NorthStarCard, CalibrationCard, GapRateCard, ProcessCard, SkillLoopCard, GroundedCard, TurnSummaryCard, SourceUsageCard, PromptEvalCard, AgentEvalCard, UsageFeaturesCard } from './DashboardPage'
 import type {
   AgentEvalBoard,
   CardCalibration,
@@ -1055,5 +1055,32 @@ describe('任务级基线（A0 进计量局）', () => {
     const rule = container.querySelector('[data-agent-eval-rule]')?.textContent ?? ''
     expect(rule).toContain('跑分当时')
     expect(rule).toContain('不含轮数')
+  })
+})
+
+// 功能真实用量（CTO review #6 / MODE 2 Task 5）：「30 天自用窗口」的读数卡。
+// 只摆事实——次数/调用/token 全部来自账本聚合；零记录 ≠ 不存在；读不到不摆卡。
+describe('UsageFeaturesCard · 功能真实用量', () => {
+  const rows = [
+    { kind: 'briefing', spans: 22, calls: 22, tokens: 1234, first: '2026-09-18T01:14:05', last: '2026-09-25T15:43:00' },
+    { kind: 'deliver', spans: 12, calls: 20, tokens: 800, first: '2026-09-17T06:01:42', last: '2026-09-26T15:08:28' },
+  ]
+
+  it('账本数字直接上墙，最大的排最前（排序由后端保证，前端照单全收）', () => {
+    render(<UsageFeaturesCard rows={rows} />)
+    expect(screen.getByText('briefing')).toBeTruthy()
+    expect(screen.getByText('22 次 · 22 调用 · 1234 tok')).toBeTruthy()
+    const body = (screen.getByText('deliver').closest('section') as HTMLElement).textContent ?? ''
+    expect(body.indexOf('briefing')).toBeLessThan(body.indexOf('deliver'))
+  })
+
+  it('空账本 → 一句实话，不是空白也不是一条 0 排行', () => {
+    render(<UsageFeaturesCard rows={[]} />)
+    expect(screen.getByText('还没有任何模型调用记录。')).toBeTruthy()
+  })
+
+  it('读不到（null）→ 整卡不摆，不占位', () => {
+    const { container } = render(<UsageFeaturesCard rows={null} />)
+    expect(container.querySelector('[data-usage-features]')).toBeNull()
   })
 })

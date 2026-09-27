@@ -131,3 +131,46 @@ async def _write(state: dict) -> None:
                 )
             )
         await db.commit()
+
+
+async def feature_usage() -> list[dict]:
+    """按操作聚合的真实用量（CTO review #6 / MODE 2 Task 5）：哪些功能**真的在用**。
+
+    一行 = 一个 kind（操作名）：span 数（发生次数）、模型调用数、token 合计、首末时间。
+    **只读账本、只摆事实**——不做「值得不值」的判断，不设目标线（`metrics.py` 同一条
+    红线：度量不是考核）。它是「30 天自用窗口」的读数来源：零记录的功能不是不存在，
+    是还没被用过；裁决（留/删）等窗口结束拿这张表说话。
+    """
+    from sqlalchemy import func, select
+
+    from app.db import SessionLocal
+    from app.models import ModelUsage
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(
+                    ModelUsage.kind,
+                    func.count().label("spans"),
+                    func.coalesce(func.sum(ModelUsage.calls), 0).label("calls"),
+                    func.coalesce(
+                        func.sum(ModelUsage.tokens_in + ModelUsage.tokens_out), 0
+                    ).label("tokens"),
+                    func.min(ModelUsage.created_at).label("first"),
+                    func.max(ModelUsage.created_at).label("last"),
+                )
+                .group_by(ModelUsage.kind)
+                .order_by(func.count().desc())
+            )
+        ).all()
+    return [
+        {
+            "kind": r.kind,
+            "spans": int(r.spans),
+            "calls": int(r.calls),
+            "tokens": int(r.tokens),
+            "first": r.first.isoformat() if r.first else "",
+            "last": r.last.isoformat() if r.last else "",
+        }
+        for r in rows
+    ]

@@ -30,3 +30,15 @@ async def record_visit(body: VisitIn):
 async def open_days(days: int = 7):
     days = max(1, min(int(days), 90))
     return {"days": days, "open_days": await core.open_days(days)}
+
+
+@router.get("/features")
+async def features():
+    """功能真实用量（CTO review #6）：`model_usage` 按操作名聚合。
+
+    这是「30 天自用窗口」的读数来源——哪些功能真的在被使用、哪些零记录。
+    零记录 ≠ 不存在；裁决（留/删）等窗口结束拿数据说话，这里只摆事实。
+    """
+    from app.core import usage_ledger
+
+    return {"features": await usage_ledger.feature_usage()}

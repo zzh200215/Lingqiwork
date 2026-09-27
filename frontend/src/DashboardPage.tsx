@@ -28,6 +28,7 @@ import {
   type SessionCalibration,
   type TurnSummary,
   type TutorStats,
+  type UsageFeatureRow,
 } from './api'
 import { streamRecap, type RecapReport, type RecapSaved, type ReportDraft } from './stream'
 import { useVoiceInput } from './voice'
@@ -84,6 +85,10 @@ export default function DashboardPage() {
   // **只画曲线**——不设目标、不排名、不进零柒嘴里（红线在 `core/metrics.py` 开篇）；
   // 读不到就照实说读不到，不给一条全零的曲线充数。
   const [north, setNorth] = useState<NorthStar | null>(null)
+
+  // 功能真实用量（CTO review #6）：账本按操作名聚合——「30 天自用窗口」的读数。
+  // 同一条红线：只摆事实，不设目标、不排名、不催。
+  const [usageFeatures, setUsageFeatures] = useState<UsageFeatureRow[] | null>(null)
 
   // 过程指标（PLAN §7.2）：半懂率按周。与北极星同一张红线的另一条曲线——
   // 那条说「这周动没动」，这条说「动的那部分有没有落下」。
@@ -254,6 +259,7 @@ export default function DashboardPage() {
     api.tutorStats().then(setTutor).catch(() => {})
     api.beliefThreads().then((r) => setBeliefs(r.threads)).catch(() => {})
     api.northStar().then(setNorth).catch(() => setNorth(null))
+    api.usageFeatures().then((r) => setUsageFeatures(r.features)).catch(() => setUsageFeatures(null))
     api.process().then(setProcess).catch(() => setProcess(null))
     api.cardCalibration().then(setCalib).catch(() => setCalib(null))
     api.cardGapRate().then(setGap).catch(() => setGap(null))
@@ -602,6 +608,8 @@ export default function DashboardPage() {
               />
             </section>
           ) : null}
+
+          <UsageFeaturesCard rows={usageFeatures} />
 
           <section className="wb-card p-5">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">常用模型</h2>
@@ -1086,6 +1094,49 @@ function NarrativeCard({
  *
  *  （导出是给测试用的：这一格的规矩都在这张卡里，见 `DashboardPage.test.tsx`。）
  */
+/** 功能真实用量（CTO review #6）：账本按操作名聚合——「30 天自用窗口」的读数。
+ *
+ *  只摆事实：哪个功能发生过几次、烧了多少 token。零记录 ≠ 不存在——是还没被用过，
+ *  裁决（留/删）等窗口结束拿数据说话。读不到（接口挂了）整卡不摆，不占位。
+ */
+export function UsageFeaturesCard({ rows }: { rows: UsageFeatureRow[] | null }) {
+  if (rows === null) return null
+  const total = rows.reduce((n, r) => n + r.spans, 0)
+  return (
+    <section className="wb-card p-5" data-usage-features>
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">功能真实用量</h2>
+        <span className="text-xs text-neutral-400">账本实测 · 全部历史</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="mt-4 text-xs text-neutral-400">还没有任何模型调用记录。</p>
+      ) : (
+        <ul className="mt-4 space-y-2.5">
+          {rows.map((r) => (
+            <li key={r.kind}>
+              <div className="flex items-center justify-between text-xs">
+                <span className="truncate font-mono text-neutral-600 dark:text-neutral-300">{r.kind}</span>
+                <span className="ml-2 shrink-0 text-neutral-400">
+                  {r.spans} 次 · {r.calls} 调用 · {r.tokens} tok
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all"
+                  style={{ width: `${total > 0 ? Math.round((r.spans / total) * 100) : 0}%` }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-3 text-xs leading-relaxed text-neutral-400">
+        「30 天自用窗口」的读数：零记录的功能不是不存在，是还没被用过——裁决等数据说话。
+      </p>
+    </section>
+  )
+}
+
 export function NorthStarCard({ n }: { n: NorthStar | null }) {
   if (!n) return null
   const today = n.days[n.days.length - 1]?.date

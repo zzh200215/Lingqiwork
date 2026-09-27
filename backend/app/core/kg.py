@@ -12,6 +12,12 @@ LightRAG-style dual retrieval, sized for a personal workbench:
 
 Everything degrades to a no-op when Neo4j is unreachable or the feature is
 off; chat never breaks because of the graph.
+
+**停用裁决（2026-09-27，CTO review #3）**：`kg_enabled` 自交付起为 False，**没有找到
+任何评测产物或结论记录说明它为什么停**——整条链（neo4j 依赖 + 本模块 + 前端配置 tab）
+处于「交付即封存」状态。处置：**封存观察**——不删代码、不再投入；若 30 天自用窗口
+（仪表盘「功能真实用量」砖）后仍零使用，按问题池 #6 走删除裁决（可省一个外部服务依赖）。
+要重开：先补一次「图谱上下文 vs 纯向量检索」的对照评测再开，不许因为「已经写了」就开。
 """
 import asyncio
 import hashlib
