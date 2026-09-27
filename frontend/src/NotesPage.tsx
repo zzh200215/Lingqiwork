@@ -746,7 +746,7 @@ export default function NotesPage() {
               onClick={() => void composeNote()}
               disabled={composeBusy}
               title="从你自己的材料（知识库 / 长期记忆 / 日记）生成一篇笔记"
-              className="w-full rounded-md border border-violet-300 px-2 py-1 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+              className="w-full rounded-md wb-btn-ghost px-2 py-1 text-xs"
             >
               {composeBusy ? (
                 <>

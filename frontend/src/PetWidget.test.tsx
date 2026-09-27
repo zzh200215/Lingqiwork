@@ -226,7 +226,8 @@ describe('PetWidget · 主动提醒', () => {
     await vi.advanceTimersByTimeAsync(4000)
     expect(screen.getByText('「会议闭环」跑完一步了，等你点头才继续。')).toBeTruthy()
     const go = screen.getByText('去放行 →')
-    expect(go.getAttribute('class')).toContain('violet')
+    // 品牌样式的实现从散写的 violet 类收敛进了 .wb-btn-ghost（美化轮），钉子跟着真值走
+    expect(go.getAttribute('class')).toContain('wb-btn-ghost')
   })
 
   it('急的先说：等你点头排在到期卡前面', async () => {

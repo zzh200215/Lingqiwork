@@ -600,7 +600,7 @@ function AudioPane() {
       ) : (
         <ul className="wb-card divide-y divide-neutral-100 dark:divide-neutral-800/70">
           {podcasts.map((p) => (
-            <li key={p.id} className="px-4 py-3">
+            <li key={p.id} className="px-4 py-3 transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-800/40">
               <div className="flex items-baseline gap-2">
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">
                   {p.title}
@@ -931,7 +931,7 @@ function TeachPane() {
                 setTurns([])
                 setWho('')
               }}
-              className="mt-2 rounded-full border border-violet-300 px-3 py-1 text-xs text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-500/50 dark:text-violet-300 dark:hover:bg-violet-500/10"
+              className="mt-2 rounded-full wb-btn-ghost px-3 py-1 text-xs"
             >
               再教一个
             </button>

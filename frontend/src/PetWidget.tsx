@@ -1194,7 +1194,7 @@ export default function PetWidget() {
                   setNudge(null)
                   navigate(nudge.to)
                 }}
-                className="rounded-full border border-violet-300 px-2.5 py-0.5 text-xs text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-500/50 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                className="rounded-full wb-btn-ghost px-2.5 py-0.5 text-xs"
               >
                 {nudge.toLabel} →
               </button>

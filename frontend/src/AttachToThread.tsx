@@ -141,7 +141,7 @@ export default function AttachToThread({
                 e.stopPropagation()
                 void pick(t)
               }}
-              className="rounded-full border border-violet-300 px-2 py-0.5 text-xs text-violet-700 hover:bg-violet-50 disabled:opacity-40 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+              className="rounded-full wb-btn-ghost px-2 py-0.5 text-xs"
             >
               {t.name}
             </button>

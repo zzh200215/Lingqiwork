@@ -176,7 +176,7 @@ export default function PromptDuel({ prompts, id }: { prompts: PromptItem[]; id?
           <button
             data-duel-open
             onClick={() => setOpen(true)}
-            className="shrink-0 rounded-md border border-violet-300 px-3 py-1.5 text-sm text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+            className="shrink-0 rounded-md wb-btn-ghost px-3 py-1.5 text-sm"
           >
             开一局
           </button>
@@ -373,7 +373,7 @@ export default function PromptDuel({ prompts, id }: { prompts: PromptItem[]; id?
                 onClick={() => void saveRecord()}
                 disabled={busy || !!saved}
                 title="把这次对打（提示词 + 输入 + 各家输出）落成 vault 里一篇 md"
-                className="rounded-md border border-violet-300 px-3 py-1.5 text-sm text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                className="rounded-md wb-btn-ghost px-3 py-1.5 text-sm"
               >
                 {saved ? '已存进 vault' : busy ? '存着…' : '存成对打记录'}
               </button>

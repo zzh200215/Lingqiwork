@@ -34,6 +34,10 @@ body {
   outline-offset: 2px;
 }
 
+.wb-btn-ghost {
+  @apply rounded-md border border-violet-300 font-medium text-violet-700 transition-[background-color,border-color] hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10;
+}
+
 .wb-btn-primary {
   @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-gradient-to-b from-violet-500 to-violet-600 font-medium text-white transition-[filter] hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100;
   /* 顶部一道极细的高光给按钮「体积感」——inset 高光不在「常驻阴影」禁令范围内

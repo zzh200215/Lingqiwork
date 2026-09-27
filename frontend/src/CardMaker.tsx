@@ -491,7 +491,7 @@ export default function CardMaker({
           />
           <button
             onClick={addWritten}
-            className="w-full rounded-lg border border-violet-300 px-3 py-1.5 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
+            className="w-full rounded-lg wb-btn-ghost px-3 py-1.5 text-sm"
           >
             ＋ 添加到列表
             <span className="ml-1.5 text-xs text-neutral-400">Ctrl+↵</span>
@@ -585,7 +585,7 @@ export default function CardMaker({
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => void clipCloze()}
-              className="rounded-lg border border-violet-300 px-3 py-1.5 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-500/10"
+              className="rounded-lg wb-btn-ghost px-3 py-1.5 text-sm"
             >
               🎴 把选中的挖成填空卡
             </button>

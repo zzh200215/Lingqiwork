@@ -87,7 +87,7 @@ export default function EvalNightlyCard() {
             <button
               disabled={busy}
               onClick={() => void save(true)}
-              className="rounded-md border border-violet-300 px-2 py-0.5 text-xs text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+              className="rounded-md wb-btn-ghost px-2 py-0.5 text-xs"
             >
               存
             </button>

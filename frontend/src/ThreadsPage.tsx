@@ -659,7 +659,7 @@ export default function ThreadsPage({
                           </span>
                           <button
                             onClick={() => void attach(detail.id, c.kind, c.ref)}
-                            className="shrink-0 rounded-full border border-violet-300 px-2 py-0.5 text-xs text-violet-700 hover:bg-violet-50 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                            className="shrink-0 rounded-full wb-btn-ghost px-2 py-0.5 text-xs"
                           >
                             挂上
                           </button>
@@ -742,7 +742,7 @@ export default function ThreadsPage({
                       data-start-work
                       onClick={() => onStartWork(detail.name)}
                       title="把这件事的名字带过去当题目，在工作流页起一条链"
-                      className="rounded-full border border-violet-300 px-2.5 py-0.5 text-xs text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                      className="rounded-full wb-btn-ghost px-2.5 py-0.5 text-xs"
                     >
                       起一个工作链
                     </button>

@@ -209,7 +209,7 @@ export function InterviewRow({
           onClick={() => void make()}
           disabled={busy || busyReport || turns === 0}
           title="读完整场对话出一份复盘报告（一次模型调用），落到 vault/reports/"
-          className="rounded-lg border border-violet-300 px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+          className="rounded-lg wb-btn-ghost px-2.5 py-1 text-xs"
         >
           {busyReport ? '写报告中…' : rep ? '再出一份' : '出复盘报告'}
         </button>
@@ -1434,7 +1434,7 @@ export default function TutorPage() {
                 <button
                   onClick={() => void saveDecide()}
                   disabled={dcBusy || !!dcSaved}
-                  className="rounded-full border border-violet-300 px-2 py-0.5 text-xs text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/20"
+                  className="rounded-full wb-btn-ghost px-2 py-0.5 text-xs"
                 >
                   {dcSaved ? '已存进知识库' : dcBusy ? '保存中…' : '存进知识库'}
                 </button>
@@ -2359,7 +2359,7 @@ export default function TutorPage() {
                     </span>
                     <button
                       onClick={() => void open(rows[0].id)}
-                      className="shrink-0 rounded-lg border border-violet-300 px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                      className="shrink-0 rounded-lg wb-btn-ghost px-2.5 py-1 text-xs"
                     >
                       接着学 →
                     </button>
@@ -2374,7 +2374,7 @@ export default function TutorPage() {
                     </p>
                     <Link
                       to="/review"
-                      className="shrink-0 rounded-lg border border-violet-300 px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                      className="shrink-0 rounded-lg wb-btn-ghost px-2.5 py-1 text-xs"
                     >
                       出好的卡片去「今日」复习 →
                     </Link>
@@ -3044,7 +3044,7 @@ export default function TutorPage() {
                       onClick={() => void judge()}
                       disabled={busy || judging || turns.length === 0}
                       title="读完整场对话判一档（一次模型调用）；判不了会退回来让你自己标"
-                      className="rounded-lg border border-violet-300 px-2.5 py-1 text-xs text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-40 dark:border-violet-600 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                      className="rounded-lg wb-btn-ghost px-2.5 py-1 text-xs"
                     >
                       {judging ? '判中…' : '让它判'}
                     </button>

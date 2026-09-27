@@ -308,7 +308,10 @@ export default function WorkflowRow({
           : { cls: 'bg-neutral-300 dark:bg-neutral-600', text: '—', tone: 'text-neutral-400' }
 
   return (
-    <li id={`task-${task.id}`} className="px-4 py-2.5">
+    <li
+      id={`task-${task.id}`}
+      className="px-4 py-2.5 transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
+    >
       <div className="flex items-center gap-2">
         <span className={`h-2 w-2 shrink-0 rounded-full ${dot.cls}`} aria-hidden />
         {/* 待放行的排头徽章（方案 §8.3：行首 amber 徽章「等你放行」） */}

@@ -71,7 +71,7 @@ export default function CollabPins({
             key={p.spec}
             data-collab-pin={p.spec}
             title={p.spec}
-            className="flex items-center gap-1 rounded-full border border-violet-300 px-2 py-0.5 text-xs text-violet-700 dark:border-violet-500/50 dark:text-violet-300"
+            className="flex items-center gap-1 rounded-full wb-btn-ghost px-2 py-0.5 text-xs"
           >
             {p.title}
             <button

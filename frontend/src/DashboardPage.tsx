@@ -394,7 +394,7 @@ export default function DashboardPage() {
                   onClick={() => (rc || rcMsg ? clearRecap() : void runRecap())}
                   disabled={rcBusy}
                   title="把信念线 / 学习画像 / 卡点 / 日记 / 最近动过的文件读成一篇「最近」"
-                  className="rounded-full border border-violet-300 px-2.5 py-0.5 text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10"
+                  className="rounded-full wb-btn-ghost px-2.5 py-0.5"
                 >
                   {rcBusy ? '复盘中…' : rc || rcMsg ? '收起' : '📋 复盘一下'}
                 </button>
