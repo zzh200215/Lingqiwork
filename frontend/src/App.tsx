@@ -9,6 +9,8 @@ import CollabSteps from './CollabSteps'
 import CollabPins, { type PinnedMaterial } from './CollabPins'
 import { upsertArtifact, saveHint } from './artifacts'
 import SaveToVault from './SaveToVault'
+import SakuraLayer from './SakuraLayer'
+import { petSprite } from './petFace'
 import { api, type AgentPreset, type Conversation, type Message, type PromptItem, type ProviderConfig } from './api'
 import {
   streamChat,
@@ -371,9 +373,19 @@ export function toChatMessage(m: Message): ChatMessage {
 export default function App() {
   return (
     <>
+      <SakuraLayer on={ambienceOn()} />
       <ChatView />
     </>
   )
+}
+
+/** 氛围粒子的开关真值在 localStorage（🌸 按钮切换）。App 根与工具栏各自读它。 */
+function ambienceOn(): boolean {
+  try {
+    return localStorage.getItem('wb:ambience') !== '0'
+  } catch {
+    return true
+  }
 }
 
 function ChatView() {
@@ -385,6 +397,8 @@ function ChatView() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [useRag, setUseRag] = useState(() => localStorage.getItem('useRag') !== '0')
+  // 氛围粒子（🌸）：二次元个性化的开关，localStorage 记住选择
+  const [ambience, setAmbience] = useState(ambienceOn)
   const [convQuery, setConvQuery] = useState('')
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -1337,6 +1351,28 @@ function ChatView() {
           />
           知识库
         </label>
+        <button
+          onClick={() =>
+            setAmbience((v) => {
+              const next = !v
+              try {
+                localStorage.setItem('wb:ambience', next ? '1' : '0')
+              } catch {
+                /* 无痕模式记不了就算了 */
+              }
+              return next
+            })
+          }
+          aria-pressed={ambience}
+          title={ambience ? '氛围粒子：开（点一下关掉）' : '氛围粒子：关'}
+          className={`rounded-lg border px-2.5 py-1.5 text-sm transition-colors ${
+            ambience
+              ? 'border-pink-200 bg-pink-50 text-pink-500 dark:border-pink-500/40 dark:bg-pink-500/10 dark:text-pink-300'
+              : 'border-neutral-200 bg-white text-neutral-400 hover:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-500'
+          }`}
+        >
+          🌸
+        </button>
         {activeId && (
           <>
             <span className="ml-auto truncate text-xs text-neutral-400">
@@ -1923,6 +1959,33 @@ function ChatView() {
 
 // Landing state: gradient headline + suggestion cards
 function Welcome({ useRag, onPick }: { useRag: boolean; onPick: (prompt: string) => void }) {
+  // 二次元迎宾位：零柒本尊（动画 webp，与挂件同一套资产）+ 它此刻的一句话打字机。
+  // 问候读的是 `petState`（挂件/小屋同一份真值），拿不到就退化为纯标题——不硬凑一句。
+  const [line, setLine] = useState('')
+  const [typed, setTyped] = useState('')
+  const reduced =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+  useEffect(() => {
+    api.petState(0, '/').then((s) => setLine(s.line || '')).catch(() => setLine(''))
+  }, [])
+  useEffect(() => {
+    if (!line) return
+    if (reduced) {
+      setTyped(line)
+      return
+    }
+    setTyped('')
+    let i = 0
+    const t = setInterval(() => {
+      i += 1
+      setTyped(line.slice(0, i))
+      if (i >= line.length) clearInterval(t)
+    }, 55)
+    return () => clearInterval(t)
+  }, [line, reduced])
+
   const suggestions = useRag
     ? [
         { icon: '📚', title: '总结我的笔记', prompt: '帮我总结知识库里关于项目架构的要点' },
@@ -1939,15 +2002,26 @@ function Welcome({ useRag, onPick }: { useRag: boolean; onPick: (prompt: string)
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-4 pb-16">
-      <div className="mb-1.5 flex h-14 w-14 animate-slide-up items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 text-2xl shadow-lg shadow-violet-300 dark:shadow-violet-900/50">
-        🧠
-      </div>
+      <img
+        src={petSprite('idle')}
+        alt=""
+        className="pet-idle mb-1.5 h-24 w-24 animate-slide-up object-contain drop-shadow-md"
+        onError={(e) => {
+          e.currentTarget.src = '/pet-avatar.png'
+        }}
+      />
       <h1 className="mt-4 animate-slide-up bg-gradient-to-r from-violet-600 via-fuchsia-500 to-violet-600 bg-clip-text text-2xl font-bold text-transparent dark:from-violet-400 dark:via-fuchsia-400 dark:to-violet-400">
         今天想做点什么？
       </h1>
       <p className="mt-1.5 animate-fade-in text-sm text-neutral-400">
         {useRag ? 'RAG 已开启 — 回答将引用你的知识库' : '直接提问，或打开知识库(RAG)让我引用你的笔记'}
       </p>
+      {line ? (
+        <p aria-label={line} className="mt-2 animate-fade-in text-sm text-violet-500 dark:text-violet-300">
+          零柒：{typed}
+          {typed.length < line.length ? <span className="animate-pulse">▌</span> : null}
+        </p>
+      ) : null}
       <div className="mt-8 grid w-full max-w-2xl grid-cols-2 gap-3">
         {suggestions.map((s) => (
           <button
