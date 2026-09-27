@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.config import VAULT_DIR
 from app.core import arena as core
 
 router = APIRouter(prefix="/api/arena", tags=["arena"])
@@ -39,6 +40,29 @@ class SaveIn(BaseModel):
 @router.post("")
 async def run(body: ArenaIn):
     return {"results": await core.run(body.prompt, body.models, body.system)}
+
+
+@router.get("/records")
+async def list_records():
+    """历次对打记录（`vault/prompts/duels/`）——对打浏览器（2026-09-26）。
+
+    存的时候就是一篇普通 md（`save_record`），这里只回「**哪几篇、什么时候**」，
+    正文走既有的笔记页（`/notes?path=`）看——同一份文件不做第二个查看器。
+    按修改时间倒序、封顶 50 篇；目录不存在 = 一次都没存过，返回空表不报错。
+    """
+    duel_dir = core.DUEL_DIR
+    if not duel_dir.exists():
+        return {"records": []}
+    out = []
+    for p in sorted(duel_dir.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True)[:50]:
+        out.append(
+            {
+                "path": p.relative_to(VAULT_DIR).as_posix(),
+                "title": p.stem,
+                "mtime": int(p.stat().st_mtime),
+            }
+        )
+    return {"records": out}
 
 
 @router.post("/save")

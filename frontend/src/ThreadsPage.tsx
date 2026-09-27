@@ -118,6 +118,9 @@ export default function ThreadsPage({
   const [genre, setGenre] = useState('')
   const [audience, setAudience] = useState('')
   const [writing, setWriting] = useState(false)
+  /** 「忽略全部」的两段式确认：第一下只立起确认，第二下才真执行——
+   *  批量动作不可逆（忽略后要从 unignore 里捞回来），值得多按一下。 */
+  const [ignoreAllArm, setIgnoreAllArm] = useState(false)
   /** 「写一份」那一次的 AbortController。**这一条的取消是真停**（见 `writeForThread`）。 */
   const writeAbort = useRef<AbortController | null>(null)
   const navigate = useNavigate()
@@ -401,6 +404,31 @@ export default function ThreadsPage({
                 收件箱 · {orphans.length} 条待归类
               </h2>
               <span className="text-xs text-neutral-400">挂到某件事上，或忽略</span>
+              <button
+                data-inbox-ignore-all
+                disabled={busy}
+                title="收件箱里所有条目都忽略——东西一件不动，随时可从忽略清单捞回"
+                onClick={async () => {
+                  if (!ignoreAllArm) {
+                    setIgnoreAllArm(true)
+                    return
+                  }
+                  setIgnoreAllArm(false)
+                  let failed = 0
+                  for (const c of orphans) {
+                    try {
+                      await api.ignoreInboxItem(c.kind, c.ref)
+                    } catch {
+                      failed += 1 // 单条失败不拦其余——最后把没忽略成的条数说出来
+                    }
+                  }
+                  if (failed > 0) setErr(`${failed} 条没忽略成功——稍后重试或逐条处理`)
+                  await refreshOrphans()
+                }}
+                className="shrink-0 rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-400 transition-colors hover:border-rose-300 hover:text-rose-500 disabled:opacity-40 dark:border-neutral-700"
+              >
+                {ignoreAllArm ? `确认忽略 ${orphans.length} 条？` : '忽略全部'}
+              </button>
             </div>
             {/* 分隔线**通栏**（方案 §七「照 RoomPane 现例」）：容器自己带 `px-4`，
                 所以列表用 `-mx-4` 把它拉回卡片边，行再加回 `px-4`。不这么做的话，

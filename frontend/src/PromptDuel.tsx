@@ -394,6 +394,54 @@ export default function PromptDuel({ prompts, id }: { prompts: PromptItem[]; id?
           </>
         )
       ) : null}
+
+      <ArenaHistory />
     </section>
+  )
+}
+
+/** 历史对打（2026-09-26）：落盘的记录就是普通 md，这里只列清单、点开走笔记页——
+ *  同一份文件不做第二个查看器。没存过就一句实话，不摆空架子。 */
+function ArenaHistory() {
+  const [records, setRecords] = useState<{ path: string; title: string; mtime: number }[] | null>(
+    null,
+  )
+
+  useEffect(() => {
+    api
+      .listArenaRecords()
+      .then((r) => setRecords(r.records))
+      .catch(() => setRecords(null)) // 读不到就整个不摆：拉清单失败 ≠ 没存过
+  }, [])
+
+  if (records === null) return null
+  return (
+    <details data-arena-history className="border-t border-neutral-100 pt-2 dark:border-neutral-800">
+      <summary className="cursor-pointer text-xs text-neutral-500 transition-colors hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200">
+        历史对打 · {records.length} 篇
+      </summary>
+      {records.length === 0 ? (
+        <p className="pt-2 text-xs text-neutral-400">一篇都没有——对打后点「存为记录」就会落在这里。</p>
+      ) : (
+        <ul className="mt-2 divide-y divide-neutral-100 dark:divide-neutral-800/70">
+          {records.map((r) => (
+            <li key={r.path} className="py-1.5">
+              <Link
+                to={`/notes?path=${encodeURIComponent(r.path)}`}
+                title={r.path}
+                className="flex items-baseline gap-2 text-xs"
+              >
+                <span className="min-w-0 flex-1 truncate text-neutral-700 hover:text-violet-600 dark:text-neutral-200 dark:hover:text-violet-300">
+                  {r.title}
+                </span>
+                <span className="shrink-0 text-neutral-400">
+                  {new Date(r.mtime * 1000).toISOString().slice(5, 10)}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   )
 }

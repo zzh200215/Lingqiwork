@@ -311,3 +311,35 @@ async def test_health_report_aggregates_and_survives_breakage(monkeypatch):
     monkeypatch.setattr(backup_core, "list_backups", boom)
     r2 = await health_router.report()
     assert r2["backups"] == {} and r2["self"]["jobs_total"] >= 0
+
+
+async def test_list_records_returns_duel_files_newest_first(monkeypatch):
+    """对打浏览器（2026-09-26）：GET /records 列 duels/ 里的 md——新在前、封顶 50，
+    路径相对 vault；目录不存在 = 一次没存过，空表不报错。"""
+    import tempfile
+    import time
+    from pathlib import Path
+
+    import app.routers.arena as arena_router
+
+    tmp = Path(tempfile.mkdtemp(prefix="wb-arena-"))
+    vault = tmp / "vault"
+    vault.mkdir()
+    # 生产结构：DUEL_DIR 恒在 vault 之下（core/arena.py: VAULT_DIR/prompts/duels）
+    duel = vault / "prompts" / "duels"
+    duel.mkdir(parents=True)
+    monkeypatch.setattr(core, "DUEL_DIR", duel)
+    monkeypatch.setattr(arena_router, "VAULT_DIR", vault)
+
+    f1 = duel / "2026-09-25-a.md"
+    f2 = duel / "2026-09-26-b.md"
+    f1.write_text("# 旧对打", encoding="utf-8")
+    time.sleep(0.02)
+    f2.write_text("# 新对打", encoding="utf-8")
+
+    out = await arena_router.list_records()
+    assert [r["title"] for r in out["records"]] == ["2026-09-26-b", "2026-09-25-a"]
+    assert out["records"][0]["path"] == "prompts/duels/2026-09-26-b.md"  # 相对 vault
+
+    monkeypatch.setattr(core, "DUEL_DIR", tmp / "不存在")
+    assert (await arena_router.list_records())["records"] == []

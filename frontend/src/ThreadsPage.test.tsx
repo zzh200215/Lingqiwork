@@ -336,3 +336,25 @@ describe('ThreadsPage · 活性（2026-09-26）', () => {
     }
   })
 })
+
+describe('ThreadsPage · 收件箱批处理（2026-09-26）', () => {
+  it('忽略全部：两段式确认，第二下才逐条真执行', async () => {
+    vi.mocked(api.unclassified).mockResolvedValue({
+      items: [
+        { kind: 'note', ref: 'notes/a.md', title: '甲' },
+        { kind: 'card', ref: 'cards/b.md', title: '乙' },
+      ],
+      total: 2,
+    })
+    renderPage('/work?tab=thread')
+    fireEvent.click(await screen.findByText('忽略全部'))
+    // 第一下只立起确认——什么都没发生，这是批量不可逆操作的缓冲
+    expect(screen.getByText('确认忽略 2 条？')).toBeTruthy()
+    expect(api.ignoreInboxItem).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText('确认忽略 2 条？'))
+    await waitFor(() => expect(api.ignoreInboxItem).toHaveBeenCalledTimes(2))
+    expect(api.ignoreInboxItem).toHaveBeenNthCalledWith(1, 'note', 'notes/a.md')
+    expect(api.ignoreInboxItem).toHaveBeenNthCalledWith(2, 'card', 'cards/b.md')
+  })
+})

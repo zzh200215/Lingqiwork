@@ -9,7 +9,13 @@ import PromptDuel from './PromptDuel'
 import type { PromptItem, ProviderConfig } from './api'
 
 vi.mock('./api', () => ({
-  api: { listProviders: vi.fn(), arenaRun: vi.fn(), arenaSave: vi.fn() },
+  api: {
+    listProviders: vi.fn(),
+    arenaRun: vi.fn(),
+    arenaSave: vi.fn(),
+    // 历史对打清单（对打浏览器）：默认空表——「没存过」在界面上是一句实话
+    listArenaRecords: vi.fn().mockResolvedValue({ records: [] }),
+  },
 }))
 
 import { api } from './api'
