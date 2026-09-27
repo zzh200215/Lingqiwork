@@ -179,6 +179,8 @@ class FakeAudio {
 
 beforeEach(() => {
   localStorage.clear()
+  // jsdom 没有 scrollIntoView；面板打开 / 消息追加时会调它（与陪伴页测试同一桩）
+  Element.prototype.scrollIntoView = () => {}
   vi.stubGlobal('Audio', FakeAudio)
   // Date 也要伪造：半小时节流比的是 Date.now()
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })

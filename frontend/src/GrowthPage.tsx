@@ -75,6 +75,16 @@ function partDetail(key: string, c: Record<string, number>): string {
   return ''
 }
 
+/** 来源格的列数跟着条数走（最多 5）：3 条来源摆 3 列，不摆「5 列里空两格」；
+ *  断点与外层 bento 的 xl 对齐，不再混出一档 lg（§#15）。 */
+function partCols(n: number): string {
+  if (n >= 5) return 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-5'
+  if (n === 4) return 'grid-cols-2 xl:grid-cols-4'
+  if (n === 3) return 'grid-cols-2 sm:grid-cols-3'
+  if (n === 2) return 'grid-cols-2'
+  return 'grid-cols-1'
+}
+
 export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
   const [growth, setGrowth] = useState<PetGrowth | null>(null)
   const [mastery, setMastery] = useState<TutorMastery | null>(null)
@@ -112,7 +122,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
 
   if (error) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-10 text-sm text-red-600 dark:text-red-300">
+      <div className="mx-auto max-w-3xl px-6 py-10 text-sm text-rose-600 dark:text-rose-300">
         读成长数据出错了：{error}
       </div>
     )
@@ -209,7 +219,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
 
       {/* 来源格子：整行 KPI 排——每条线一块砖，+N 与它的细节在一起。 */}
       {growth.parts.length > 0 && (
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <section className={`grid gap-3 ${partCols(growth.parts.length)}`}>
           {growth.parts.map((p) => (
             <div key={p.key} className="wb-card p-4">
               <span className="wb-chip h-7 w-7 rounded-lg bg-violet-100 text-base text-violet-600 dark:bg-violet-400/15 dark:text-violet-300">
@@ -249,7 +259,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
             >
               {room!.things.map((t) => (
                 <li key={t.id} data-milestone={t.id} className="relative pb-3 pl-4 last:pb-0">
-                  <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-violet-400 ring-2 ring-white dark:ring-neutral-950" />
+                  <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-violet-400 ring-2 ring-white dark:ring-neutral-900" />
                   <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
                     <span>{t.icon}</span>
                     <span className="text-neutral-700 dark:text-neutral-200">{t.label}</span>
@@ -320,7 +330,7 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
                   <span className="text-neutral-700 dark:text-neutral-200">{h.name}</span>
                   <div className="flex-1" />
                   {h.streak > 0 && (
-                    <span className="text-xs text-orange-500 dark:text-orange-400">
+                    <span className="text-xs text-amber-600 dark:text-amber-400">
                       连续 {h.streak} 天
                     </span>
                   )}
@@ -416,12 +426,12 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
   )
 
   // chromeless：整页搬进陪伴页「成长」标签时不要页头——那里已经有「陪伴」的页头。
-  if (chromeless) return <div className="space-y-6">{body}</div>
+  if (chromeless) return <div className="space-y-4">{body}</div>
   return (
     <PageShell
       title="成长"
       description="你和这件事的关系——只累计，不记账。"
-      bodyClassName="space-y-6"
+      bodyClassName="space-y-4"
     >
       {body}
     </PageShell>

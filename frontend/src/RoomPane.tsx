@@ -300,12 +300,16 @@ export default function RoomPane() {
     }
   }, [path])
 
+  // 加载/错误也套卡（§F）：裸文本在整页 bento 里读起来像「页面坏了」
   if (error) {
     return (
-      <div className="text-sm text-red-600 dark:text-red-300">读小屋出错了：{error}</div>
+      <div className="wb-card p-4 text-sm text-rose-600 dark:text-rose-300">
+        读小屋出错了：{error}
+      </div>
     )
   }
-  if (!room) return <div className="text-sm text-neutral-400">正在看它屋里有什么…</div>
+  if (!room)
+    return <div className="wb-card p-4 text-sm text-neutral-400">正在看它屋里有什么…</div>
 
   const props = room.things.filter((t) => t.kind === 'prop')
   const badges = room.things.filter((t) => t.kind === 'badge')
@@ -334,8 +338,9 @@ export default function RoomPane() {
       {/* bento 第一行：零柒本尊（5 列）+ 屋里攒下的东西（7 列）。
           本尊卡只摆姿势、那句话、身上叼着什么——「它此刻的样子」；
           右卡是它攒下的实物。两卡等高，谁也不孤零零漂在渐变里。 */}
-      <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
-        <section className="wb-card-hero rounded-lg p-5 xl:col-span-5">
+      <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
+        {/* hero 在 md 档占满一行（§C：hero 卡占满行或 8/12 跨度），xl 起才是 5/7 分栏 */}
+        <section className="wb-card-hero rounded-lg p-5 md:col-span-2 xl:col-span-5">
           <div className="flex h-full flex-col items-center justify-center">
             <img
               data-room-pet
@@ -384,7 +389,7 @@ export default function RoomPane() {
           </div>
         </section>
 
-        <section className="wb-card flex flex-col p-4 xl:col-span-7">
+        <section className="wb-card flex flex-col p-4 md:col-span-2 xl:col-span-7">
           {room.empty ? (
             <EmptyHint
               title="小屋还是空的。"
@@ -414,7 +419,8 @@ export default function RoomPane() {
                   <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
                     徽章
                   </h2>
-                  <div className="flex flex-wrap gap-2">
+                  {/* 徽章与摆件同一铺法（网格均分）——同组件两种铺法会显乱（§#12） */}
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                     {badges.map((t) => (
                       <Thing key={t.id} t={t} now={now} />
                     ))}
@@ -428,7 +434,7 @@ export default function RoomPane() {
 
       {/* bento 第二行：它记住的概念（5 列）+ 架上那几份（7 列）。
           概念是「它脑子里此刻记着什么」，架子是「它交出过什么」——并排正好一面两窗。 */}
-      <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
+      <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
         {/* 它记住的概念（P2 · F13）：学页那张**学习地图在小屋里的镜子**。
             **屋里的一类新东西**——不是徽章（攒下的）、不是技能卡（跑过对照的）、
             不是枝（三样都够的领域），是「它脑子里现在记着哪些概念、各在哪一档」。
@@ -450,10 +456,11 @@ export default function RoomPane() {
             </Link>
           </div>
           {concepts.cards.length === 0 ? (
-            <p className="flex-1 text-sm text-neutral-400 dark:text-neutral-500">
-              还没有一张概念卡。它记不记得一个概念只由一件事决定：你为它开过一场教学——
-              说通了、半懂、卡在哪儿，都是从那些会话里读出来的。
-            </p>
+            <EmptyHint
+              className="flex-1"
+              title="还没有一张概念卡。"
+              hint="它记不记得一个概念只由一件事决定：你为它开过一场教学——说通了、半懂、卡在哪儿，都是从那些会话里读出来的。"
+            />
           ) : (
             <div data-room-concepts className="grid flex-1 gap-2 sm:grid-cols-2">
               {concepts.cards.map((c) => (
@@ -475,9 +482,11 @@ export default function RoomPane() {
             </Link>
           </div>
           {room.shelf.length === 0 ? (
-            <p className="flex-1 text-sm text-neutral-400 dark:text-neutral-500">
-              架上还空着。工作页跑一条流程，或让对话里的回答「存进产出」。
-            </p>
+            <EmptyHint
+              className="flex-1"
+              title="架上还空着。"
+              hint="工作页跑一条流程，或让对话里的回答「存进产出」。"
+            />
           ) : (
             <ul
               data-room-shelf
@@ -529,7 +538,7 @@ export default function RoomPane() {
       </div>
 
       {/* bento 第三行：它学会的技能（6 列）+ 它长出的枝（6 列）。 */}
-      <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
+      <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
         {/* 它学会的技能：跑过对照的提示词。**没跑过的不摆**——没验过的不是技能。 */}
         <section className="wb-card flex flex-col p-4 xl:col-span-6">
           <div className="mb-2 flex items-baseline gap-2">
@@ -542,9 +551,11 @@ export default function RoomPane() {
             </Link>
           </div>
           {room.skills.length === 0 ? (
-            <p className="flex-1 text-sm text-neutral-400 dark:text-neutral-500">
-              还没有一张技能卡。技能只有一个到手方式：一条提示词在实验室里跑过一次对照。
-            </p>
+            <EmptyHint
+              className="flex-1"
+              title="还没有一张技能卡。"
+              hint="技能只有一个到手方式：一条提示词在实验室里跑过一次对照。"
+            />
           ) : (
             <div data-room-skills className="grid flex-1 gap-2 sm:grid-cols-2">
               {room.skills.map((s) => (
@@ -566,11 +577,11 @@ export default function RoomPane() {
             </Link>
           </div>
           {room.form.length === 0 ? (
-            <p className="flex-1 text-sm text-neutral-400 dark:text-neutral-500">
-              还没有长出枝。一根枝要三样在同一个领域里都有足够的证据：检索得住的命中率、
-              搞懂过的概念、跑通过的技能卡。领域是你在证据上自己写的一个短词——样例题上、
-              教学会话上、实验室那套用例上，只写在一个地方还不算。
-            </p>
+            <EmptyHint
+              className="flex-1"
+              title="还没有长出枝。"
+              hint="一根枝要三样在同一个领域里都有足够的证据：检索得住的命中率、搞懂过的概念、跑通过的技能卡。领域是你在证据上自己写的一个短词——样例题上、教学会话上、实验室那套用例上，只写在一个地方还不算。"
+            />
           ) : (
             <div data-room-form-list className="grid flex-1 gap-2">
               {room.form.map((b) => (
@@ -582,7 +593,7 @@ export default function RoomPane() {
       </div>
 
       {/* bento 第四行：今天喂了它什么（5 列）+ 这一周（7 列）。 */}
-      <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
+      <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
         {/* 今天喂了它什么：每条线今天的真实成果，一条一件 */}
         <section className="wb-card flex flex-col p-4 xl:col-span-5">
           <div className="mb-2 flex items-baseline gap-2">
@@ -597,9 +608,11 @@ export default function RoomPane() {
             )}
           </div>
           {meals.length === 0 ? (
-            <p className="flex-1 text-sm text-neutral-400 dark:text-neutral-500">
-              它不饿，今天还没吃的。等你做完点什么，它就有得吃了。
-            </p>
+            <EmptyHint
+              className="flex-1"
+              title="它不饿，今天还没吃的。"
+              hint="等你做完点什么，它就有得吃了。"
+            />
           ) : (
             <div data-room-meals className="flex flex-1 flex-wrap content-start gap-1.5">
               {meals.map((m) => (

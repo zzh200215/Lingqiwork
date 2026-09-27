@@ -24,6 +24,7 @@ import { historyOf, receiptLabel, streamPetChat, toolCallLabel, type PetToolRece
 import { asPetAction, petSprite, type PetAction } from './petFace'
 import { blipOn as isBlipOn, playBlip, setBlipOn as storeBlipOn } from './petSound'
 import { ago } from './reltime'
+import { STARTER_CARDS } from './StarterCards'
 import { streamPet } from './stream'
 import { makeSpeech, useVoiceInput } from './voice'
 
@@ -54,8 +55,8 @@ const MODE_LABEL: Record<PetStateMode, string> = {
 // 陪伴不该变成管教，何况你很可能只是切去别的窗口干正事。
 const DIM_MODES: PetStateMode[] = ['idling', 'resting']
 
-// 右下角留白 = Tailwind 的 bottom-5/right-5（1.25rem = 20px）。让位计算要用到它，
-// 改了 class 就得同步改这里。
+// 右下角留白的**唯一真值**（px）。容器定位（style 里的 bottom/right）与让位计算
+// 读的是同一个常量——不再有「class 写 5、常数写 20」的手工同步。
 const PET_CORNER = 20
 // 页面上「宠物必须让开」的东西都标这个属性（目前只有对话页的输入行）。
 const PET_CLEAR_SELECTOR = '[data-pet-clear]'
@@ -64,7 +65,9 @@ const PET_CLEAR_SELECTOR = '[data-pet-clear]'
 //
 // 位置记的是**离右下角自然位置的偏移**，不记绝对坐标：窗口一缩放，绝对坐标能把
 // 宠物拽出屏幕外；偏移量 + 夹紧，天生跟着窗口走。
-const PET_SIZE = 96 // 精灵 h-24 w-24
+// 精灵的自然大小（xl 档 h-24 w-24；<768px 缩到 h-16 w-16 = 64px，不占 375px 屏的
+// 四分之一）。夹紧按较大的 96 算：窄屏上只会让宠物离边更远一点，绝不会推出屏幕外。
+const PET_SIZE = 96
 
 function clampDrag(dx: number, dy: number, w = window.innerWidth, h = window.innerHeight) {
   return {
@@ -412,6 +415,7 @@ export default function PetWidget() {
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const panelBottomRef = useRef<HTMLDivElement>(null)
 
   // ---------- 做活（P5）：点击 Q 弹 + 一声合成音效 ----------
   //
@@ -479,6 +483,9 @@ export default function PetWidget() {
           lift = Math.max(lift, bottom - r.top + 8)
         }
       })
+      // 夹紧：再怎么让位，面板顶也不能被推出视口上沿——最多抬到离屏幕顶还有 8px。
+      // 横屏矮视口上不夹紧的话，「让位」会把整块推出屏幕外面。
+      lift = Math.min(lift, Math.max(0, bottom - h - 8))
       setDodge(lift)
     }
     measure()
@@ -499,6 +506,12 @@ export default function PetWidget() {
   useEffect(() => {
     openRef.current = open
   }, [open])
+
+  // 面板里的消息流式追加时跟到底（与陪伴页同一条体验，改造 #21）；面板刚打开也
+  // 对一次底——从最近那条接着看，而不是从最旧那条开始滚。
+  useEffect(() => {
+    if (open) panelBottomRef.current?.scrollIntoView({ block: 'end' })
+  }, [chat, open])
 
   // ---------- 此刻：状态机（P1 · 维度一）----------
   //
@@ -1096,6 +1109,11 @@ export default function PetWidget() {
     []
   )
 
+  // 陪伴页自己就是整页的零柒（聊天/教它/成长/小屋/有声五张脸）——挂件再浮一只
+  // 就是同屏双宠（§#26）。这一页上整个退场：流照接、状态照更，只是不画。
+  // （PiP 开着就不退：那个系统小窗里的树长在这个组件上，退场会留一个空壳窗。）
+  if (location.pathname === '/companion' && !pipWin) return null
+
   return (
     <>
       {/* 零柒的三个动画（pet-idle / pet-squash / pet-bubble-in）已搬进 index.css：
@@ -1111,22 +1129,28 @@ export default function PetWidget() {
         // pointer-events-none 在外层：这个 flex 盒子的宽度由最宽的子元素决定
         // （气泡能到 280px），不关掉的话，离精灵很远的地方点下去也会被它吃掉。
         // 真正要能点的三块（气泡 / 面板 / 精灵本体）各自 pointer-events-auto。
-        className={`pointer-events-none fixed bottom-5 right-5 z-50 flex flex-col items-end ${
+        // z-30（§H 弹层分级）：挂件要随手够得着，但必须永远压不过模态——
+        // 原来它与命令面板、确认弹窗同为 z-50 且 DOM 靠后，精灵会盖住 Ctrl+K 的面板。
+        className={`pointer-events-none fixed z-30 flex flex-col items-end ${
           dragging ? '' : 'transition-transform duration-200'
         }`}
-        style={
-          drag.dx || drag.dy
-            ? { transform: `translate(${drag.dx}px, ${drag.dy - dodge}px)` }
-            : dodge
-              ? { transform: `translateY(-${dodge}px)` }
-              : undefined
-        }
+        style={{
+          // 离边多远由 PET_CORNER 一处决定（原 bottom-5/right-5 就是 20px，同一个数）
+          bottom: PET_CORNER,
+          right: PET_CORNER,
+          transform:
+            drag.dx || drag.dy
+              ? `translate(${drag.dx}px, ${drag.dy - dodge}px)`
+              : dodge
+                ? `translateY(-${dodge}px)`
+                : undefined,
+        }}
       >
         {/* speech bubble above the sprite：主动提醒（带去处）优先，系统气泡让位 */}
         {nudge && !open ? (
           <div className="pet-bubble pointer-events-auto mb-2 max-w-[280px] rounded-lg rounded-br-sm border border-violet-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-violet-900/10 dark:border-violet-500/40 dark:bg-neutral-800 dark:text-neutral-100">
             <div className="flex items-start gap-2">
-              <span className="min-w-0 flex-1">{nudge.text}</span>
+              <span className="min-w-0 flex-1 break-words">{nudge.text}</span>
               <button
                 onClick={() => setNudge(null)}
                 title="知道了，今天别念了"
@@ -1150,33 +1174,36 @@ export default function PetWidget() {
         ) : bubble && !open ? (
           <button
             onClick={() => setOpen(true)}
-            className="pet-bubble pointer-events-auto mb-2 max-w-[260px] rounded-lg rounded-br-sm border border-neutral-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+            // 与 nudge 气泡同一个 max-w（280）：两种气泡互替时左缘不跳（§#27）
+            className="pet-bubble pointer-events-auto mb-2 max-w-[280px] break-words rounded-lg rounded-br-sm border border-neutral-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
           >
             {bubble}
           </button>
         ) : null}
 
-        {/* expanded panel */}
+        {/* expanded panel：高度封顶 70vh、宽度封顶 320px——横屏矮视口（667×375）上
+            面板不超出屏幕高，窄手机（375px）上不顶满整屏宽（§P0 #19/#20）。 */}
         {open && (
-          <div className="pet-bubble pointer-events-auto mb-2 flex h-[380px] w-[320px] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/20 dark:border-neutral-700 dark:bg-neutral-900">
+          <div className="pet-bubble pointer-events-auto mb-2 flex h-[380px] max-h-[70vh] w-[calc(100vw-32px)] max-w-[320px] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/20 dark:border-neutral-700 dark:bg-neutral-900">
+            {/* 头部一行七样（§#24）：成长链 min-w-0 flex-1 truncate 吃掉弹性、
+                尾部按钮 shrink-0 保活——窄面板上被裁的是「正在靠近…」，不再是按钮。 */}
             <div className="flex items-center gap-2 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
-              <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">零柒</span>
+              <span className="shrink-0 text-sm font-semibold text-neutral-800 dark:text-neutral-100">零柒</span>
               {growth && (
                 <Link
                   to="/growth"
                   onClick={() => setOpen(false)}
                   title="看成长"
-                  className="text-xs text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
+                  className="min-w-0 flex-1 truncate text-xs text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
                 >
                   Lv.{growth.level} {growth.title} · EXP {growth.exp}
                   {growth.next_title && ` · 正在靠近「${growth.next_title}」`}
                 </Link>
               )}
-              <div className="flex-1" />
               <button
                 onClick={toggleSpeak}
                 title={speakOn ? '朗读：开（点一下关掉）' : '朗读：关'}
-                className={`text-xs transition-colors ${
+                className={`shrink-0 text-xs transition-colors ${
                   speakOn ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
                 } hover:text-violet-500`}
               >
@@ -1185,7 +1212,7 @@ export default function PetWidget() {
               <button
                 onClick={toggleBlip}
                 title={blipOn ? '音效：开（点一下关掉）' : '音效：关'}
-                className={`text-xs transition-colors ${
+                className={`shrink-0 text-xs transition-colors ${
                   blipOn ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
                 } hover:text-violet-500`}
               >
@@ -1196,7 +1223,7 @@ export default function PetWidget() {
                 title={
                   pipWin ? '收回置顶小窗' : '弹出置顶小窗：切去别的应用，它也浮在屏幕上'
                 }
-                className={`text-xs transition-colors ${
+                className={`shrink-0 text-xs transition-colors ${
                   pipWin ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
                 } hover:text-violet-500`}
               >
@@ -1206,13 +1233,13 @@ export default function PetWidget() {
                 to="/companion"
                 onClick={() => setOpen(false)}
                 title="整页聊天 / 教它 / 成长 / 小屋 / 有声"
-                className="text-xs text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
+                className="shrink-0 text-xs text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
               >
                 陪伴页 →
               </Link>
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-md px-1.5 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                className="shrink-0 rounded-md px-1.5 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
               >
                 ✕
               </button>
@@ -1292,20 +1319,20 @@ export default function PetWidget() {
                 </div>
               )}
               {events.map((e) => (
-                <div key={`e${e.id}`} className="max-w-[92%] rounded-lg rounded-bl-sm bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
+                <div key={`e${e.id}`} className="max-w-[92%] break-words rounded-lg rounded-bl-sm bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
                   <div className="whitespace-pre-wrap text-neutral-700 dark:text-neutral-200">{e.text}</div>
                   <div className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">{timeLabel(e.created_at)}</div>
                 </div>
               ))}
               {chat.map((m, i) =>
                 m.role === 'user' ? (
-                  <div key={`u${i}`} className="ml-auto max-w-[92%] whitespace-pre-wrap rounded-lg rounded-br-sm bg-violet-600 px-3 py-2 text-white">
+                  <div key={`u${i}`} className="ml-auto max-w-[92%] whitespace-pre-wrap break-words rounded-lg rounded-br-sm bg-violet-600 px-3 py-2 text-white">
                     {m.text}
                   </div>
                 ) : (
                   <div
                     key={`p${i}`}
-                    className="max-w-[92%] rounded-lg rounded-bl-sm bg-neutral-100 px-3 py-2 dark:bg-neutral-800"
+                    className="max-w-[92%] break-words rounded-lg rounded-bl-sm bg-neutral-100 px-3 py-2 dark:bg-neutral-800"
                   >
                     {/* 它真的做了什么。写在话**前面**：先有动作，再有解释。 */}
                     {m.tools && m.tools.length > 0 && (
@@ -1335,7 +1362,8 @@ export default function PetWidget() {
                   </div>
                 ),
               )}
-              {error && <div className="rounded-lg bg-red-100 px-3 py-2 text-xs text-red-600 dark:bg-red-950/60 dark:text-red-300">{error}</div>}
+              {error && <div className="rounded-lg bg-rose-100 px-3 py-2 text-xs text-rose-600 dark:bg-rose-950/60 dark:text-rose-300">{error}</div>}
+              <div ref={panelBottomRef} />
             </div>
 
             {plugins.length > 0 && (
@@ -1353,20 +1381,15 @@ export default function PetWidget() {
             {/* 快捷对话条：还没开聊的时候，一键起头——开口的门槛越低，陪伴越真 */}
             {chat.length === 0 && (
               <div className="flex flex-wrap gap-1.5 border-t border-neutral-200 px-3 pt-2 dark:border-neutral-800">
-                {(
-                  [
-                    ['排一下今天', '帮我看看现在都欠着什么，排个先后。'],
-                    ['陪我聊两句', '陪我聊两句，随便什么都行。'],
-                    ['总结今天', '总结一下我今天都干了什么。'],
-                  ] as const
-                ).map(([label, q]) => (
+                {/* 文案与陪伴页空态同源（STARTER_CARDS 前三张）——两处维护必漂移（§#26） */}
+                {STARTER_CARDS.slice(0, 3).map((c) => (
                   <button
-                    key={label}
-                    onClick={() => void send(q)}
+                    key={c.title}
+                    onClick={() => void send(c.q)}
                     disabled={busy}
                     className="rounded-full border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50"
                   >
-                    {label}
+                    {c.title}
                   </button>
                 ))}
               </div>
@@ -1381,14 +1404,14 @@ export default function PetWidget() {
                   title={voice.recording ? '停止并转写' : '对着零柒说话（说完直接发）'}
                   className={`flex w-9 shrink-0 items-center justify-center rounded-lg border text-sm transition-colors disabled:opacity-40 ${
                     voice.recording
-                      ? 'border-red-400 bg-red-50 text-red-500 dark:border-red-500/50 dark:bg-red-500/10'
+                      ? 'border-rose-400 bg-rose-50 text-rose-500 dark:border-rose-500/50 dark:bg-rose-500/10'
                       : 'border-neutral-300 text-neutral-400 hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:hover:border-violet-500/50'
                   }`}
                 >
                   {voice.transcribing ? (
                     '⏳'
                   ) : voice.recording ? (
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" />
                   ) : (
                     '🎤'
                   )}
@@ -1418,7 +1441,7 @@ export default function PetWidget() {
           onClick={onSpriteClick}
           onPointerDown={onSpritePointerDown}
           title={state ? `零柒 · ${MODE_LABEL[state.mode]}` : '零柒'}
-          className="pointer-events-auto relative flex h-24 w-24 touch-none items-center justify-center transition-transform hover:scale-105 active:scale-95"
+          className="pointer-events-auto relative flex h-16 w-16 touch-none items-center justify-center transition-transform hover:scale-105 active:scale-95 md:h-24 md:w-24"
         >
           <div className="pet-idle flex items-center justify-center">
             <img
@@ -1429,7 +1452,7 @@ export default function PetWidget() {
               // 你走开久了 → 只把宠物自己降饱和（陪伴不是管教，页面不动）
               style={dimmed ? { filter: 'saturate(0.25)' } : undefined}
               className={
-                'h-[88px] w-[88px] object-contain drop-shadow-md transition-[filter] duration-700' +
+                'h-14 w-14 object-contain drop-shadow-md transition-[filter] duration-700 md:h-[88px] md:w-[88px]' +
                 (squash ? ' pet-squash' : '')
               }
               onError={(e) => {

@@ -341,8 +341,8 @@ describe('ThreadsPage · 收件箱批处理（2026-09-26）', () => {
   it('忽略全部：两段式确认，第二下才逐条真执行', async () => {
     vi.mocked(api.unclassified).mockResolvedValue({
       items: [
-        { kind: 'note', ref: 'notes/a.md', title: '甲' },
-        { kind: 'card', ref: 'cards/b.md', title: '乙' },
+        { kind: 'note', ref: 'notes/a.md', title: '甲', label: '笔记' },
+        { kind: 'card', ref: 'cards/b.md', title: '乙', label: '卡片' },
       ],
       total: 2,
     })

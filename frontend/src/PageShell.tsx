@@ -21,6 +21,7 @@ export default function PageShell({
   actions,
   maxWidth = 'wide',
   bodyClassName,
+  fill = false,
   children,
 }: {
   title: string
@@ -32,6 +33,9 @@ export default function PageShell({
   maxWidth?: 'wide' | '3xl' | '4xl' | '5xl'
   /** 内容区的附加类（如 space-y-6），用于迁移期保留各页原有节奏 */
   bodyClassName?: string
+  /** 满高模式：页面占满剩余视口、内部自己滚（聊天/教学这类）。高度由 flex 链
+   *  推导——禁用 `calc(100vh-Npx)` 魔法数，页头一换行手算的高度就失真（§B）。 */
+  fill?: boolean
   children: ReactNode
 }) {
   const width = {
@@ -41,8 +45,16 @@ export default function PageShell({
     '5xl': 'max-w-5xl',
   }[maxWidth]
   const hasToolbar = Boolean(description || stats || actions)
+  // 满高模式（§B 高度规范）：根变 flex 链，内容区 flex-1 min-h-0——高度由布局推导
+  const bodyCls =
+    [fill ? 'flex min-h-0 flex-1 flex-col' : '', bodyClassName].filter(Boolean).join(' ') ||
+    undefined
   return (
-    <div aria-label={title} data-page={title} className={`mx-auto ${width} px-6 py-6`}>
+    <div
+      aria-label={title}
+      data-page={title}
+      className={`mx-auto ${width} px-6 py-6${fill ? ' flex h-full flex-col' : ''}`}
+    >
       {hasToolbar ? (
         <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-4">
           <div className="min-w-0">
@@ -59,7 +71,7 @@ export default function PageShell({
           {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
         </header>
       ) : null}
-      <div className={bodyClassName}>{children}</div>
+      <div className={bodyCls}>{children}</div>
     </div>
   )
 }

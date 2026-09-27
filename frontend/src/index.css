@@ -19,6 +19,33 @@ body {
   --brand-soft: #a78bfa;
 }
 
+/* ---------- 宠物模块版面规范速查（2026-09-27 改造定稿）----------
+ *
+ * A 侧栏：页面内右栏统一 `hidden w-[290px] xl:flex shrink-0`；右栏内容为空时
+ *   整条退场，父级网格不预留轨道（网格类名随有无条件拼接）。
+ * B 高度：满高容器禁 `calc(100vh-Npx)` 魔法数——走 `PageShell` 的 `fill` 模式，
+ *   flex 链 + 内容区 `flex-1 min-h-0 overflow-y-auto`，高度由布局推导。
+ * C 断点：md(768) bento 单列→两列（hero 占满行）；xl(1280) 12 列 bento + 右栏出现；
+ *   内层网格断点不跳出外层档位；挂件 <768px 精灵缩至 64px、面板
+ *   `w-[calc(100vw-32px)] max-w-[320px]`。
+ * D 节奏：标签页根容器 `space-y-4`；卡内 `p-4`（hero `p-5`）；清单通栏分隔线
+ *   （卡带内边距时 `ul.-mx-4` + `li.px-4`，卡不带时 `li` 自己带 px）。
+ * E 色彩：错误=rose（禁 red）、等人=amber、完成=emerald、运行=sky、品牌=violet、
+ *   产出=teal；里程碑 ring 对齐卡片实底（`dark:ring-neutral-900`）。
+ * F 空态：一律 `EmptyHint`（title+hint+action 三件套），禁裸文本段落；
+ *   加载/错误态套 wb-card。
+ * G 截断：弹性行内文字必带 `min-w-0` + `truncate`；用户生成内容容器必带
+ *   `break-words`。
+ * H 弹层：z-10 页内悬浮 → z-30 挂件 → z-40 抽屉 → z-50 模态/命令面板
+ *   （分级细则见下面那条 z-index 注释）。
+ * I 无障碍：`pet-*` 动画全部接 `prefers-reduced-motion`；悬浮层滚动到底用
+ *   `scrollIntoView`（与陪伴页同一模式）。
+ *
+ * 视口走查清单（改挂件/宠物页后过一遍）：375×667 / 768×1024 / 1280×800 / 1600×900
+ * 四档 × 五标签（chat/teach/growth/room/audio）× 挂件三态（收起/气泡/面板）；
+ * 边界用例：667×375 横屏矮视口看面板、空库看空态、长英文串看气泡。
+ */
+
 /* ---------- 版面 token（2026-09-18 版面改版）----------
  *
  * 起因：一页页量下来，正文只占窗口的一半——今日 768px、工作/资产/零柒 896px。
@@ -122,6 +149,17 @@ body {
 .wb-node-running {
   animation: wb-node-pulse 1.6s ease-in-out infinite;
 }
+
+/* ---------- 弹层 z-index 分级（全站约定，2026-09-27 宠物模块改造定档）----------
+ *
+ * 浮层按这四档取值，谁压谁由档位决定，不再「谁后写谁赢」：
+ *   z-10  页内悬浮（粘性工具条、行内下拉）
+ *   z-30  挂件（右下角的零柒）——要随手够得着，但必须永远压不过模态
+ *   z-40  抽屉（侧滑面板）
+ *   z-50  模态 / 命令面板 / 确认弹窗（Ctrl+K、填值、删除确认）
+ * PetWidget 原来与命令面板、确认弹窗同为 z-50 且 DOM 靠后，精灵会盖住 Ctrl+K
+ * 的面板——「宠物在」不该挡「别的浮层能用」，所以挂件定在 z-30。
+ */
 
 /* ---------- code highlight: github light + dark overrides ---------- */
 @import 'highlight.js/styles/github.css';
@@ -248,4 +286,14 @@ body {
 }
 .pet-bubble {
   animation: pet-bubble-in 0.22s ease-out;
+}
+
+/* 常驻动画给「减少动态」的用户关掉（§I 无障碍）：挂件是常驻元素，三个 pet-*
+   动画——呼吸、Q 弹、气泡入场——在 prefers-reduced-motion 下全部静止。 */
+@media (prefers-reduced-motion: reduce) {
+  .pet-idle,
+  .pet-squash,
+  .pet-bubble {
+    animation: none;
+  }
 }
