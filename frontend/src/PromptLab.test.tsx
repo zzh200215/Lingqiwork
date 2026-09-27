@@ -20,6 +20,10 @@ vi.mock('./api', () => ({
     addPromptCase: vi.fn(),
     removePromptCase: vi.fn(),
     setPromptDomain: vi.fn(),
+    // 夜间回归卡（评测自动挡）挂进了这一页：mock 补齐它的三个取数/写配置口
+    getPrefs: vi.fn().mockResolvedValue({}),
+    updatePrefs: vi.fn().mockResolvedValue({}),
+    listEvalRuns: vi.fn().mockResolvedValue([]),
   },
 }))
 import { api } from './api'

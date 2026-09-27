@@ -27,6 +27,7 @@ const WORK_MODULE = [
   // 壳
   'WorkPage.tsx',
   'EnginePulse.tsx',
+  'EvalNightlyCard.tsx',
   // 报告域
   'ReportPage.tsx',
   'ReportReader.tsx',
@@ -339,6 +340,7 @@ describe('设计纪律 · 全仓守卫', () => {
       // 2026-09-26：EnginePulse 从 WorkPage 搬出（那两条「读不到就不摆」的 catch 跟着走）
       'WorkPage.tsx': 1,
       'EnginePulse.tsx': 2,
+      'EvalNightlyCard.tsx': 1,
       'workData.ts': 1,
     })
   })

@@ -26,6 +26,14 @@ import {
   type ThreadRow,
 } from './api'
 
+/** 时间线节点的**语义色**（方案 §六）：产出=teal、运行=sky、裁决=amber——
+ *  「卡在哪」一眼可见；材料与知识条目维持中性灰，不与状态色争。 */
+const KIND_DOT: Record<string, string> = {
+  output: 'bg-teal-500',
+  task: 'bg-sky-500',
+  decision: 'bg-amber-500',
+}
+
 const KIND_ICON: Record<string, string> = {
   material: '📥',
   note: '📝',
@@ -168,6 +176,22 @@ export default function ThreadsPage({
     setOpenId(id)
     void loadDetail(id)
   }, [params, loadDetail])
+
+  // 活性（2026-09-26）：这一页回答「这件事我到哪了」——而事情是**在跑的**：
+  // 工作流的成品落进时间线、卡点停住等人，都发生在你盯着这一页的时候，
+  // 原来只在挂载时拉一次，屏幕上的时间线停在过去。可见时每 15 秒跟一拍
+  // （与工作流页同一口径），页面切走不打。
+  // 详情只在**没在改事名**时跟：轮询会把输入框打回原值，改了一半的名字
+  // 不能被一次后台刷新吃掉（nameDraft 与详情名不一致 = 正在改，跳过）。
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      if (document.hidden) return
+      void refreshList()
+      void refreshOrphans()
+      if (openId != null && nameDraft === (detail?.name ?? '')) void loadDetail(openId)
+    }, 15000)
+    return () => window.clearInterval(t)
+  }, [refreshList, refreshOrphans, loadDetail, openId, nameDraft, detail])
 
   // 页头那颗「＋ 新的一件事」→ 展开新建面板（`newSignal` 初值不推，挂载时不会自己弹开）
   useEffect(() => {
@@ -469,7 +493,11 @@ export default function ThreadsPage({
                             {' · '}
                             {idleText(t.idle_days)}
                             {t.total > 0 ? ` · 挂着 ${t.total} 份` : ' · 还是空的'}
-                            {t.deadline ? ` · 截止 ${t.deadline.slice(5)}` : ''}
+                            {t.deadline
+                      ? ` · 截止 ${t.deadline.slice(5)}${
+                          t.deadline < new Date().toISOString().slice(0, 10) ? '（已逾期）' : ''
+                        }`
+                      : ''}
                           </span>
                         </span>
                       </button>
@@ -552,7 +580,11 @@ export default function ThreadsPage({
                   >
                     {timeline.map((it) => (
                       <li key={key(it.kind, it.ref)} className="relative flex items-center gap-2">
-                        <span className="absolute -left-[17px] h-1.5 w-1.5 rounded-full bg-neutral-300 dark:bg-neutral-600" />
+                        <span
+                          className={`absolute -left-[17px] h-1.5 w-1.5 rounded-full ${
+                            KIND_DOT[it.kind] ?? 'bg-neutral-300 dark:bg-neutral-600'
+                          }`}
+                        />
                         <span className="shrink-0 text-xs">{KIND_ICON[it.kind]}</span>
                         {it.exists ? (
                           <button

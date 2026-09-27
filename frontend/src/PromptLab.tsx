@@ -19,6 +19,7 @@
  *  - **区间宽就说宽**：n 小的时候明说「这个样本量下不了结论」，不给一个好看的比例；
  *  - **候选只是候选**：跑出来的变体永远不改登记表，要采纳得去改代码（改完 sha 会变）。
  */
+import EvalNightlyCard from './EvalNightlyCard'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
@@ -249,7 +250,9 @@ export default function PromptLab() {
   const withCases = list.filter((p) => p.cases > 0)
 
   return (
-    <div data-lab-root className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+    <div className="space-y-4">
+      <EvalNightlyCard />
+      <div data-lab-root className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
       {/* 左：32 条登记提示词 */}
       <div className="rounded-md border border-neutral-200 dark:border-neutral-800">
         <div className="flex items-baseline gap-2 border-b border-neutral-100 px-3 py-2 dark:border-neutral-800">
@@ -809,7 +812,8 @@ export default function PromptLab() {
             )}
           </div>
         )}
+        </div>
       </div>
-    </div>
+      </div>
   )
 }

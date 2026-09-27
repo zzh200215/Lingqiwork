@@ -3162,6 +3162,13 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
     }),
 
   listEvalItems: () => request<EvalItem[]>('/api/evals'),
+  /** 全量配置读/写（夜间回归等开关的家；后端 PUT /api/settings/prefs）。 */
+  getPrefs: () => request<Record<string, unknown>>('/api/settings/prefs'),
+  updatePrefs: (patch: Record<string, unknown>) =>
+    request<Record<string, unknown>>('/api/settings/prefs', {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
   createEvalItem: (i: Partial<EvalItem>) =>
     request<EvalItem>('/api/evals', { method: 'POST', body: JSON.stringify(i) }),
   updateEvalItem: (id: number, i: Partial<EvalItem>) =>

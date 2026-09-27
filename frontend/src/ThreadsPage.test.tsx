@@ -313,3 +313,26 @@ describe('ThreadsPage', () => {
     )
   })
 })
+
+describe('ThreadsPage · 活性（2026-09-26）', () => {
+  it('可见时每 15 秒自己跟一拍：工作流往时间线落成品，页面不该停在打开那一刻', async () => {
+    const { act } = await import('@testing-library/react')
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      renderPage('/work?tab=thread')
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const afterMount = vi.mocked(api.listThreads).mock.calls.length
+      expect(afterMount).toBeGreaterThan(0)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15000)
+      })
+      expect(vi.mocked(api.listThreads).mock.calls.length).toBeGreaterThan(afterMount)
+      expect(vi.mocked(api.unclassified).mock.calls.length).toBeGreaterThan(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
