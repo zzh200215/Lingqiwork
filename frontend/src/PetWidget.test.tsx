@@ -613,6 +613,27 @@ describe('PetWidget · 给输入行让位', () => {
     expect(root.style.transform).toBe('translateY(-56px)')
   })
 
+  it('mount 之后才冒出来的遮挡也躲得开（DOM 变化触发补量）', async () => {
+    // 笔记页「问笔记」侧栏是后开的：开的那一刻没有 resize，量要跟着 DOM 走。
+    // 两拍让观察器的微任务把定时器排上并冲走；末尾 act 一拍等 React 提交。
+    const root = await renderAndMeasure()
+    placeTarget({ left: 900, right: 1000, top: 700, bottom: 746 })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    await act(async () => {})
+    expect(root.style.transform).toBe('translateY(-56px)')
+  })
+
+  it('内容滚进角落也躲得开（捕获阶段监听 scroll）', async () => {
+    // 学页的作答行随会话滚动：滚进右下角的那一刻 resize 不会响，scroll 要响
+    const root = await renderAndMeasure()
+    placeTarget({ left: 900, right: 1000, top: 700, bottom: 746 })
+    fireEvent.scroll(window)
+    await vi.advanceTimersByTimeAsync(0)
+    await act(async () => {})
+    expect(root.style.transform).toBe('translateY(-56px)')
+  })
+
   it('够不着（宽屏上输入行在中间）→ 一动不动', async () => {
     placeTarget({ left: 200, right: 700, top: 700, bottom: 746 })
     const root = await renderAndMeasure()

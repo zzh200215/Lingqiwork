@@ -1257,7 +1257,9 @@ export default function NotesPage() {
               <div ref={chatBottomRef} />
             </div>
             <div className="border-t border-neutral-200/80 p-2 dark:border-neutral-800/80">
-              <div className="flex items-end gap-2">
+              {/* data-pet-clear：这行钉在右栏（全高侧栏）的底部，侧栏开着的窗口里
+                  它就在右下角——零柒按这个属性给自己让位（见 PetWidget 的 dodge）。 */}
+              <div data-pet-clear className="flex items-end gap-2">
                 <textarea
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}

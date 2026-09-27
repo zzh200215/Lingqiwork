@@ -3108,7 +3108,9 @@ export default function TutorPage() {
                       </button>
                     ))}
                   </div>
-                  <div className="flex items-end gap-2">
+                  {/* data-pet-clear：作答那一行随会话滚——滚进右下角时零柒给它让位
+                      （挂件在 scroll 时补量）。窄窗上它正好压在宠物底下。 */}
+                  <div data-pet-clear className="flex items-end gap-2">
                     <textarea
                       data-tutor-say
                       value={draft}
