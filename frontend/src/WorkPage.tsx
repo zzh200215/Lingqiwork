@@ -423,21 +423,21 @@ export default function WorkPage() {
         tab === 'prompt' ? (
           <button
             onClick={() => setPromptNewSignal((n) => n + 1)}
-            className="shrink-0 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+            className="shrink-0 rounded-md wb-btn-primary px-3 py-1.5 text-sm"
           >
             ＋ 新建提示词
           </button>
         ) : tab === 'workflow' ? (
           <button
             onClick={() => setWorkOpen(true)}
-            className="shrink-0 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+            className="shrink-0 rounded-md wb-btn-primary px-3 py-1.5 text-sm"
           >
             起一个题目
           </button>
         ) : tab === 'thread' ? (
           <button
             onClick={() => setThreadNewSignal((n) => n + 1)}
-            className="shrink-0 rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+            className="shrink-0 rounded-md wb-btn-primary px-3 py-1.5 text-sm"
           >
             ＋ 新的一件事
           </button>
@@ -544,7 +544,7 @@ export default function WorkPage() {
             <button
               onClick={() => void startWork()}
               disabled={workBusy}
-              className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-40"
+              className="rounded-lg wb-btn-primary px-3 py-1.5 text-sm"
             >
               {workBusy ? '起链…' : '开始'}
             </button>

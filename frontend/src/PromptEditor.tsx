@@ -254,7 +254,7 @@ export default function PromptEditor({
         <button
           onClick={onSave}
           disabled={busy}
-          className="rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-40"
+          className="rounded-md wb-btn-primary px-4 py-2 text-sm"
         >
           {busy ? '保存中…' : draft.id == null ? '存进库' : '保存'}
         </button>

@@ -376,7 +376,7 @@ export default function ThreadsPage({
             <button
               onClick={() => void create(draft).then(() => setCreating(false))}
               disabled={!draft.trim() || busy}
-              className="shrink-0 rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-40"
+              className="shrink-0 rounded-lg wb-btn-primary px-3 py-1.5 text-sm disabled:opacity-40"
             >
               建
             </button>

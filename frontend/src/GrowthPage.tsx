@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import EChart from './EChart'
+import Skeleton from './Skeleton'
 import PageShell from './PageShell'
 import {
   api,
@@ -128,7 +129,17 @@ export default function GrowthPage({ chromeless }: { chromeless?: boolean }) {
     )
   }
   if (!growth) {
-    return <div className="px-6 py-10 text-sm text-neutral-400">正在读…</div>
+    return (
+      <div className="space-y-4 px-6 py-10">
+        <Skeleton className="h-28 w-full" />
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <Skeleton className="h-16" />
+          <Skeleton className="h-16" />
+          <Skeleton className="h-16" />
+          <Skeleton className="h-16" />
+        </div>
+      </div>
+    )
   }
 
   const events = mastery?.events ?? []

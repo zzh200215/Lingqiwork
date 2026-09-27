@@ -479,7 +479,7 @@ function ChatPane() {
           <button
             onClick={() => (busy ? abortRef.current?.abort() : void send())}
             disabled={!busy && !input.trim()}
-            className="rounded-md bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+            className="rounded-md wb-btn-primary px-5 text-sm"
           >
             {busy ? '停' : '发送'}
           </button>
@@ -814,7 +814,7 @@ function TeachPane() {
             <button
               onClick={() => void begin(topic)}
               disabled={busy || !topic.trim()}
-              className="shrink-0 rounded-md bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+              className="shrink-0 rounded-md wb-btn-primary px-5 text-sm"
             >
               开始讲
             </button>
@@ -988,7 +988,7 @@ function TeachPane() {
             <button
               onClick={() => (busy ? abortRef.current?.abort() : void submit())}
               disabled={!busy && !draft.trim()}
-              className="rounded-md bg-violet-600 px-5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+              className="rounded-md wb-btn-primary px-5 text-sm"
             >
               {busy ? '停' : '发送'}
             </button>

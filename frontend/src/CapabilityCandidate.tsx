@@ -250,7 +250,7 @@ export default function CapabilityCandidate() {
           <button
             onClick={() => void make(false)}
             disabled={busy || (!path.trim() && !text.trim())}
-            className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-40"
+            className="rounded-lg wb-btn-primary px-3 py-1.5 text-sm"
           >
             {busy ? '读着…' : '读一读'}
           </button>

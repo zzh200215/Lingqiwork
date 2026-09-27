@@ -223,8 +223,8 @@ export default function Layout() {
               const chip = GROUP_CHIP[g.key] ?? GROUP_CHIP.settings
               const GroupIcon = g.icon
               const groupCls = inGroup
-                ? 'bg-neutral-100 font-medium text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
-                : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
+                ? 'bg-violet-50/70 font-medium text-neutral-900 dark:bg-violet-500/10 dark:text-neutral-100'
+                : 'text-neutral-500 hover:bg-neutral-100/70 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/50 dark:hover:text-neutral-200'
               return (
                 <div key={g.key} className="relative">
                   {inGroup ? (
@@ -233,17 +233,21 @@ export default function Layout() {
                       className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-neutral-400 dark:bg-neutral-500"
                     />
                   ) : null}
-                  <div className={`flex items-center rounded-md ${groupCls}`}>
+                  <div className={`flex items-center rounded-md transition-colors ${groupCls}`}>
                     <Link
                       to={g.href}
                       data-nav-group={g.key}
                       data-nav-active={inGroup ? '1' : undefined}
                       className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-sm"
                     >
-                      <span className={`wb-chip h-6 w-6 rounded-lg ${chip.bg} ${chip.fg}`}>
+                      <span
+                        className={`wb-chip h-6 w-6 rounded-lg ${
+                          inGroup ? 'bg-violet-100 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300' : `${chip.bg} ${chip.fg}`
+                        }`}
+                      >
                         <GroupIcon className="h-4 w-4" />
                       </span>
-                      <span className="truncate">{g.label}</span>
+                      <span className={`truncate ${inGroup ? 'font-medium' : ''}`}>{g.label}</span>
                     </Link>
                     {g.items.length > 0 ? (
                       <button
@@ -271,11 +275,17 @@ export default function Layout() {
                             data-nav-active={i.href === active.href ? '1' : undefined}
                             className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-[13px] transition-colors ${
                               i.href === active.href
-                                ? 'bg-neutral-100 font-medium text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
+                                ? 'bg-violet-50 font-medium text-violet-700 dark:bg-violet-500/10 dark:text-violet-300'
                                 : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200'
                             }`}
                           >
-                            <ItemIcon className="h-4 w-4 shrink-0 text-neutral-400" />
+                            <ItemIcon
+                              className={`h-4 w-4 shrink-0 ${
+                                i.href === active.href
+                                  ? 'text-violet-500 dark:text-violet-400'
+                                  : 'text-neutral-400'
+                              }`}
+                            />
                             <span className="truncate">{i.label}</span>
                           </Link>
                         )

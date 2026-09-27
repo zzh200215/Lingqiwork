@@ -432,7 +432,7 @@ export default function PromptLab() {
                     data-lab-feed-save
                     onClick={() => void submitFeed()}
                     disabled={!feed.user.trim() || !feed.intent.trim() || feed.checks.length === 0}
-                    className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                    className="rounded-lg wb-btn-primary px-3 py-1.5 text-xs"
                   >
                     喂进金标集
                   </button>
@@ -531,7 +531,7 @@ export default function PromptLab() {
                   data-lab-run
                   onClick={() => void run()}
                   disabled={busy || detail.cases.length === 0}
-                  className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                  className="rounded-lg wb-btn-primary px-3 py-1.5 text-xs"
                 >
                   {busy ? '正在跑…' : variant.trim() ? '跑候选变体' : '跑一次对照（已登记内容）'}
                 </button>

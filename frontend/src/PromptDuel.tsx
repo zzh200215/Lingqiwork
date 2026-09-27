@@ -223,7 +223,7 @@ export default function PromptDuel({ prompts, id }: { prompts: PromptItem[]; id?
           onClick={() => void duel()}
           disabled={!canGo || busy || models.length < 2}
           title={models.length < 2 ? '至少选两个模型' : '同一段提示词 + 同一段输入，并行打到这几个模型'}
-          className="shrink-0 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-40"
+          className="shrink-0 rounded-md wb-btn-primary px-4 py-2 text-sm"
         >
           {busy ? '打着…' : '开打'}
         </button>

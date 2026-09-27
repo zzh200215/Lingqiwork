@@ -3128,7 +3128,7 @@ export default function TutorPage() {
                     <button
                       onClick={() => void submit()}
                       disabled={!draft.trim() || busy}
-                      className="shrink-0 rounded-md bg-violet-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+                      className="shrink-0 rounded-md wb-btn-primary px-4 py-2.5 text-sm"
                     >
                       发送
                     </button>

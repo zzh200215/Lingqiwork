@@ -25,6 +25,7 @@ import {
   type WeeklyReport,
 } from './api'
 import { conceptState } from './conceptState'
+import Skeleton from './Skeleton'
 import EmptyHint from './EmptyHint'
 import { petSprite } from './petFace'
 import { ago, isFresh } from './reltime'
@@ -309,7 +310,16 @@ export default function RoomPane() {
     )
   }
   if (!room)
-    return <div className="wb-card p-4 text-sm text-neutral-400">正在看它屋里有什么…</div>
+    return (
+      <div className="wb-card space-y-3 p-4">
+        <Skeleton className="h-20 w-full" />
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-2 xl:grid-cols-12">
+          <Skeleton className="h-24 xl:col-span-7" />
+          <Skeleton className="h-24 xl:col-span-5" />
+        </div>
+        <p className="text-xs text-neutral-400">正在看它屋里有什么…</p>
+      </div>
+    )
 
   const props = room.things.filter((t) => t.kind === 'prop')
   const badges = room.things.filter((t) => t.kind === 'badge')

@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { api, type DispatchBoard, type DispatchStep } from './api'
+import { SkeletonRows } from './Skeleton'
 
 const TONE: Record<string, string> = {
   running: 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300',
@@ -184,7 +185,11 @@ export default function DispatchPanel({ refreshKey = 0 }: { refreshKey?: number 
     )
   }
   if (!board) {
-    return <p className="text-sm text-neutral-400">正在读调度台…</p>
+    return (
+      <div className="space-y-2">
+        <SkeletonRows rows={4} />
+      </div>
+    )
   }
 
   return (

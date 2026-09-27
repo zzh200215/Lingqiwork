@@ -19,6 +19,45 @@ body {
   --brand-soft: #a78bfa;
 }
 
+/* ---------- 交互微细节（2026-09-27 前端美化轮）----------
+ *
+ * 三条都来自外部参考与本仓审计的交集：
+ * 1. **键盘焦点环**：`:focus-visible` 只在键盘导航时出现（Magic UI / Gunnel 模式）——
+ *    鼠标点击不打扰，Tab 一定看得见。outline 不占布局，随手写的 ring 不会互相打架。
+ * 2. **主按钮统一**（.wb-btn-primary）：原先同一种按钮有 8 种写法
+ *    （px/py/字重/hover 各不一致）。一处定义，按钮家族一起变——与 wb-card 同一条理。
+ * 3. **骨架屏**（.wb-skeleton）：可预测布局的加载态用骨架条替代「加载中…」纯文字
+ *    （LogRocket / NN/g 结论）。shimmer 是动画，照 §I 接 prefers-reduced-motion。
+ */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.wb-btn-primary {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-gradient-to-b from-violet-500 to-violet-600 font-medium text-white transition-[filter] hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100;
+  /* 顶部一道极细的高光给按钮「体积感」——inset 高光不在「常驻阴影」禁令范围内
+     （禁的是卡片/面板的投影分层），且视觉上是玻璃压边不是投影。 */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+@keyframes wb-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.wb-skeleton {
+  @apply rounded-md bg-neutral-200/80 dark:bg-neutral-800;
+  background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  background-size: 200% 100%;
+  animation: wb-shimmer 1.6s ease-in-out infinite;
+}
+.dark .wb-skeleton {
+  background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-skeleton { animation: none; }
+}
+
 /* ---------- 宠物模块版面规范速查（2026-09-27 改造定稿）----------
  *
  * A 侧栏：页面内右栏统一 `hidden w-[290px] xl:flex shrink-0`；右栏内容为空时

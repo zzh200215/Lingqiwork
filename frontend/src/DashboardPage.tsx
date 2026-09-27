@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 
 import AttachToThread from './AttachToThread'
 import EChart from './EChart'
+import { SkeletonRows } from './Skeleton'
 import FeedbackButtons from './FeedbackButtons'
 import MetricCard from './MetricCard'
 import { useDeepLink } from './deeplink'
@@ -630,8 +631,10 @@ export default function DashboardPage() {
                   </li>
                 ))}
               </ul>
+            ) : stats ? (
+              <p className="mt-4 text-xs text-neutral-400">还没有对话记录</p>
             ) : (
-              <p className="mt-4 text-xs text-neutral-400">{stats ? '还没有对话记录' : '加载中…'}</p>
+              <SkeletonRows className="mt-4" rows={3} />
             )}
           </section>
 
@@ -976,7 +979,13 @@ export default function DashboardPage() {
               ))}
             </ul>
           ) : (
-            <p className="mt-3 text-xs text-neutral-400">{stats ? '还没有对话，去发第一条消息吧' : '加载中…'}</p>
+            <p className="mt-3 text-xs text-neutral-400">
+              {stats ? (
+                '还没有对话，去发第一条消息吧'
+              ) : (
+                <SkeletonRows className="mt-3" rows={2} />
+              )}
+            </p>
           )}
         </section>
 
@@ -1013,7 +1022,11 @@ export default function DashboardPage() {
             </ul>
           ) : (
             <p className="mt-3 text-xs text-neutral-400">
-              {stats ? '还没有启用的定时任务，可在设置页创建' : '加载中…'}
+              {stats ? (
+                '还没有启用的定时任务，可在设置页创建'
+              ) : (
+                <SkeletonRows className="mt-3" rows={2} />
+              )}
             </p>
           )}
         </section>
