@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { api, type DirItem, type EvalItem, type EvalRun, type KgRetrieval, type KgStatus, type RepoItem } from './api'
 import BookmarkletLink from './BookmarkletLink'
+import EmptyHint from './EmptyHint'
 import { buildBookmarklet, parseClipParams, shouldAutoClose } from './capture'
 
 /** 五个页签各自的线性图标（emoji 从 chrome 退役） */
@@ -860,7 +861,11 @@ export default function KbPage() {
             </table>
           </div>
         ) : (
-          <p className="text-xs text-neutral-400">vault 里还没有可索引的文件，上传或放进文档即可自动入库。</p>
+          <EmptyHint
+            pad="sm"
+            title="vault 里还没有可索引的文件。"
+            hint="上传或放进文档即可自动入库。"
+          />
         )}
       </section>
 
@@ -1042,7 +1047,11 @@ export default function KbPage() {
               </span>
             </h2>
             {repos.length === 0 ? (
-              <p className="text-xs text-neutral-400">还没有仓库。索引后代码和文档都能在对话里被 RAG 检索到。</p>
+              <EmptyHint
+                pad="sm"
+                title="还没有仓库。"
+                hint="索引后代码和文档都能在对话里被 RAG 检索到。"
+              />
             ) : (
               <ul className="space-y-2">
                 {repos.map((r) => (
@@ -1197,9 +1206,11 @@ export default function KbPage() {
               </h2>
             </div>
             {dirs.length === 0 ? (
-              <p className="text-xs text-neutral-400">
-                还没有目录。注册后里面的文档就能在对话里被 RAG 检索到，且文件改动实时同步。
-              </p>
+              <EmptyHint
+                pad="sm"
+                title="还没有目录。"
+                hint="注册后里面的文档就能在对话里被 RAG 检索到，且文件改动实时同步。"
+              />
             ) : (
               <ul className="space-y-2">
                 {dirs.map((d) => (
@@ -1441,7 +1452,13 @@ export default function KbPage() {
                 最近 {runs.length} 次
               </span>
             </h2>
-            {!runs.length && <p className="text-sm text-neutral-400">还没有评估记录，先添加问题再运行评估。</p>}
+            {!runs.length && (
+              <EmptyHint
+                pad="sm"
+                title="还没有评估记录。"
+                hint="先添加问题再运行评估。"
+              />
+            )}
             {runs.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
