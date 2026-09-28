@@ -194,9 +194,12 @@ describe('设计纪律 · 全仓守卫', () => {
     expect(bad, '长任务没走 RunPanel——六态、停止、重试就都没了').toEqual([])
 
     // 上面那份接口名清单不能悄悄失效（改名/删掉之后，这条守卫会变成永远绿的摆设）
-    const api = readFileSync(join(SRC, 'api.ts'), 'utf8')
-    const gone = LONG_CALLS.filter((n) => !new RegExp(`\\b${n}:`).test(api))
-    expect(gone, 'api.ts 里没有这些名字了——清单过期，改它').toEqual([])
+    // 方向 6 分片后方法名住在 `src/api/*.ts` 域文件里——api.ts 只剩类型与组合处
+    const apiNames = readdirSync(join(SRC, 'api'), 'utf8')
+      .map((f) => readFileSync(join(SRC, 'api', f), 'utf8'))
+      .join('\n')
+    const gone = LONG_CALLS.filter((n) => !new RegExp(`\\b${n}:`).test(apiNames))
+    expect(gone, 'api 里没有这些名字了——清单过期，改它').toEqual([])
   })
 
   it('工作模块的空态一律 `EmptyHint`——**禁裸文本**（方案 §七）', () => {
