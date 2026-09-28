@@ -308,6 +308,8 @@ def search(query: str, top_k: int = 5) -> list[dict]:
     hits = []
     for i in range(len(res["ids"][0])):
         meta = res["metadatas"][0][i]
+        # distance -> similarity score in [0, 1]
+        sim = round(1.0 - res["distances"][0][i], 4)
         hits.append(
             {
                 "id": res["ids"][0][i],
@@ -315,8 +317,12 @@ def search(query: str, top_k: int = 5) -> list[dict]:
                 "source": meta.get("source"),
                 "title": meta.get("title"),
                 "chunk": meta.get("chunk"),
-                # distance -> similarity score in [0, 1]
-                "score": round(1.0 - res["distances"][0][i], 4),
+                "score": sim,
+                # 单通道（关掉混合检索）时这就是全部信息：把向量原始相似度挂到 `vec`、
+                # 通道标 `["vec"]`，好让质量门在纯向量模式下也有判据。混合路（_search_forms）
+                # 会用 RRF 分和真实通道集覆盖这两项，所以这里加了不影响它。
+                "vec": sim,
+                "channels": ["vec"],
             }
         )
     return hits

@@ -629,8 +629,12 @@ async def _retrieve_rag(
             except Exception as e:  # noqa: BLE001 - RAG failure should not break chat
                 events.append(("rag_error", {"message": f"{type(e).__name__}: {e}"}))
                 sources = []
-            # 质量门判的是**检索**，所以在 fullctx 把片段换成整文件之前跑（那一步会重写文本）
-            rag_gate = retrieval_gate.assess(sources)
+            # 质量门判的是**检索**，所以在 fullctx 把片段换成整文件之前跑（那一步会重写文本）。
+            # 关掉混合检索（纯向量）时只有一路命中，双通道判据无意义 → require_both 跟着 hybrid 走，
+            # 否则门在纯向量模式下永远判不过、每次都误加"材料不足"。
+            rag_gate = retrieval_gate.assess(
+                sources, require_both=bool(prefs.get("hybrid_search", True))
+            )
             if sources:
                 # full-context mode: short source docs go in whole, not as fragments
                 from app.core import fullctx

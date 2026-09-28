@@ -213,7 +213,13 @@ def _search_forms(
     ranked = sorted(rrf.items(), key=lambda kv: kv[1], reverse=True)
     out = []
     for cid, score in ranked:
-        hit = dict(id_to_hit[cid])
+        # 索引漂移防御：BM25 命中的 chunk 若已从 Chroma 删除，`col.get` 会**静默丢弃**它
+        # （不报错、不占位），于是它进了 rrf 却不在 id_to_hit——直接跳过这个孤儿 id。
+        # 否则 `id_to_hit[cid]` 抛 KeyError，整条混合检索崩溃并波及聊天。
+        base = id_to_hit.get(cid)
+        if base is None:
+            continue
+        hit = dict(base)
         hit["score"] = round(score, 4)
         hit["channels"] = sorted(channels[cid])
         hit["vec"] = vec_raw.get(cid)

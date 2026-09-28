@@ -136,11 +136,18 @@ def assess(
     *,
     vec_floor: float = VEC_FLOOR,
     both_floor: float = BOTH_FLOOR,
+    require_both: bool = True,
 ) -> Quality:
     """一组检索命中够不够好？Pure、确定性、零模型调用。
 
     两个判据**都要过**：向量路确实撞到了像的东西（`vec_top1`），而且不是单通道的侥幸
     （`both_frac`）。空结果直接不通过——没有材料就没什么可答的。
+
+    `require_both`：**只有双路检索（hybrid）才有意义**。关掉混合检索时只有向量一路，
+    `both_frac` 恒为 0——那不是"侥幸"，是"根本只有一路"。此时把 `require_both=False`
+    传进来，跳过双通道判据、只用 `vec_top1` 把关，否则这个门在纯向量模式下**永远判不过**，
+    每次都往注入里加一句"材料不足"（误报）。判据阈值是在 hybrid 样本上标的，纯向量模式
+    下 `both_frac` 本就不在其口径内。
     """
     if not hits:
         return Quality(False, 0.0, 0.0, "没有检索到任何材料")
@@ -148,9 +155,10 @@ def assess(
     v, b = vec_top1(hits), both_frac(hits)
     if v < vec_floor:
         return Quality(False, v, b, f"向量路最高相似度 {v:.4f} < {vec_floor}")
-    if b < both_floor:
+    if require_both and b < both_floor:
         return Quality(False, v, b, f"双通道占比 {b:.2f} < {both_floor}")
-    return Quality(True, v, b, f"向量 {v:.4f} ≥ {vec_floor}、双通道占比 {b:.2f}")
+    tail = f"、双通道占比 {b:.2f}" if require_both else "（单通道，跳过双通道判据）"
+    return Quality(True, v, b, f"向量 {v:.4f} ≥ {vec_floor}{tail}")
 
 
 def next_strategy(used: str) -> str | None:
