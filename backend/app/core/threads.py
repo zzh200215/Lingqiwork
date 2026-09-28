@@ -483,14 +483,29 @@ async def update(
 
 
 async def delete(thread_id: int) -> dict:
-    """删一件事只删索引，**不动任何东西**。"""
+    """删一件事：索引清掉（thread_items），账本摘钩（置 NULL），**行一条不删**。
+
+    task_runs / model_usage 里的 `thread_id` 是**归因**不是所有——钱已经花了、运行
+    已经发生，删线不能抹账（预算聚合 `cost.py` 读的正是 model_usage）。所以这里把
+    悬空的归因摘掉（方向 8：应用层级联），而不是级联删子行。"""
     from sqlalchemy import delete as sa_delete
+    from sqlalchemy import update as sa_update
+
+    from app.models import ModelUsage, TaskRun
 
     async with SessionLocal() as db:
         row = await db.get(Thread, thread_id)
         if row is None:
             raise LookupError("thread not found")
         await db.execute(sa_delete(ThreadItem).where(ThreadItem.thread_id == thread_id))
+        # 摘钩，不删账：run 行还带着 task_id / 日志，model_usage 还是完整的钱账，
+        # 只是「算在哪件事头上」那一栏随事件的消失而清空。
+        await db.execute(
+            sa_update(TaskRun).where(TaskRun.thread_id == thread_id).values(thread_id=None)
+        )
+        await db.execute(
+            sa_update(ModelUsage).where(ModelUsage.thread_id == thread_id).values(thread_id=None)
+        )
         await db.delete(row)
         await db.commit()
     return {"ok": True}

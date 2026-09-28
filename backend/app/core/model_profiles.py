@@ -15,6 +15,11 @@ system 层且仍会谎报/循环；deepseek-v4-pro 限流且输出不完整；qw
 「凭手感改策略」，不是「用这个模型」。**
 
 **不做**：不做自动调参、不做按 prompt 的画像、不做 provider 探测。这一层只记事实 + 一条闸。
+
+**入口（方向 10，2026-09-28 收线）**：对外 4 个 HTTP 端点已收——前端从未有过画像 UI，
+读写走 CLI `app/model_check.py`（overview/save/bless/history 全覆盖）；`effective()`
+照旧由 chat 调用，核内逻辑一字未动。想恢复端点就照 git 历史把 `routers/profiles.py`
+拿回来再注册。
 """
 from __future__ import annotations
 

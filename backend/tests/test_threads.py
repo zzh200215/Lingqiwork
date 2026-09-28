@@ -285,6 +285,33 @@ async def test_delete_drops_the_index_not_the_things():
         assert (await db.execute(select(ThreadItem))).scalars().all() == []
 
 
+async def test_delete_detaches_the_ledger_without_erasing_it():
+    """方向 8：删线摘钩不删账。
+
+    task_runs / model_usage 里的 thread_id 是归因——钱花了就是花了（预算聚合读的
+    正是 model_usage），删事件只能把归因置空，不能把行抹掉。"""
+    from app.models import ModelUsage, TaskRun
+
+    t = await th.create("t")
+    async with SessionLocal() as db:
+        db.add(
+            TaskRun(task_id=1, model_id="m", tokens_in=100, tokens_out=50, thread_id=t["id"])
+        )
+        db.add(
+            ModelUsage(
+                kind="research", model_id="m", tokens_in=10, tokens_out=5, calls=1, thread_id=t["id"]
+            )
+        )
+        await db.commit()
+    await th.delete(t["id"])
+
+    async with SessionLocal() as db:
+        run = (await db.execute(select(TaskRun))).scalars().one()
+        usage = (await db.execute(select(ModelUsage))).scalars().one()
+        assert run.thread_id is None and run.tokens_in == 100, "run 行必须在、归因必须摘"
+        assert usage.thread_id is None and usage.tokens_in == 10, "账本行必须在、归因必须摘"
+
+
 async def test_name_cannot_be_blank():
     with pytest.raises(ValueError):
         await th.create("   ")
