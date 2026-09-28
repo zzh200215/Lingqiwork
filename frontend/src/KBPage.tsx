@@ -99,9 +99,10 @@ export default function KbPage() {
   const [hits, setHits] = useState<Hit[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  // 方向 2：分钟级操作给 RunPanel。**全量重建是一次性 POST**——掐请求只是「我不等了」，
-  // 服务端会把这一轮跑完，按钮所以叫「不等了」不叫「停止」（RunPanel 的诚实规则）。
+  // 方向 2：分钟级操作给 RunPanel + **真停止**（合作式：后端逐文件/逐用例生效）。
+  // 一次性 POST 上掐请求服务端照样跑完——所以停的是「后端循环」，不是掐 fetch。
   const [reindexing, setReindexing] = useState(false)
+  const [reindexStopping, setReindexStopping] = useState(false)
   const reindexAbort = useRef<AbortController | null>(null)
   const [overview, setOverview] = useState<{ notes: number; clippings: number; repos: number; dirs: number } | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -271,7 +272,7 @@ export default function KbPage() {
   const [judge, setJudge] = useState(true)
   const [running, setRunning] = useState(false)
   const [evalMsg, setEvalMsg] = useState('')
-  // 同上：评估也是一次性 POST，取消语义是「不等了」
+  const [evalStopping, setEvalStopping] = useState(false)
   const evalAbort = useRef<AbortController | null>(null)
   const [openRun, setOpenRun] = useState<EvalRun | null>(null)
 
@@ -388,27 +389,26 @@ export default function KbPage() {
 
   async function runEvalNow() {
     setRunning(true)
+    setEvalStopping(false)
     const controller = new AbortController()
     evalAbort.current = controller
     setEvalMsg('评估中…（每题一次检索' + (judge ? ' + 两次模型调用' : '') + '，请稍候）')
     try {
       const r = await api.runEval(evalTopK ? Number(evalTopK) : null, judge, controller.signal)
       setEvalMsg(
-        `✓ 第 ${r.id} 次评估：Hit@1 ${pct(r.hit1)} · Hit@3 ${pct(r.hit3)} · MRR ${r.mrr}` +
+        (r.stopped ? '⚠️ 已按「停止」提前收工（跳过的用例不计入指标）：' : '✓ 第 ' + r.id + ' 次评估：') +
+          `Hit@1 ${pct(r.hit1)} · Hit@3 ${pct(r.hit3)} · MRR ${r.mrr}` +
           (r.faithfulness !== null ? ` · 忠实度 ${r.faithfulness}/5` : '（未判分）') +
           ` · ${r.seconds}s`
       )
       setOpenRun(r)
       await refreshEval()
     } catch (e) {
-      if (controller.signal.aborted) {
-        setEvalMsg('已停止等待。服务端会把这一轮跑完，结果会出现在下面的历史里。')
-      } else {
-        setEvalMsg(`❌ ${String(e)}`)
-      }
+      setEvalMsg(`❌ ${String(e)}`)
     } finally {
       if (evalAbort.current === controller) evalAbort.current = null
       setRunning(false)
+      setEvalStopping(false)
     }
   }
 
@@ -487,6 +487,7 @@ export default function KbPage() {
   async function reindex() {
     setBusy(true)
     setReindexing(true)
+    setReindexStopping(false)
     const controller = new AbortController()
     reindexAbort.current = controller
     setMessage('索引中…（首次会下载 embedding 模型，约 100MB）')
@@ -494,22 +495,19 @@ export default function KbPage() {
       const r = await fetch('/api/kb/reindex', { method: 'POST', signal: controller.signal })
       const data = await r.json()
       setMessage(
-        `完成：${data.files} 个文件 / ${data.chunks} 个块 / ${data.seconds}s` +
+        (data.interrupted ? '已按「停止」提前收工（已完成的块照常可检索）：' : '完成：') +
+          `${data.chunks} 块 / ${data.seconds}s` +
           (data.pruned?.length ? ` / 清理已删除来源: ${data.pruned.join(', ')}` : '') +
           (data.errors.length ? ` / 错误: ${data.errors.join('; ')}` : '')
       )
       await refresh()
     } catch (e) {
-      // 一次性 POST 上掐请求 ≠ 服务端停——把这件事照实说，别让人以为省了那份算力
-      if (controller.signal.aborted) {
-        setMessage('已停止等待。服务端会把这一轮跑完，之后刷新页面即可看到新块数。')
-      } else {
-        setMessage(String(e))
-      }
+      setMessage(String(e))
     } finally {
       if (reindexAbort.current === controller) reindexAbort.current = null
       setBusy(false)
       setReindexing(false)
+      setReindexStopping(false)
     }
   }
 
@@ -1004,9 +1002,12 @@ export default function KbPage() {
             tone="amber"
             icon="🧰"
             title="全量重建索引"
-            status={message || undefined}
-            cancelLabel="不等了"
-            onCancel={() => reindexAbort.current?.abort()}
+            status={reindexStopping ? '正在停…（当前这个文件做完就停）' : message || undefined}
+            onCancel={() => {
+              void api.cancelReindex().then((r) => {
+                if (r.stopped) setReindexStopping(true)
+              })
+            }}
           />
         ) : null}
         {message && !reindexing ? <p className="mt-2 text-xs text-neutral-500">{message}</p> : null}
@@ -1482,9 +1483,16 @@ export default function KbPage() {
                 tone="violet"
                 icon="📊"
                 title="运行评估"
-                status={evalMsg || undefined}
-                cancelLabel="不等了"
-                onCancel={() => evalAbort.current?.abort()}
+                status={
+                  evalStopping
+                    ? '正在停…（已开跑的那条跑完，没轮到的跳过）'
+                    : evalMsg || undefined
+                }
+                onCancel={() => {
+                  void api.cancelEvalRun().then((r) => {
+                    if (r.stopped) setEvalStopping(true)
+                  })
+                }}
               />
             ) : (
               evalMsg && (

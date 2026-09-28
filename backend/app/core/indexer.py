@@ -253,13 +253,26 @@ def list_sources(prefix: str = "") -> list[str]:
     return sorted(s for s in srcs if not prefix or s.startswith(prefix))
 
 
-def reindex_all(root: Path = VAULT_DIR) -> dict:
-    """Full rebuild. Returns stats."""
+def reindex_all(root: Path = VAULT_DIR, cancel_key: str = "") -> dict:
+    """Full rebuild. Returns stats.
+
+    `cancel_key` 给了就启用合作式取消（方向 2）：**每个文件之间**查一次，粒度是
+    「当前这个文件做完」。中断是安全的——`index_file` 逐文件 upsert，已完成的块
+    照常可检索；`_prune_missing` 用**先枚举好的全量集合**，停在第几个文件都不会
+    误删还没轮到的文件的块。中断时 `interrupted: true`，files 数照旧是枚举总数、
+    chunks 是实际完成的量。"""
+    from app.core import inflight
+
     t0 = time.time()
     files = [p for p in root.rglob("*") if p.is_file() and ingest.is_supported(p)]
     total_chunks = 0
     errors: list[str] = []
+    interrupted = False
     for p in files:
+        if cancel_key and inflight.cancel_requested(cancel_key):
+            interrupted = True
+            log.info("reindex cancelled midway at %s", p)
+            break
         try:
             total_chunks += index_file(p, root)
         except Exception as e:  # noqa: BLE001 - keep going, report at end
@@ -271,6 +284,7 @@ def reindex_all(root: Path = VAULT_DIR) -> dict:
         "chunks": total_chunks,
         "errors": errors,
         "pruned": pruned,
+        "interrupted": interrupted,
         "seconds": round(time.time() - t0, 1),
     }
 

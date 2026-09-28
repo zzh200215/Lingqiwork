@@ -178,14 +178,40 @@ async def delete_run(run_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/run")
 async def run_eval(body: RunIn | None = None):
-    """Evaluate the whole set with the current retrieval config (can take a while)."""
+    """Evaluate the whole set with the current retrieval config (can take a while).
+
+    占 `inflight` 锁（与 prompt/skill 评测同一条规矩）：分钟级 + 花钱的循环，并发两次
+    = 两倍调用而结果只留后写的。锁也让 `/run/cancel` 有明确的目标可停。
+    """
+    from app.core import inflight
+
     body = body or RunIn()
+    if not inflight.try_acquire("kb_eval"):
+        raise HTTPException(
+            409,
+            "正在跑一次评估——等它完成，或先点「停止」。并发两次 = 两倍的模型调用，"
+            "而结果里只会留下后写的那次。",
+        )
     try:
-        return await core.run_eval(top_k=body.top_k, judge=body.judge)
+        return await core.run_eval(top_k=body.top_k, judge=body.judge, cancel_key="kb_eval")
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"{type(e).__name__}: {e}") from e
+    finally:
+        inflight.release("kb_eval")
+
+
+@router.post("/run/cancel")
+async def cancel_run_eval():
+    """请正在跑的那次评估停下。
+
+    **合作式**：还没轮到的用例直接跳过，已开跑的那条跑完（检索在信号量外，判分在
+    槽内）——界面上写「正在停…」，不写「已停止」。没在跑的如实回 `stopped: false`。
+    """
+    from app.core import inflight
+
+    return {"stopped": inflight.request_cancel("kb_eval")}
 
 
 @router.get("/compare")

@@ -243,3 +243,44 @@ async def test_the_eval_routes_refuse_a_second_run_and_answer_a_cancel():
         assert ei2.value.status_code == 409
     finally:
         inflight.release(stoken)
+
+
+# ---------- 合作式取消接上 reindex（方向 2）----------
+
+
+def test_reindex_all_stops_between_files(monkeypatch, tmp_path):
+    """取消的粒度是「当前文件做完」：已完成的块照常可检索，且不误删没轮到的文件的块。"""
+    from app.core import indexer, inflight
+
+    assert inflight.try_acquire("t-reindex")
+    calls: list[str] = []
+
+    def fake_index(p, root):  # noqa: ARG001
+        calls.append(p.name)
+        if len(calls) == 1:
+            inflight.request_cancel("t-reindex")
+        return 3
+
+    monkeypatch.setattr(indexer, "index_file", fake_index)
+    monkeypatch.setattr(indexer, "_prune_missing", lambda live: [])
+    for name in ("a.md", "b.md", "c.md"):
+        (tmp_path / name).write_text(name, encoding="utf-8")
+    try:
+        out = indexer.reindex_all(root=tmp_path, cancel_key="t-reindex")
+    finally:
+        inflight.release("t-reindex")
+    assert calls == ["a.md"], "第二个文件之前就该停下"
+    assert out["interrupted"] is True
+    assert out["chunks"] == 3
+
+
+def test_reindex_cancel_request_without_a_run_is_honest(monkeypatch, tmp_path):
+    """没请求取消时跑完全程：interrupted 必须是 False，不能把正常跑完说成被打断。"""
+    from app.core import indexer, inflight
+
+    monkeypatch.setattr(indexer, "index_file", lambda p, root: 1)
+    monkeypatch.setattr(indexer, "_prune_missing", lambda live: [])
+    (tmp_path / "a.md").write_text("a", encoding="utf-8")
+    out = indexer.reindex_all(root=tmp_path, cancel_key="t-reindex2")
+    assert out["interrupted"] is False
+    assert inflight.cancel_requested("t-reindex2") is False

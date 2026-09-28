@@ -1006,6 +1006,8 @@ export interface EvalRun {
   seconds: number
   labelled?: number
   detail?: EvalCaseResult[]
+  /** 合作式取消后提前收工（跳过的用例不计入指标）。未取消时是 false/缺省 */
+  stopped?: boolean
 }
 
 export interface ImageConfig {
@@ -3193,6 +3195,11 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   getEvalRun: (id: number) => request<EvalRun>(`/api/evals/runs/${id}`),
   deleteEvalRun: (id: number) =>
     request<{ ok: boolean }>(`/api/evals/runs/${id}`, { method: 'DELETE' }),
+  cancelEvalRun: () =>
+    request<{ stopped: boolean }>('/api/evals/run/cancel', { method: 'POST' }),
+  /** 全量重建索引的合作式取消：当前文件做完才停。没在跑时如实回 stopped:false */
+  cancelReindex: () =>
+    request<{ stopped: boolean }>('/api/kb/reindex/cancel', { method: 'POST' }),
   runEval: (top_k: number | null, judge: boolean, signal?: AbortSignal) =>
     request<EvalRun>('/api/evals/run', {
       method: 'POST',

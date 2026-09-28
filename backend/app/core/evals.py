@@ -133,11 +133,23 @@ async def _answer_and_judge(
 
 
 async def _one_case(
-    case: dict, top_k: int, info: ProviderInfo | None, model: str, sem: asyncio.Semaphore
+    case: dict,
+    top_k: int,
+    info: ProviderInfo | None,
+    model: str,
+    sem: asyncio.Semaphore,
+    cancel_key: str = "",
 ) -> dict:
     from app.core import indexer
 
     out: dict = {**case, "rank": None, "hits": [], "answer": "", "score": None, "reason": "", "error": ""}
+    # 合作式取消（方向 2）：评估是并发循环，粒度是「已开跑的跑完、还没轮到的跳过」。
+    # 两处查：开头（检索+判分都省掉）与拿信号量后（检索结果留下了、判分这一步省掉）。
+    from app.core import inflight
+
+    if cancel_key and inflight.cancel_requested(cancel_key):
+        out["skipped"] = True
+        return out
     try:
         hits = await asyncio.to_thread(indexer.search_auto, case["question"], top_k)
     except Exception as e:  # noqa: BLE001 - one bad case must not kill the run
@@ -152,6 +164,10 @@ async def _one_case(
         return out
 
     async with sem:
+        # 第二处取消检查：检索结果留下了（rank 照常计），只省掉判分这两次模型调用。
+        if cancel_key and inflight.cancel_requested(cancel_key):
+            out["skipped"] = True
+            return out
         try:
             out["answer"], out["score"], out["reason"] = await _answer_and_judge(
                 info, model, case["question"], hits
@@ -163,8 +179,11 @@ async def _one_case(
 
 
 @usage_ledger.traced("rag_eval")
-async def run_eval(top_k: int | None = None, judge: bool = True) -> dict:
-    """Run the whole eval set against the current retrieval config. Stores a run row."""
+async def run_eval(top_k: int | None = None, judge: bool = True, cancel_key: str = "") -> dict:
+    """Run the whole eval set against the current retrieval config. Stores a run row.
+
+    `cancel_key` 给了就启用合作式取消：skipped 的用例不计入指标（rank/score 为空
+    本来就被聚合过滤），响应里带 `stopped` 让界面照实说「提前停了」。"""
     prefs = load_config()
     k = int(top_k or prefs.get("rag_top_k", 5))
 
@@ -196,8 +215,11 @@ async def run_eval(top_k: int | None = None, judge: bool = True) -> dict:
     t0 = time.time()
     sem = asyncio.Semaphore(_CONCURRENCY)
     results = list(
-        await asyncio.gather(*(_one_case(c, k, info, model, sem) for c in cases))
+        await asyncio.gather(*(_one_case(c, k, info, model, sem, cancel_key) for c in cases))
     )
+    stopped = any(r.get("skipped") for r in results)
+    if stopped:
+        log.info("eval run cancelled midway: %s case(s) skipped", sum(1 for r in results if r.get("skipped")))
     seconds = round(time.time() - t0, 1)
 
     labelled = [r for r in results if r["expected_source"]]
@@ -236,6 +258,7 @@ async def run_eval(top_k: int | None = None, judge: bool = True) -> dict:
         **agg,
         "labelled": len(labelled),
         "detail": results,
+        "stopped": stopped,
     }
 
 

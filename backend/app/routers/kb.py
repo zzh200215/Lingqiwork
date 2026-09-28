@@ -41,8 +41,26 @@ async def kb_drift():
 
 @router.post("/reindex")
 async def kb_reindex():
-    result = await asyncio.to_thread(indexer.reindex_all)
+    """全量重建。占 `inflight` 锁：分钟级操作，并发两次是两倍算力；锁也让
+    `/reindex/cancel` 有明确目标。合作式取消——逐文件生效，见 `indexer.reindex_all`。"""
+    from app.core import inflight
+
+    if not inflight.try_acquire("kb_reindex"):
+        raise HTTPException(409, "已经在重建索引了——等它完成，或先点「停止」。")
+    try:
+        result = await asyncio.to_thread(indexer.reindex_all, cancel_key="kb_reindex")
+    finally:
+        inflight.release("kb_reindex")
     return result
+
+
+@router.post("/reindex/cancel")
+async def kb_reindex_cancel():
+    """请正在跑的重建停下。**合作式**：当前这个文件做完才停——界面上写
+    「正在停…」，不写「已停止」。没在跑的如实回 `stopped: false`。"""
+    from app.core import inflight
+
+    return {"stopped": inflight.request_cancel("kb_reindex")}
 
 
 @router.post("/digest/run")

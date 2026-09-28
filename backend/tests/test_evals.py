@@ -6,9 +6,11 @@ sandbox 隔离，每个测试先清空 eval 表避免串扰。
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import delete
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.core import evals as core
 from app.db import SessionLocal, engine
@@ -164,3 +166,75 @@ async def test_eval_health_unlabelled():
     h = await core.eval_health()
     assert h["unlabelled"] == 1
     assert any("没有期望源" in w for w in h["warnings"])
+
+
+# ---------- 合作式取消（方向 2）----------
+
+
+async def test_one_case_skips_entirely_when_cancel_requested(monkeypatch):
+    """开头就查：被取消的用例检索都不该跑，skipped 标记给聚合过滤。"""
+    import asyncio
+
+    from fastapi import HTTPException
+    from app.core import inflight, indexer
+    from app.routers import evals as router
+
+    async def boom(*a, **k):  # noqa: ARG001
+        raise AssertionError("被取消的用例不该再花一次检索")
+
+    monkeypatch.setattr(indexer, "search_auto", boom)
+    assert inflight.try_acquire("kb_eval")
+    try:
+        assert inflight.request_cancel("kb_eval") is True
+        out = await core._one_case(
+            {"id": 1, "question": "q", "expected_source": ""},
+            5,
+            None,
+            "",
+            asyncio.Semaphore(1),
+            "kb_eval",
+        )
+        assert out.get("skipped") is True
+        # 锁被占着 → 并发进来要 409；取消要如实说停上了
+        with pytest.raises(HTTPException) as ei:
+            await router.run_eval(None)
+        assert ei.value.status_code == 409
+        assert await router.cancel_run_eval() == {"stopped": True}
+    finally:
+        inflight.release("kb_eval")
+    # 没在跑时取消要如实说 stopped:false——不假装停成功
+    assert await router.cancel_run_eval() == {"stopped": False}
+
+
+async def test_cancelled_eval_run_marks_stopped_in_response(monkeypatch):
+    """run_eval 的响应要带 stopped —— 界面靠它说「提前收工」，不靠猜。"""
+    import asyncio
+
+    from app.core import inflight, indexer
+
+    async def fake_one_case(case, top_k, info, model, sem, cancel_key=""):  # noqa: ARG001
+        skipped = bool(cancel_key)
+        return {
+            **case,
+            # 开头就被跳过的用例 rank 是 None（真实代码同形），聚合自然把它滤掉
+            "rank": None if skipped else 1,
+            "hits": [],
+            "answer": "",
+            "score": None,
+            "reason": "",
+            "error": "",
+            "skipped": skipped,
+        }
+
+    monkeypatch.setattr(core, "_one_case", fake_one_case)
+    await _init_db()
+    await _clear()
+    async with SessionLocal() as db:
+        db.add(EvalItem(question="q1", expected_source="notes/a.md"))
+        await db.commit()
+
+    out = await core.run_eval(top_k=5, judge=False, cancel_key="kb_eval-x")
+    assert out["stopped"] is True
+    # 被跳过的用例没有 rank —— 不给指标添假分（与既有 error 用例同一口径：进分母、不进分子）
+    assert out["labelled"] == 1
+    assert out["hit1"] == 0
