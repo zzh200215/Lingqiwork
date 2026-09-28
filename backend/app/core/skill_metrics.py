@@ -23,20 +23,15 @@
 嘴里的任何一句话。所以本模块里**没有一行 `pet.*`**，有测试盯着。
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from sqlalchemy import select
 
+# naive UTC 口径唯一实现在 `timeutil.naive_utc_now`（落盘格式 + 文本字典序比较的
+# 边界纪律都写在它的 docstring 里）；这里保留 `_naive_utc_now` 名字是为了既有调用（含测试）不动。
+from app.core.timeutil import naive_utc_now as _naive_utc_now
+
 log = logging.getLogger(__name__)
-
-
-def _naive_utc_now() -> datetime:
-    """现在（naive UTC）。Pure.
-
-    `task_runs.started_at` 是 **naive UTC** 的列（`models.utcnow` 那一族），所以窗口边界也得是
-    naive UTC 才比得对——直接用 `datetime.utcnow()` 会被弃用，补一个本地时区又会错 8 小时。
-    """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 __all__ = ["FUNNEL_RULES", "INJECT_RULES", "WINDOW_DAYS", "funnel", "funnel_board", "injection"]
 

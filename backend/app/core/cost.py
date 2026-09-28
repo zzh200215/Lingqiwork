@@ -15,17 +15,27 @@
   里标出来，不做硬性拦截（拦停任务比烧一点钱更糟）。
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from app.core.prefs import load_config
+from app.core.timeutil import iso_cutoff, naive_utc_now
 
 log = logging.getLogger(__name__)
 
 
 def _since(days: int) -> str:
-    """ISO 时间戳，days 天前（本地时区感知，供 SQLite 的 >= 比较）。"""
-    now = datetime.now(timezone.utc).astimezone()
-    return (now - timedelta(days=days)).isoformat(timespec="seconds")
+    """窗口起点：days 天前，naive UTC + 空格分隔，与落盘同口径（见 `timeutil`）。
+
+    供 SQLite 的文本 `>=` 比较。以前这里用 `.astimezone().isoformat()` 产出
+    `T` 分隔 + 本地偏移的串——`' ' < 'T'` 让边界日的行整片被丢，再叠时区差，
+    用量与预算护栏系统性少报（P2-1）。口径唯一出处是 `app.core.timeutil`。
+    """
+    return iso_cutoff(naive_utc_now() - timedelta(days=days))
+
+
+def _month_start() -> str:
+    """本月 1 号 00:00（naive UTC，与 `_since` 同口径），供预算窗口。"""
+    return iso_cutoff(naive_utc_now().replace(day=1, hour=0, minute=0, second=0, microsecond=0))
 
 
 async def usage_summary(days: int = 30) -> dict:
@@ -230,15 +240,12 @@ async def monthly_budget_status() -> dict:
 
 
 async def _monthly_usage() -> dict:
-    """自然月（本月 1 号 00:00 至今）的 token 聚合，供预算判断。"""
+    """自然月（本月 1 号 00:00 UTC 至今，落盘即 UTC）的 token 聚合，供预算判断。"""
     from sqlalchemy import text as sql
 
     from app.db import SessionLocal
 
-    now = datetime.now(timezone.utc).astimezone()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat(
-        timespec="seconds"
-    )
+    month_start = _month_start()
     by_model: dict[str, dict] = {}
     total = 0
 

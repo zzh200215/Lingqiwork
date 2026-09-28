@@ -1,5 +1,6 @@
 """成本与配额中心测试：estimate_cost 纯函数 + usage_summary 聚合 + budget 护栏。"""
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -60,6 +61,78 @@ def test_estimate_cost_zero_price_not_counted():
     out = cost.estimate_cost(by_model, prices)
     assert out["total"] == 0
     assert "m" not in out["per_model"]
+
+
+# ---------- 日期口径：窗口边界必须与落盘格式同口径（P2-1 回归） ----------
+# 落盘是「空格分隔 naive UTC」（SQLite 无时区类型），`>=` 是文本字典序比较；
+# `T` 分隔或 `+08:00` 偏移都会让边界日的行整片被丢——预算护栏曾因此系统性少报。
+
+
+def test_since_matches_storage_format():
+    s = cost._since(1)
+    assert "T" not in s and "+" not in s
+    parsed = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+    expect = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+    assert abs((parsed - expect).total_seconds()) < 5
+
+
+def test_month_start_matches_storage_format():
+    ms = cost._month_start()
+    assert "T" not in ms and "+" not in ms
+    parsed = datetime.strptime(ms, "%Y-%m-%d %H:%M:%S")
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    assert (parsed.year, parsed.month, parsed.day) == (now_utc.year, now_utc.month, 1)
+    assert (parsed.hour, parsed.minute, parsed.second) == (0, 0, 0)
+
+
+async def test_boundary_day_row_is_counted():
+    """边界日回归：与窗口起点同一天、在其后 1 分钟的行必须被计入。
+
+    行时间戳从 `_since(1)` 自身推导，所以「与起点同日」是构造保证——旧实现
+    （`T` 分隔 + 偏移）下 `' ' < 'T'` 该行必被丢、此测试必挂。
+    """
+    await _init_db()
+    await _clear()
+    row_ts = datetime.fromisoformat(cost._since(1)).replace(tzinfo=None) + timedelta(seconds=60)
+    async with SessionLocal() as db:
+        conv = Conversation(title="t")
+        db.add(conv)
+        await db.flush()
+        db.add(
+            Message(
+                conversation_id=conv.id,
+                role="assistant",
+                content="x",
+                model_id="m",
+                tokens_in=10,
+                tokens_out=0,
+                created_at=row_ts,
+            )
+        )
+        await db.commit()
+    s = await cost.usage_summary(days=1)
+    assert s["chat_calls"] == 1
+    assert s["total_tokens"] == 10
+
+
+async def test_month_start_boundary_row_is_counted(monkeypatch):
+    """月初边界回归：自然月第 1 天的行必须进预算（旧代码把月初整片丢掉）。"""
+    await _init_db()
+    await _clear()
+    row_ts = datetime.strptime(cost._month_start(), "%Y-%m-%d %H:%M:%S") + timedelta(seconds=60)
+    async with SessionLocal() as db:
+        db.add(TaskRun(task_id=1, model_id="m", tokens_in=2_000_000, tokens_out=0, started_at=row_ts))
+        await db.commit()
+    monkeypatch.setattr(
+        "app.core.cost.load_config",
+        lambda: {
+            "monthly_budget_usd": 1.0,
+            "model_prices": {"m": {"input": 1.0, "output": 1.0}},
+        },
+    )
+    out = await cost.monthly_budget_status()
+    assert out["spent"] == 2.0  # 2M * $1/M —— 旧代码这里是 0
+    assert out["over"] is True
 
 
 # ---------- DB：usage_summary ----------
