@@ -33,6 +33,13 @@ log = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 40  # messages sent as context
 
+# 整轮生成超时（对齐任务侧 `tasks._STEP_TIMEOUT_SECONDS = 900` 的语义）。本地最常见的
+# 死法不是报错，是**不返回**：provider 挂住时 SSE 这头永远停在「生成中」，钱还在悄悄烧
+# （`llm.py` 没有单次调用超时，只有 SDK 默认 600s 兜底单次请求，兜不住六轮工具循环）。
+# 超时停掉的是 runner 整个任务：已流出的文本与已记的账走既有错误分支落库（`partial_parts`），
+# 界面收到一条说清楚原因的 error 帧，不是无限转圈。
+TURN_TIMEOUT_SECONDS = 900
+
 # 主聊天路径唯一的**内建**系统规矩。
 #
 # 此前这条路径一条系统提示词都没有（`core/prompts.py` 里只有零柒/笔记/导师的人设），
@@ -1131,9 +1138,7 @@ async def _generate(req: ChatRequest):
             log.info("uid=%s 上一轮没落盘（%s），补跑一次", uid, [b["code"] for b in bad])
             before = len(saved_by_uid.get(uid) or [])
             kept_text = text
-            mark = len(partial_parts)
             streamed_parts.clear()
-            del partial_parts[mark:]
             try:
                 final2 = await one_pass(
                     turn_quality.retry_instruction(bad, req.content or query_text, route_decision.delivery)
@@ -1197,7 +1202,7 @@ async def _generate(req: ChatRequest):
         return (text, usage)
 
     async def runner():
-        try:
+        async def run_all():
             if compare_resolved is not None:
                 results = await asyncio.gather(
                     run_one(resolved, "a"),
@@ -1211,6 +1216,16 @@ async def _generate(req: ChatRequest):
                 text, usage = await run_one(resolved, None)
                 q.put_nowait(("result", text, usage))
                 q.put_nowait(("stop", None, None))
+
+        try:
+            # 整轮护栏（与任务侧 `wait_for(timeout=900)` 同一语义，见 TURN_TIMEOUT_SECONDS）：
+            # 超时 → 取消 runner 整个任务，已流出文本与已记的账走既有错误分支落库。
+            await asyncio.wait_for(run_all(), timeout=TURN_TIMEOUT_SECONDS)
+        except TimeoutError:
+            log.warning("chat turn exceeded %ss without completing, stopped", TURN_TIMEOUT_SECONDS)
+            q.put_nowait(
+                ("error", f"本轮超过 {TURN_TIMEOUT_SECONDS}s 没有完成，已停止（已流出的文本会保留）", None)
+            )
         except Exception as e:  # noqa: BLE001
             q.put_nowait(("error", f"{type(e).__name__}: {e}", None))
 
@@ -1340,36 +1355,6 @@ def _length_note(budget, trace: dict, artifacts: list | None) -> dict:
         "over": any(bool(a.get("over")) for a in (artifacts or []) if isinstance(a, dict)),
         "saves": saves,
     }
-
-
-async def _structured_round(resolved: ResolvedModel, messages: list[dict]) -> tuple[object | None, str]:
-    """W2b：一次性拿回 `{reply, artifacts[]}`。**不流式**（结构要完整才算数）。
-
-    `extract_json` 自带两级：provider 原生 JSON（`response_format` / 强制 tool_choice）→
-    失败就「提示词约束 + 清洗提取」。**两个都不幸失败时返回 None**，调用方回落 W2a 的工具循环 ——
-    所以「provider 不支持」不会变成一轮空回答。Test seam: monkeypatch `app.core.structured.extract_json`.
-
-    **一处还没接好的账**：`extract_json` 不收 `usage`，所以结构化这一轮的 token **没记进
-    `tokens_out`** —— 账本上这类回合的输出 token 是 0，别当成免费（`mode=structured` 会标出来）。
-    """
-    from app.core import structured as structured_mod
-
-    info = ProviderInfo(
-        kind=resolved.provider.kind,
-        base_url=resolved.provider.base_url,
-        api_key=resolved.provider.api_key,
-    )
-    msgs = [*messages, {"role": "system", "content": structured_turn.INSTRUCTION}]
-    try:
-        obj, meta = await structured_mod.extract_json(
-            info, resolved.model, msgs, structured_turn.StructuredTurn
-        )
-    except Exception as e:  # noqa: BLE001 - 结构化拿不到就该回落，不该让这一轮炸掉
-        log.warning("structured turn failed", exc_info=True)
-        return None, f"{type(e).__name__}: {e}"
-    if obj is None:
-        return None, str(getattr(meta, "error", "") or "没有拿到符合形状的 JSON")
-    return obj, ""
 
 
 async def _save_assistant_message(
