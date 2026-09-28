@@ -3193,10 +3193,11 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
   getEvalRun: (id: number) => request<EvalRun>(`/api/evals/runs/${id}`),
   deleteEvalRun: (id: number) =>
     request<{ ok: boolean }>(`/api/evals/runs/${id}`, { method: 'DELETE' }),
-  runEval: (top_k: number | null, judge: boolean) =>
+  runEval: (top_k: number | null, judge: boolean, signal?: AbortSignal) =>
     request<EvalRun>('/api/evals/run', {
       method: 'POST',
       body: JSON.stringify({ top_k, judge }),
+      signal,
     }),
 
   listImages: () =>

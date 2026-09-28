@@ -440,6 +440,9 @@ export default function TutorPage() {
   const [streaming, setStreaming] = useState('')
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  // 方向 2：讲解在途**单独一个状态**——`busy` 也被自评保存（mark）置位，共用的话
+  // 「在想怎么讲」会在记自评的半秒里说谎。RunPanel 的六态只认这一个。
+  const [asking, setAsking] = useState(false)
   const [err, setErr] = useState('')
   const [verdict, setVerdict] = useState<'' | 'got' | 'half' | 'useless'>('')
   const [ended, setEnded] = useState<{ concept: string; domain: string; stuck: string; transfer: string; nearby: TutorEndResult['material_nearby']; merged: TutorEndResult['merged'] } | null>(null)
@@ -1137,6 +1140,7 @@ export default function TutorPage() {
     abortRef.current = controller
     setErr('')
     setBusy(true)
+    setAsking(true)
     setTurns((t) => [...t, { role: 'user', content: text }])
     let acc = ''
     let srcs: TutorMaterialSource[] | undefined
@@ -1165,7 +1169,14 @@ export default function TutorPage() {
       // a partial reply is stored server-side too, so keeping it here matches
       if (acc) setTurns((t) => [...t, { role: 'assistant', content: acc, sources: srcs }])
       setBusy(false)
+      setAsking(false)
     }
+  }, [])
+
+  // 方向 2：讲解的「停止」是**真停**——/api/tutor/say 是流式端点，掐请求 = 服务端
+  // 生成器被取消（部分回复服务端也存了）。RunPanel 的按钮所以敢叫「停止」。
+  const stop = useCallback(() => {
+    abortRef.current?.abort()
   }, [])
 
   const beginWith = useCallback(
@@ -3014,11 +3025,31 @@ export default function TutorPage() {
                   {turns.map((t, i) => (
                     <Bubble key={i} turn={t} canSave />
                   ))}
-                  {streaming ? <Bubble turn={{ role: 'assistant', content: streaming }} /> : null}
-                  {busy && !streaming ? (
-                    <p className="text-sm text-neutral-400">在想…</p>
+                  {asking ? (
+                    <RunPanel
+                      phase={streaming ? 'streaming' : 'planning'}
+                      tone="violet"
+                      icon="🎓"
+                      title="讲解中"
+                      status={streaming ? undefined : '在想怎么讲…'}
+                      onCancel={stop}
+                    >
+                      {streaming ? <Markdown>{streaming}</Markdown> : null}
+                    </RunPanel>
                   ) : null}
-                  {err ? <p className="text-sm text-rose-600 dark:text-rose-400">{err}</p> : null}
+                  {err && !asking ? (
+                    <RunPanel
+                      phase="error"
+                      tone="rose"
+                      icon="🎓"
+                      title="讲解中断"
+                      error={err}
+                      onRetry={() => {
+                        const last = [...turns].reverse().find((t) => t.role === 'user')
+                        if (last && sid !== null) void send(sid, last.content)
+                      }}
+                    />
+                  ) : null}
                   {reportCards}
                   <div ref={bottom} />
                 </div>

@@ -18,6 +18,7 @@ import {
 import { api, type DirItem, type EvalItem, type EvalRun, type KgRetrieval, type KgStatus, type RepoItem } from './api'
 import BookmarkletLink from './BookmarkletLink'
 import EmptyHint from './EmptyHint'
+import RunPanel from './RunPanel'
 import { buildBookmarklet, parseClipParams, shouldAutoClose } from './capture'
 
 /** 五个页签各自的线性图标（emoji 从 chrome 退役） */
@@ -98,6 +99,10 @@ export default function KbPage() {
   const [hits, setHits] = useState<Hit[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  // 方向 2：分钟级操作给 RunPanel。**全量重建是一次性 POST**——掐请求只是「我不等了」，
+  // 服务端会把这一轮跑完，按钮所以叫「不等了」不叫「停止」（RunPanel 的诚实规则）。
+  const [reindexing, setReindexing] = useState(false)
+  const reindexAbort = useRef<AbortController | null>(null)
   const [overview, setOverview] = useState<{ notes: number; clippings: number; repos: number; dirs: number } | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploaded, setUploaded] = useState<{ ok: { name: string; chunks: number }[]; fail: { name: string; err: string }[] }>({ ok: [], fail: [] })
@@ -266,6 +271,8 @@ export default function KbPage() {
   const [judge, setJudge] = useState(true)
   const [running, setRunning] = useState(false)
   const [evalMsg, setEvalMsg] = useState('')
+  // 同上：评估也是一次性 POST，取消语义是「不等了」
+  const evalAbort = useRef<AbortController | null>(null)
   const [openRun, setOpenRun] = useState<EvalRun | null>(null)
 
   // --- knowledge-graph tab ---
@@ -381,9 +388,11 @@ export default function KbPage() {
 
   async function runEvalNow() {
     setRunning(true)
+    const controller = new AbortController()
+    evalAbort.current = controller
     setEvalMsg('评估中…（每题一次检索' + (judge ? ' + 两次模型调用' : '') + '，请稍候）')
     try {
-      const r = await api.runEval(evalTopK ? Number(evalTopK) : null, judge)
+      const r = await api.runEval(evalTopK ? Number(evalTopK) : null, judge, controller.signal)
       setEvalMsg(
         `✓ 第 ${r.id} 次评估：Hit@1 ${pct(r.hit1)} · Hit@3 ${pct(r.hit3)} · MRR ${r.mrr}` +
           (r.faithfulness !== null ? ` · 忠实度 ${r.faithfulness}/5` : '（未判分）') +
@@ -392,8 +401,13 @@ export default function KbPage() {
       setOpenRun(r)
       await refreshEval()
     } catch (e) {
-      setEvalMsg(`❌ ${String(e)}`)
+      if (controller.signal.aborted) {
+        setEvalMsg('已停止等待。服务端会把这一轮跑完，结果会出现在下面的历史里。')
+      } else {
+        setEvalMsg(`❌ ${String(e)}`)
+      }
     } finally {
+      if (evalAbort.current === controller) evalAbort.current = null
       setRunning(false)
     }
   }
@@ -472,9 +486,12 @@ export default function KbPage() {
 
   async function reindex() {
     setBusy(true)
+    setReindexing(true)
+    const controller = new AbortController()
+    reindexAbort.current = controller
     setMessage('索引中…（首次会下载 embedding 模型，约 100MB）')
     try {
-      const r = await fetch('/api/kb/reindex', { method: 'POST' })
+      const r = await fetch('/api/kb/reindex', { method: 'POST', signal: controller.signal })
       const data = await r.json()
       setMessage(
         `完成：${data.files} 个文件 / ${data.chunks} 个块 / ${data.seconds}s` +
@@ -483,9 +500,16 @@ export default function KbPage() {
       )
       await refresh()
     } catch (e) {
-      setMessage(String(e))
+      // 一次性 POST 上掐请求 ≠ 服务端停——把这件事照实说，别让人以为省了那份算力
+      if (controller.signal.aborted) {
+        setMessage('已停止等待。服务端会把这一轮跑完，之后刷新页面即可看到新块数。')
+      } else {
+        setMessage(String(e))
+      }
     } finally {
+      if (reindexAbort.current === controller) reindexAbort.current = null
       setBusy(false)
+      setReindexing(false)
     }
   }
 
@@ -974,7 +998,18 @@ export default function KbPage() {
             </span>
           ) : null}
         </div>
-        {message && <p className="mt-2 text-xs text-neutral-500">{message}</p>}
+        {reindexing ? (
+          <RunPanel
+            phase="planning"
+            tone="amber"
+            icon="🧰"
+            title="全量重建索引"
+            status={message || undefined}
+            cancelLabel="不等了"
+            onCancel={() => reindexAbort.current?.abort()}
+          />
+        ) : null}
+        {message && !reindexing ? <p className="mt-2 text-xs text-neutral-500">{message}</p> : null}
         <p className="mt-3 text-xs leading-relaxed text-neutral-400">
           把 .md / .txt / .pdf / .docx 放进 vault 目录即可自动索引；「全量重建」手动触发一遍。对话页打开「知识库(RAG)」开关即可在聊天中引用。
         </p>
@@ -1441,7 +1476,21 @@ export default function KbPage() {
                 用模型判忠实度（每题多 2 次调用）
               </label>
             </div>
-            {evalMsg && <p className="mt-2 whitespace-pre-wrap text-xs text-neutral-500">{evalMsg}</p>}
+            {running ? (
+              <RunPanel
+                phase="planning"
+                tone="violet"
+                icon="📊"
+                title="运行评估"
+                status={evalMsg || undefined}
+                cancelLabel="不等了"
+                onCancel={() => evalAbort.current?.abort()}
+              />
+            ) : (
+              evalMsg && (
+                <p className="mt-2 whitespace-pre-wrap text-xs text-neutral-500">{evalMsg}</p>
+              )
+            )}
           </section>
 
           {/* History */}
