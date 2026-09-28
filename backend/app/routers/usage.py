@@ -38,7 +38,13 @@ async def features():
 
     这是「30 天自用窗口」的读数来源——哪些功能真的在被使用、哪些零记录。
     零记录 ≠ 不存在；裁决（留/删）等窗口结束拿数据说话，这里只摆事实。
+
+    方向 4 补的第二只读：`page_opens` 是各页**打开过的天数**——只读面不跑模型，
+    没有这个信号它们在裁决的尺子上是盲的。与 features 同为全部历史口径。
     """
     from app.core import usage_ledger
 
-    return {"features": await usage_ledger.feature_usage()}
+    return {
+        "features": await usage_ledger.feature_usage(),
+        "page_opens": await core.page_opens(),
+    }

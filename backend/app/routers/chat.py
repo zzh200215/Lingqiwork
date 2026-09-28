@@ -1332,7 +1332,13 @@ async def _generate_followups(
     ]
     p = resolved.provider
     info = ProviderInfo(kind=p.kind, base_url=p.base_url, api_key=p.api_key)
-    obj, meta = await extract_json(info, resolved.model, msgs, Followups)
+    # 方向 4：追问是辅助 LLM 调用，烧的 token 也要进账本（"followups" 行）。
+    # extract_json 内部两条路（原生 structured / stream_chat）都会把没有 accumulator
+    # 的用量交给 `usage_ledger.note()`——在 span 外它是空操作，在 span 里就是这行账。
+    from app.core import usage_ledger
+
+    async with usage_ledger.span("followups"):
+        obj, meta = await extract_json(info, resolved.model, msgs, Followups)
     if obj is None:
         return []
     return obj.items[:3]

@@ -66,15 +66,21 @@ async def compact(
     )
     try:
         text = ""
-        async for delta in stream_chat(
-            provider,
-            model,
-            [
-                {"role": "system", "content": "你是对话摘要助手，只输出摘要本身。"},
-                {"role": "user", "content": prompt},
-            ],
-        ):
-            text += delta
+        # 方向 4：辅助调用也要进账本。span 里 stream_chat 收到的 usage 会经
+        # `_absorb_usage(None, …)` → `usage_ledger.note()` 落成 model_usage 的
+        # "compaction" 行；缓存命中不进这里——没有模型调用就不该有行。
+        from app.core import usage_ledger
+
+        async with usage_ledger.span("compaction", ref=f"conv:{conversation_id}"):
+            async for delta in stream_chat(
+                provider,
+                model,
+                [
+                    {"role": "system", "content": "你是对话摘要助手，只输出摘要本身。"},
+                    {"role": "user", "content": prompt},
+                ],
+            ):
+                text += delta
         text = text.strip()
         if not text:
             return None, history

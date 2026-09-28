@@ -3429,7 +3429,10 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
       body: JSON.stringify({ page }),
     }),
   /** 功能真实用量（CTO review #6）：model_usage 按操作名聚合，「30 天自用窗口」的读数。 */
-  usageFeatures: () => request<{ features: UsageFeatureRow[] }>('/api/usage/features'),
+  usageFeatures: () =>
+    request<{ features: UsageFeatureRow[]; page_opens?: Record<string, number> }>(
+      '/api/usage/features'
+    ),
   todayNext: () => request<TodayNext>('/api/today/next'),
   /** 今日概览五档：失败任务 / 未消化 / 到期卡 / 卡点 / 进行中产出。空档不返回。 */
   todaySummary: () => request<{ rows: TodaySummaryRow[] }>('/api/today/summary'),

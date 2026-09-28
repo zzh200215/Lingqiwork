@@ -100,3 +100,27 @@ async def open_days(days: int = 7) -> list[str]:
         log.debug("usage open_days failed", exc_info=True)
         rows = []
     return [str(r) for r in rows]
+
+
+async def page_opens() -> dict[str, int]:
+    """每页**打开过的天数**（(page, day) 幂等行去重计数），方向 4 的第二只读。
+
+    `/features` 只数得到跑了模型的操作；「页面被打开但没跑模型」的使用信号在这里——
+    没有它，只读面在裁决的尺子上是盲的。口径与 `feature_usage` 一致：**全部历史**，
+    不另设窗口（一个响应里两种窗口只会让人算错）。day 是本地日期串（本模块纪律）。
+    """
+    from sqlalchemy import text as sql
+
+    from app.db import SessionLocal
+
+    try:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    sql("SELECT page, COUNT(DISTINCT day) FROM usage_visits GROUP BY page")
+                )
+            ).all()
+    except Exception:  # noqa: BLE001 - telemetry must never break a page load
+        log.debug("usage page_opens failed", exc_info=True)
+        return {}
+    return {str(p): int(n) for p, n in rows}

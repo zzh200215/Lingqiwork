@@ -90,6 +90,8 @@ export default function DashboardPage() {
   // 功能真实用量（CTO review #6）：账本按操作名聚合——「30 天自用窗口」的读数。
   // 同一条红线：只摆事实，不设目标、不排名、不催。
   const [usageFeatures, setUsageFeatures] = useState<UsageFeatureRow[] | null>(null)
+  // 方向 4 的第二只读：各页打开过的天数——只读面不跑模型，没这个信号就是盲区
+  const [pageOpens, setPageOpens] = useState<Record<string, number> | null>(null)
 
   // 过程指标（PLAN §7.2）：半懂率按周。与北极星同一张红线的另一条曲线——
   // 那条说「这周动没动」，这条说「动的那部分有没有落下」。
@@ -260,7 +262,12 @@ export default function DashboardPage() {
     api.tutorStats().then(setTutor).catch(() => {})
     api.beliefThreads().then((r) => setBeliefs(r.threads)).catch(() => {})
     api.northStar().then(setNorth).catch(() => setNorth(null))
-    api.usageFeatures().then((r) => setUsageFeatures(r.features)).catch(() => setUsageFeatures(null))
+    api.usageFeatures()
+      .then((r) => {
+        setUsageFeatures(r.features)
+        setPageOpens(r.page_opens ?? {})
+      })
+      .catch(() => setUsageFeatures(null))
     api.process().then(setProcess).catch(() => setProcess(null))
     api.cardCalibration().then(setCalib).catch(() => setCalib(null))
     api.cardGapRate().then(setGap).catch(() => setGap(null))
@@ -610,7 +617,7 @@ export default function DashboardPage() {
             </section>
           ) : null}
 
-          <UsageFeaturesCard rows={usageFeatures} />
+          <UsageFeaturesCard rows={usageFeatures} pageOpens={pageOpens} />
 
           <section className="wb-card p-5">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">常用模型</h2>
@@ -1111,10 +1118,22 @@ function NarrativeCard({
  *
  *  只摆事实：哪个功能发生过几次、烧了多少 token。零记录 ≠ 不存在——是还没被用过，
  *  裁决（留/删）等窗口结束拿数据说话。读不到（接口挂了）整卡不摆，不占位。
+ *
+ *  方向 4 补的第二只读：`pageOpens` 是各页**打开过的天数**——只读面不跑模型，
+ *  没有它，那些面在裁决的尺子上是盲的。没拉到就不摆（读不到 ≠ 零）。
  */
-export function UsageFeaturesCard({ rows }: { rows: UsageFeatureRow[] | null }) {
+export function UsageFeaturesCard({
+  rows,
+  pageOpens,
+}: {
+  rows: UsageFeatureRow[] | null
+  pageOpens?: Record<string, number> | null
+}) {
   if (rows === null) return null
   const total = rows.reduce((n, r) => n + r.spans, 0)
+  const opens = Object.entries(pageOpens ?? {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([page, days]) => `${page} ${days} 天`)
   return (
     <section className="wb-card p-5" data-usage-features>
       <div className="flex items-center justify-between">
@@ -1143,6 +1162,11 @@ export function UsageFeaturesCard({ rows }: { rows: UsageFeatureRow[] | null }) 
           ))}
         </ul>
       )}
+      {opens.length > 0 ? (
+        <p className="mt-3 text-xs leading-relaxed text-neutral-400" data-page-opens>
+          打开过的页面（不跑模型也计数）：{opens.join(' · ')}
+        </p>
+      ) : null}
       <p className="mt-3 text-xs leading-relaxed text-neutral-400">
         「30 天自用窗口」的读数：零记录的功能不是不存在，是还没被用过——裁决等数据说话。
       </p>

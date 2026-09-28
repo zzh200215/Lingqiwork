@@ -466,7 +466,13 @@ async def stream_chat(
     else:
         client = _openai_client(p=provider)
         kwargs: dict = dict(model=model, messages=messages, stream=True)
-        if usage is not None:
+        from app.core import usage_ledger
+
+        # 有 accumulator 的调用方自己收账；span 里的调用（压缩摘要这类辅助调用）没有
+        # accumulator，只能靠 provider 回的 usage 进账本——与 `_openai_round` 同一判断
+        # （`usage_ledger.active()` 的 docstring 写的就是这件事）。provider 不认这个
+        # 参数时走下面的 plain 重试，不会炸。
+        if usage is not None or usage_ledger.active():
             kwargs["stream_options"] = {"include_usage": True}
         try:
             stream = await client.chat.completions.create(**kwargs)
