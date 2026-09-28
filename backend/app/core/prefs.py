@@ -27,6 +27,12 @@ _DEFAULTS: dict[str, Any] = {
     "full_context_max_chars": 4000,  # per-doc budget for full-context mode
     "digest_time": "09:00",  # daily vault digest schedule (HH:MM)
     "digest_enabled": False,
+    # 夜间评测回归（eval_regression，2026-09-26）：**默认关**——它每天烧一次真金白银的
+    # 模型调用。这两键必须在 `_DEFAULTS` 里，否则 `save_config` 的白名单过滤会把设置页
+    # 存进来的开关**静默丢弃**（PrefsIn 声明了它们、校验也过，但存不进 → 永不生效）。
+    # cron 空串时由 `eval_regression.py` 兜底为 "0 5 * * *"。
+    "eval_regression_enabled": False,
+    "eval_regression_cron": "",
     "memory_enabled": True,  # inject persistent memories into chat
     # A4：把「最近在做的那件事」的名字/进度/引用清单追加进 system——**只在消息指涉它时**
     # （`core/thread_context`）。默认开：空数据本来就不注入，没这事的人一个字都看不到。
