@@ -9,9 +9,9 @@ with the workbench's own venv (so the model's code can use its deps), js
 runs with node when it is on PATH. HTML is never executed server-side — the
 frontend previews it in a sandboxed iframe instead.
 
-**默认关是刻意的（2026-09-27 CTO review #3 复核确认）**：与 kg/reranker 的「交付即封存」
-不同——这里是安全姿态（consent boundary 即开关本身，docstring 原话），不是未决实验。
-保持默认关。
+**默认关是刻意的（2026-09-27 CTO review #3 复核确认；2026-09-28 方向 5 改向「保留优化」后这条不变）**：
+kg/reranker 当时是「未决实验」（现已定保留），而这里的默认关是**安全姿态**（consent
+boundary 即开关本身，docstring 原话）——不是未决实验。保持默认关。
 """
 import os
 import shutil

@@ -4,12 +4,12 @@ The model is loaded lazily on first use (CPU) — it only runs when
 rerank_enabled is on and there are candidates to score. Local HF cache is
 expected at ~/.cache/huggingface/hub/models--BAAI--bge-reranker-base.
 
-**停用裁决（2026-09-27，CTO review #3）**：`rerank_enabled` 自交付起为 False，且**没有
-rerank 专属的评测产物**（`data/evals/k3-retrieval-experiment/` 那批是 agent 编排实验，
-bare/flat/tools，与 rerank 无关——按文件名望文生义会认错）。停用原因没有归档，处置：
-**封存观察**，同 kg.py。要开：先跑一次「rerank on/off」的检索对照（金标在
+**处置更新（2026-09-28，用户决策）**：不做「30 天用量裁决删留」，**本功能保留**——
+转入优化升级路线；设置页已有 `rerank_enabled` 开关，要开它随时可以。
+开之前仍建议先跑一次「rerank on/off」的检索对照（金标在
 `backend/evals/retrieval/`，跑法见 `core/evals.run_eval`），拿数字说话——
 CPU 上每次查询重排 20 候选的延迟成本，必须换得回可测的召回/排序收益。
+（历史：2026-09-27 CTO review #3 曾定「封存观察、零使用则删除裁决」，已被上述决策取代。）
 """
 import logging
 import os
