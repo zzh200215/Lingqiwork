@@ -37,8 +37,9 @@ describe('navState', () => {
     expect(navState('/dashboard', '').href).toBe('/dashboard')
   })
 
-  it('没有分组的页面（对话）不亮任何一组', () => {
-    expect(navState('/', '')).toEqual({ group: '', href: '' })
+  it('对话（/）现在有自己的分组（方向 7：入口显形）；真正没有分组的不亮任何一组', () => {
+    expect(navState('/', '')).toEqual({ group: 'chat', href: '/' })
+    expect(navState('/', '?conv=3')).toEqual({ group: 'chat', href: '/' })
     expect(navState('/nope', '')).toEqual({ group: '', href: '' })
   })
 })
@@ -52,8 +53,9 @@ describe('NAV 这份表本身', () => {
     }
   })
 
-  it('六个分组、按你定的顺序：今日 / 学 / 工作 / 资产 / 零柒 / 设置', () => {
+  it('七个分组、按你定的顺序：对话 / 今日 / 学 / 工作 / 资产 / 零柒 / 设置', () => {
     expect(NAV.map((g) => g.key)).toEqual([
+      'chat',
       'review',
       'tutor',
       'work',

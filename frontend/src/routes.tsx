@@ -21,6 +21,7 @@ import {
   type LucideIcon,
   Map,
   MessageCircle,
+  MessageSquare,
   NotebookPen,
   Package,
   PawPrint,
@@ -163,6 +164,10 @@ export const ASSET_ITEMS: NavItem[] = [
 ]
 
 export const NAV: NavGroup[] = [
+  // 方向 7（2026-09-28）：chat 是唯一能自由用工具 + 有沉淀出口的最强 AI 面，
+  // 此前只在 logo 的 title 里有入口——「把最强的面藏起来，然后统计它没人用」。
+  // 单页组（items: []），与「今日」同一形状。
+  { key: 'chat', label: '对话', icon: MessageSquare, href: '/', items: [] },
   { key: 'review', label: '今日', icon: Sunrise, href: '/review', items: [] },
   { key: 'tutor', label: '学', icon: GraduationCap, href: '/tutor?tab=learn', items: withTab('/tutor', TUTOR_TABS) },
   { key: 'work', label: '工作', icon: FolderKanban, href: '/work?tab=report', items: withTab('/work', WORK_TABS) },
@@ -189,6 +194,7 @@ export const NAV: NavGroup[] = [
 
 /** 路径 → 它属于哪一组。**`/notes` 这些没有自己分组、但归在「资产」下的页面也在这**。 */
 const GROUP_OF_PATH: Record<string, string> = {
+  '/': 'chat',
   '/review': 'review',
   '/tutor': 'tutor',
   '/work': 'work',
@@ -202,6 +208,7 @@ const GROUP_OF_PATH: Record<string, string> = {
 
 /** 每一组「没写参数时落在哪」——**与页面里那几处默认值是同一个**（页面现在也从这里取）。 */
 const GROUP_PARAM: Record<string, { key: string; value: string } | null> = {
+  chat: null, // 单页组，没有子项参数
   review: null,
   tutor: { key: 'tab', value: 'learn' },
   work: { key: 'tab', value: 'report' },

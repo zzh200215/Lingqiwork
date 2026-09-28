@@ -59,12 +59,12 @@ afterEach(() => {
 })
 
 describe('侧栏 · 分组', () => {
-  it('六个分组都在，顺序是你定的那个', () => {
+  it('七个分组都在，顺序是你定的那个（方向 7：对话入列）', () => {
     renderAt('/review')
     const keys = [...document.querySelectorAll('[data-nav-group]')].map((el) =>
       el.getAttribute('data-nav-group')
     )
-    expect(keys).toEqual(['review', 'tutor', 'work', 'assets', 'companion', 'settings'])
+    expect(keys).toEqual(['chat', 'review', 'tutor', 'work', 'assets', 'companion', 'settings'])
   })
 
   it('当前所在的那一组自动展开，其余收着', () => {
@@ -122,9 +122,11 @@ describe('侧栏 · 高亮', () => {
     ).toBe('/notes')
   })
 
-  it('对话页不亮任何一组（它不在分组表里，入口是 logo 与「＋ 新对话」）', () => {
+  it('对话页亮「对话」组（方向 7：它有自己的导航入口了）', () => {
     renderAt('/')
-    expect(document.querySelector('[data-nav-group][data-nav-active="1"]')).toBeNull()
+    expect(
+      document.querySelector('[data-nav-group="chat"][data-nav-active="1"]')
+    ).not.toBeNull()
   })
 
   it('五张脸的名字都在侧栏上（原先藏在陪伴页的标签条里）', () => {
