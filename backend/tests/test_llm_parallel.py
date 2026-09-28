@@ -36,7 +36,12 @@ def _provider():
 
 
 def _tools():
-    return [{"type": "function", "function": {"name": "a", "parameters": {}}}]
+    # 执行层只放行**本轮广告过**的工具（BUG-008）。这些测试量的是循环机制（并行/顺序/
+    # 隔离），用的是占位名——把它们都广告出去，机制照测，又不触发未授权拦截。
+    return [
+        {"type": "function", "function": {"name": n, "parameters": {}}}
+        for n in ("a", "b", "slow", "fast", "bad", "good")
+    ]
 
 
 async def _run(tools_rounds, run_tool, monkeypatch):

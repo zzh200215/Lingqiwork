@@ -222,7 +222,12 @@ async def test_run_agentic_chat_fills_the_trace(monkeypatch):
         ProviderInfo(kind="openai", base_url="", api_key="k"),
         "m",
         [{"role": "user", "content": "写份周报"}],
-        [{"type": "function", "function": {"name": "kb_search", "parameters": {}}}],
+        [
+            # 两个都得广告出来：执行层只放行本轮广告过的工具（BUG-008），否则 save_artifact
+            # 会被当「未授权」拦下，测不到它真跑起来又抛错、被记成 ok=False 的那条路。
+            {"type": "function", "function": {"name": "kb_search", "parameters": {}}},
+            {"type": "function", "function": {"name": "save_artifact", "parameters": {}}},
+        ],
         run_tool=run_tool,
         emit_text=lambda t: None,
         emit_tool=lambda n, a: None,

@@ -318,6 +318,13 @@ async def run_agentic_chat(
     msgs = [dict(m) for m in messages]
     use_tools = bool(tools)
     tool_param = tools if use_tools else None
+    # 执行层复核（BUG-008）：本轮广告给模型的工具集就是本轮的授权集。白名单、破坏性闸门
+    # （`DESTRUCTIVE_TOOLS`）、memory/delegate/image 各道门都在上游 `tool_specs`·`filter_specs`
+    # 那儿过滤掉了不该给的——但那只挡住了「给模型看的清单」。模型若幻觉出、或被注入一个没上过
+    # 清单的名字（最糟是 `memory_delete`，删了没有回收站），下面的 `run_tool` 仍会照跑：授权
+    # 只在广告层生效。这里把那个决定在执行时也认一次，任何没广告过的工具名一律拒发。
+    _advertised = {(s.get("function") or {}).get("name") for s in (tools or [])}
+    _advertised.discard(None)
     if trace is not None:
         trace.setdefault("tool_calls", [])
         trace["rounds"] = 0
@@ -376,14 +383,22 @@ async def run_agentic_chat(
         async def _run_one(tc: ToolCall) -> tuple[ToolCall, str]:
             t0 = time.monotonic()
             ok = True
-            try:
-                result = await run_tool(tc.name, tc.arguments)
-            except Exception as e:  # noqa: BLE001 - 单个工具失败不拖垮整轮
+            executed = False
+            if _advertised and tc.name not in _advertised:
+                # 没广告过 = 本轮没授权。拒发，把理由回给模型（不 raise：与「单个工具失败
+                # 不拖垮整轮」同一口径），别真跑到 run_tool 去。
                 ok = False
-                result = f"[tool error] {type(e).__name__}: {e}"
-            # 工具想额外告诉界面的事（如产出落盘路径）在此取走。取在 await 之后、
-            # 同一个任务里——并行 gather 时每个 _run_one 有自己的上下文，互不串味。
-            if emit_tool_result is not None:
+                result = f"[tool error] 工具 {tc.name!r} 未授权：不在本轮可用工具清单内"
+            else:
+                executed = True
+                try:
+                    result = await run_tool(tc.name, tc.arguments)
+                except Exception as e:  # noqa: BLE001 - 单个工具失败不拖垮整轮
+                    ok = False
+                    result = f"[tool error] {type(e).__name__}: {e}"
+            # 工具想额外告诉界面的事（如产出落盘路径）在此取走——只有真跑过工具才有意义。
+            # 取在 await 之后、同一个任务里——并行 gather 时每个 _run_one 有自己的上下文，互不串味。
+            if executed and emit_tool_result is not None:
                 meta = take_tool_meta()
                 if meta:
                     try:

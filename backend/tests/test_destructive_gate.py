@@ -149,3 +149,64 @@ def test_the_chat_hands_the_delete_tool_only_when_you_ask(monkeypatch):
 
     asked = _tools_this_turn(monkeypatch, "把那条关于 Python 的记忆删掉。")
     assert "memory_delete" in asked, "明说了要删，工具得给（否则这句请求永远做不到）"
+
+
+# ---------- 5. 执行层：广告没给的，硬点也跑不动（BUG-008） ----------
+
+
+class _FakeClient:
+    async def close(self):
+        pass
+
+
+def _drive(monkeypatch, advertised: list[str], calls: list):
+    """把一轮工具调用喂给**真的** `run_agentic_chat`，记下哪些工具真被执行了。
+
+    上面 1~4 钉的是广告层（工具表怎么拼）。这一条钉执行层：模型点了一个没广告过的工具名，
+    循环该拒发、而不是照跑 `run_tool`——否则「授权只在广告层生效」，破坏性工具靠幻觉/注入
+    就能绕过那道门。
+    """
+    from app.core import llm
+    from app.core.llm import ProviderInfo, ToolCall
+
+    ran: list[str] = []
+    scripted = iter([("", [ToolCall(str(i), n, {}) for i, n in enumerate(calls)]), ("好了", [])])
+
+    async def fake_round(client, model, messages, tools, emit_text, usage_out=None):  # noqa: ARG001
+        text, tcs = next(scripted)
+        if text:
+            emit_text(text)
+        return text, tcs
+
+    async def run_tool(name, args):  # noqa: ARG001
+        ran.append(name)
+        return "done"
+
+    monkeypatch.setattr(llm, "_openai_round", fake_round)
+    monkeypatch.setattr(llm, "_openai_client", lambda p: _FakeClient())  # noqa: ARG005
+
+    async def go():
+        return await llm.run_agentic_chat(
+            ProviderInfo(kind="openai", base_url="", api_key="k"),
+            "m",
+            [{"role": "user", "content": "随便"}],
+            [{"type": "function", "function": {"name": n, "parameters": {}}} for n in advertised],
+            run_tool=run_tool,
+            emit_text=lambda t: None,
+            emit_tool=lambda n, a: None,
+        )
+
+    asyncio.run(go())
+    return ran
+
+
+def test_the_execution_layer_refuses_an_unadvertised_destructive_call(monkeypatch):
+    """本轮没把 `memory_delete` 广告出去（= 没授权），模型硬点也不该真删。"""
+    ran = _drive(monkeypatch, advertised=["kb_search"], calls=["memory_delete"])
+    assert "memory_delete" not in ran, "破坏性工具没被广告，却真的执行了——授权只在广告层生效"
+
+
+def test_the_execution_layer_runs_a_call_that_was_advertised(monkeypatch):
+    """反面：这一轮确实把工具广告出去了，执行层就照常放行（拦截不误伤正常路径）。"""
+    ran = _drive(monkeypatch, advertised=["kb_search", "memory_delete"], calls=["memory_delete"])
+    assert ran == ["memory_delete"], "本轮授权了却没跑起来——拦过头了"
