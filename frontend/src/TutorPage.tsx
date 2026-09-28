@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import AttachToThread from './AttachToThread'
+import ArtifactReceipt from './ArtifactReceipt'
+import { upsertArtifact } from './artifacts'
 import { CONCEPT_STATE, CONCEPT_STATES, type ConceptState } from './conceptState'
 import FeedbackButtons from './FeedbackButtons'
 import InjectedLine from './InjectedLine'
 import { Markdown, reportMarkdown, SourceList } from './markdown'
 import OutputCard from './OutputCard'
 import RunPanel from './RunPanel'
+import { SaveTextToVault } from './SaveToVault'
 import { TUTOR_TABS, type TutorTab } from './routes'
 import {
   api,
@@ -36,6 +39,7 @@ import {
   streamDecide,
   streamResearch,
   streamTutorSay,
+  type ArtifactRef,
   type ConflictReport,
   type DecideFrame,
   type DecideReport,
@@ -294,7 +298,9 @@ export function MaterialLine({ sources }: { sources: TutorMaterialSource[] }) {
   )
 }
 
-function Bubble({ turn }: { turn: Turn }) {
+function Bubble({ turn, canSave = false }: { turn: Turn; canSave?: boolean }) {
+  // 方向 1：教学回答的沉淀出口——存完就地给一行回执（同一文件多存只留最后一条）。
+  const [saved, setSaved] = useState<ArtifactRef[]>([])
   if (turn.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -312,6 +318,18 @@ function Bubble({ turn }: { turn: Turn }) {
           <MaterialLine sources={turn.sources} />
         </div>
       ) : null}
+      {canSave && turn.content ? (
+        <SaveTextToVault
+          content={turn.content}
+          onSaved={(a) => setSaved((p) => upsertArtifact(p, a))}
+          className="mt-1.5"
+        />
+      ) : null}
+      {saved.map((a) => (
+        <div key={a.path} className="mt-1.5">
+          <ArtifactReceipt art={a} />
+        </div>
+      ))}
     </div>
   )
 }
@@ -2994,7 +3012,7 @@ export default function TutorPage() {
                 <div className="mx-auto flex max-w-3xl flex-col gap-4">
                   {hits.length > 0 ? <RecallChip hits={hits} /> : null}
                   {turns.map((t, i) => (
-                    <Bubble key={i} turn={t} />
+                    <Bubble key={i} turn={t} canSave />
                   ))}
                   {streaming ? <Bubble turn={{ role: 'assistant', content: streaming }} /> : null}
                   {busy && !streaming ? (

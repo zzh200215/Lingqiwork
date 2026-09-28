@@ -10,25 +10,53 @@
  *
  *  体裁**不猜**：`compose` 落到 `notes/`，那是「成文的自留地」，刻意不计进产出数与
  *  成长值；猜错了等于存了个看不见的东西。让用户点。可选值从后端拿，不硬编码。
+ *
+ *  方向 1（统一沉淀出口）把这套交互抽成两半共用：`useOutputKinds`（体裁表）+
+ *  `KindPicker`（选取交互）。会话内的回答走 `/from-message`（回执挂回消息），
+ *  不在会话里的 AI 回答（导师 / 陪伴 / 笔记对话 / 划词助手）走 `SaveTextToVault`
+ *  → `/from-text`（回执就地展示，持久记录是 vault 文件本身）。落盘在后端是
+ *  同一条 `save_artifact` 工具路径。
  */
 import { useState } from 'react'
 
 import { api } from './api'
 import type { ArtifactRef } from './stream'
 
-export default function SaveToVault({
-  conversationId,
-  messageId,
+/** 可选体裁表。**一个出处**：两个人工出口都从它拿，谁也不许自备一份。 */
+function useOutputKinds() {
+  const [kinds, setKinds] = useState<{ kind: string; label: string }[]>([])
+  const [err, setErr] = useState('')
+
+  async function load() {
+    if (kinds.length) return
+    try {
+      const r = await api.outputKinds()
+      setKinds(r.kinds.map((k) => ({ kind: k.kind, label: k.label })))
+    } catch {
+      // 拉不到就说拉不到——不编一份假的体裁表出来
+      setErr('体裁表拉不到')
+    }
+  }
+  return { kinds, err, load }
+}
+
+function KindPicker({
+  onSave,
   onSaved,
   className = '',
+  label = '📄 存进产出',
+  title = '把这条回答存进 vault 的产出区',
+  disabled = false,
 }: {
-  conversationId: number
-  messageId: number
+  onSave: (kind: string) => Promise<ArtifactRef>
   onSaved: (art: ArtifactRef) => void
   className?: string
+  label?: string
+  title?: string
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const [kinds, setKinds] = useState<{ kind: string; label: string }[]>([])
+  const { kinds, err: kindsErr, load } = useOutputKinds()
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -39,21 +67,14 @@ export default function SaveToVault({
     }
     setOpen(true)
     setErr('')
-    if (kinds.length) return
-    try {
-      const r = await api.outputKinds()
-      setKinds(r.kinds.map((k) => ({ kind: k.kind, label: k.label })))
-    } catch {
-      // 拉不到就说拉不到——不编一份假的体裁表出来
-      setErr('体裁表拉不到')
-    }
+    await load()
   }
 
   async function pick(kind: string) {
     setBusy(true)
     setErr('')
     try {
-      onSaved(await api.saveOutputFromMessage(conversationId, messageId, kind))
+      onSaved(await onSave(kind))
       setOpen(false)
     } catch (e) {
       setErr(e instanceof Error ? e.message : '存失败')
@@ -62,14 +83,16 @@ export default function SaveToVault({
     }
   }
 
+  const problem = err || kindsErr
   return (
     <span className={`inline-flex flex-wrap items-center gap-1.5 ${className}`}>
       <button
         onClick={() => void toggle()}
-        title="把这条回答存进 vault 的产出区"
-        className="rounded-md px-2 py-1 text-xs text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-teal-600 dark:hover:bg-neutral-800 dark:hover:text-teal-300"
+        disabled={disabled}
+        title={title}
+        className="rounded-md px-2 py-1 text-xs text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-teal-600 disabled:opacity-40 dark:hover:bg-neutral-800 dark:hover:text-teal-300"
       >
-        📄 存进产出
+        {label}
       </button>
       {open ? (
         <>
@@ -83,9 +106,55 @@ export default function SaveToVault({
               {k.label}
             </button>
           ))}
-          {err ? <span className="text-xs text-red-500">{err}</span> : null}
+          {problem ? <span className="text-xs text-red-500">{problem}</span> : null}
         </>
       ) : null}
     </span>
+  )
+}
+
+export default function SaveToVault({
+  conversationId,
+  messageId,
+  onSaved,
+  className = '',
+}: {
+  conversationId: number
+  messageId: number
+  onSaved: (art: ArtifactRef) => void
+  className?: string
+}) {
+  return (
+    <KindPicker
+      className={className}
+      onSave={(kind) => api.saveOutputFromMessage(conversationId, messageId, kind)}
+      onSaved={onSaved}
+    />
+  )
+}
+
+/** 同一出口给**不在会话里**的 AI 回答（导师 / 陪伴 / 笔记对话 / 划词助手…）。
+ *  空内容时按钮禁用——没有正文就没有可归档的东西。 */
+export function SaveTextToVault({
+  content,
+  title = '',
+  onSaved,
+  className = '',
+  label = '📄 存进产出',
+}: {
+  content: string
+  title?: string
+  onSaved: (art: ArtifactRef) => void
+  className?: string
+  label?: string
+}) {
+  return (
+    <KindPicker
+      className={className}
+      label={label}
+      disabled={!content?.trim()}
+      onSave={(kind) => api.saveOutputFromText(kind, content, title)}
+      onSaved={onSaved}
+    />
   )
 }

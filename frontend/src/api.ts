@@ -3449,6 +3449,13 @@ export const api = {  listProviders: () => request<ProviderConfig[]>('/api/setti
         title,
       }),
     }),
+  /** 把一段**不在会话里**的 AI 回答存成产出（导师 / 陪伴 / 笔记对话 / 划词助手…）。
+   *  同一条工具路径落盘；回执直接返回、由调用方就地展示。 */
+  saveOutputFromText: (kind: string, content: string, title = '') =>
+    request<ArtifactRef>('/api/outputs/from-text', {
+      method: 'POST',
+      body: JSON.stringify({ kind, title, content }),
+    }),
 
   // ---------- 零柒：成长 + 能力插件（Track B） ----------
   /** 成长：等级 / 称号 / 累计 EXP / 各来源。只正面呈现。 */

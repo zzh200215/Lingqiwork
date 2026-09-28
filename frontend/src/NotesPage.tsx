@@ -24,9 +24,12 @@ import CodeBlock from './CodeBlock'
 import FeedbackButtons from './FeedbackButtons'
 import InjectedLine from './InjectedLine'
 import VoiceTriage from './VoiceTriage'
+import ArtifactReceipt from './ArtifactReceipt'
+import { upsertArtifact } from './artifacts'
+import { SaveTextToVault } from './SaveToVault'
 import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry, type VoicePending } from './api'
 import { ago } from './reltime'
-import { streamCompose, streamPodcastGenerate, type ReportDraft } from './stream'
+import { streamCompose, streamPodcastGenerate, type ArtifactRef, type ReportDraft } from './stream'
 
 type AiAction = 'continue' | 'polish' | 'summarize' | 'rewrite'
 type ViewMode = 'edit' | 'split' | 'preview'
@@ -94,6 +97,8 @@ export default function NotesPage() {
   const [flash, setFlash] = useState('')
   const [chatOpen, setChatOpen] = useState(false)
   const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([])
+  // 方向 1：笔记对话里 AI 的回答也能沉淀成产出（与「插入到笔记」并列的第三条路）。
+  const [chatSaved, setChatSaved] = useState<Record<number, ArtifactRef[]>>({})
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [podOpen, setPodOpen] = useState(false)
@@ -1230,20 +1235,35 @@ export default function NotesPage() {
                     {m.content || (chatBusy && i === chatMsgs.length - 1 ? '…' : '')}
                   </div>
                   {m.role === 'assistant' && m.content && !chatBusy && (
-                    <div className="mt-1 flex gap-2 text-xs text-neutral-400">
-                      <button
-                        onClick={() => insertAtCaret(m.content)}
-                        className="hover:text-violet-600 dark:hover:text-violet-300"
-                      >
-                        ⤵ 插入到笔记
-                      </button>
-                      <button
-                        onClick={() => navigator.clipboard.writeText(m.content)}
-                        className="hover:text-neutral-600 dark:hover:text-neutral-200"
-                      >
-                        复制
-                      </button>
-                    </div>
+                    <>
+                      <div className="mt-1 flex gap-2 text-xs text-neutral-400">
+                        <button
+                          onClick={() => insertAtCaret(m.content)}
+                          className="hover:text-violet-600 dark:hover:text-violet-300"
+                        >
+                          ⤵ 插入到笔记
+                        </button>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(m.content)}
+                          className="hover:text-neutral-600 dark:hover:text-neutral-200"
+                        >
+                          复制
+                        </button>
+                        <SaveTextToVault
+                          content={m.content}
+                          label="存进产出"
+                          title="把这条回答存进 vault 的产出区"
+                          onSaved={(a) =>
+                            setChatSaved((p) => ({ ...p, [i]: upsertArtifact(p[i], a) }))
+                          }
+                        />
+                      </div>
+                      {(chatSaved[i] ?? []).map((a) => (
+                        <div key={a.path} className="mt-1">
+                          <ArtifactReceipt art={a} />
+                        </div>
+                      ))}
+                    </>
                   )}
                 </div>
               ))}

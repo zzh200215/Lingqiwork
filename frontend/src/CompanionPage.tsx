@@ -11,16 +11,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { api, type PetPlugin, type PetState, type PetGrowth, type PodcastEntry, type TutorStuckRow } from './api'
+import ArtifactReceipt from './ArtifactReceipt'
+import { upsertArtifact } from './artifacts'
 import EmptyHint from './EmptyHint'
 import GrowthPage from './GrowthPage'
 import PageShell from './PageShell'
 import RoomPane from './RoomPane'
+import { SaveTextToVault } from './SaveToVault'
 import { STARTER_CARDS, StarterGrid, StarterTile, starterTileClass } from './StarterCards'
 import { Mic } from 'lucide-react'
 import { petSprite } from './petFace'
 import { useVoiceInput } from './voice'
 import { historyOf, receiptLabel, streamPetChat, toolCallLabel, type PetToolReceipt } from './petChat'
-import { streamTutorSay } from './stream'
+import { streamTutorSay, type ArtifactRef } from './stream'
 import { COMPANION_TABS, type CompanionTab } from './routes'
 
 type Tab = CompanionTab
@@ -645,6 +648,8 @@ function TeachPane() {
   const [sid, setSid] = useState<number | null>(null)
   const [who, setWho] = useState('')
   const [turns, setTurns] = useState<ChatMsg[]>([])
+  // 方向 1：零柒的回复也能沉淀成产出——存完就地给一行回执（按回合序号挂）。
+  const [savedArts, setSavedArts] = useState<Record<number, ArtifactRef[]>>({})
   const [streaming, setStreaming] = useState('')
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -872,11 +877,23 @@ function TeachPane() {
               {m.text}
             </div>
           ) : (
-            <div
-              key={`p${i}`}
-              className="max-w-[75%] whitespace-pre-wrap break-words rounded-lg rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-            >
-              {m.text}
+            <div key={`p${i}`} className="max-w-[75%]">
+              <div className="whitespace-pre-wrap break-words rounded-lg rounded-bl-sm bg-neutral-100 px-4 py-3 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+                {m.text}
+              </div>
+              <div className="mt-0.5">
+                <SaveTextToVault
+                  content={m.text}
+                  label="📄 存"
+                  title="把这条回复存进 vault 的产出区"
+                  onSaved={(a) => setSavedArts((p) => ({ ...p, [i]: upsertArtifact(p[i], a) }))}
+                />
+              </div>
+              {(savedArts[i] ?? []).map((a) => (
+                <div key={a.path} className="mt-1">
+                  <ArtifactReceipt art={a} />
+                </div>
+              ))}
             </div>
           )
         )}

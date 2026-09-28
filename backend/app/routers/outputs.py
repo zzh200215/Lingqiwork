@@ -32,6 +32,38 @@ class SaveFromMessageIn(BaseModel):
     title: str = ""
 
 
+class SaveFromTextIn(BaseModel):
+    """一段**不在会话里**的回答（划词助手 / 导师 / 陪伴 / 笔记对话…）。"""
+
+    kind: str
+    title: str = ""
+    content: str
+
+
+async def _save_via_tool(content: str, kind: str, title: str) -> dict:
+    """经模型同款的 `save_artifact` 工具落盘，返回回执。
+
+    两个人工出口（from-message / from-text）共用的就这一段：**不另写一份落盘逻辑**——
+    落点目录、索引、零柒成长值读的 `_OUTPUT_DIRS` 都得跟工具那条路一致。回执接不住要
+    502：落盘成功了却装没事，界面会以为失败而重试，写出第二份。
+    """
+    from app.core import mcp
+
+    # 人工出口每次调用自成一轮：不跟别的请求共享「这一轮存过哪些体裁」的记录，
+    # 所以用户手动存第二份时不会被当成「在改上一份」而覆盖掉。
+    mcp.begin_turn()
+    out = await mcp.mcp_manager.call_tool(
+        "save_artifact",
+        {"kind": kind, "title": title.strip() or _derive_title(content), "content": content},
+    )
+    if out.startswith(("[错误]", "[tool error]")):
+        raise HTTPException(400, out)
+    art = (mcp.take_tool_meta() or {}).get("artifact")
+    if not isinstance(art, dict):
+        raise HTTPException(502, "产出已落盘但没拿到回执")
+    return art
+
+
 def _existing_artifacts(msg: Message) -> list[dict]:
     """这条消息已经存过的产出。老行是 NULL、坏 JSON 一律当没有。"""
     raw = getattr(msg, "artifacts_json", None)
@@ -70,11 +102,7 @@ async def list_kinds():
 
 @router.post("/from-message")
 async def save_from_message(body: SaveFromMessageIn, db: AsyncSession = Depends(get_db)):
-    """把会话里的一条回答存成产出，并把回执挂回那条消息。
-
-    走的是模型自己用的那条路（`mcp_manager.call_tool("save_artifact", …)`），不另写一份
-    落盘逻辑——落点目录、索引、零柒成长值读的 `_OUTPUT_DIRS` 都得跟工具那条路一致。
-    """
+    """把会话里的一条回答存成产出，并把回执挂回那条消息。"""
     msg = (
         await db.execute(
             select(Message).where(
@@ -91,26 +119,21 @@ async def save_from_message(body: SaveFromMessageIn, db: AsyncSession = Depends(
     if not content:
         raise HTTPException(400, "这条回答没有正文")
 
-    from app.core import mcp
-
-    # 人工出口每次调用自成一轮：不跟别的请求共享「这一轮存过哪些体裁」的记录，
-    # 所以用户手动存第二份时不会被当成「在改上一份」而覆盖掉。
-    mcp.begin_turn()
-    out = await mcp.mcp_manager.call_tool(
-        "save_artifact",
-        {
-            "kind": body.kind,
-            "title": body.title.strip() or _derive_title(content),
-            "content": content,
-        },
-    )
-    if out.startswith(("[错误]", "[tool error]")):
-        raise HTTPException(400, out)
-    art = (mcp.take_tool_meta() or {}).get("artifact")
-    if not isinstance(art, dict):
-        # 落盘成功了但回执没接住：不能装作没事——界面会以为存失败而重试，写出第二份
-        raise HTTPException(502, "产出已落盘但没拿到回执")
-
+    art = await _save_via_tool(content, body.kind, body.title)
     msg.artifacts_json = json.dumps([*_existing_artifacts(msg), art], ensure_ascii=False)
     await db.commit()
     return art
+
+
+@router.post("/from-text")
+async def save_from_text(body: SaveFromTextIn):
+    """把一段不在会话里的 AI 回答存成产出（方向 1 的共用出口）。
+
+    落盘与 `/from-message` 同一条工具路径。差别只在「回执挂哪儿」：这里没有消息行
+    可挂，回执直接返回、由前端就地展示；**持久的那份记录是 vault 文件本身**——
+    工作页产出清单照常翻得到。
+    """
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(400, "没有正文")
+    return await _save_via_tool(content, body.kind, body.title)

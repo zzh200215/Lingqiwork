@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { api } from './api'
 import { asSingleUrl } from './capture'
+import { SaveTextToVault } from './SaveToVault'
 
 // Selection assistant popup (Cherry Studio 选中助手 style, ROADMAP V4.2).
 // desktop.py grabs the selected text via simulated Ctrl+C, then navigates this
@@ -36,6 +37,9 @@ export default function SelectionView() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  // 方向 1：这份回答沉淀进产出的回执路径（有值 = 存过了）。这里**没有 Router**，
+  // 挂不了 ArtifactReceipt 的 Link——一句内联实话就够，持久记录在 vault 里。
+  const [savedPath, setSavedPath] = useState('')
   const abortRef = useRef<AbortController | null>(null)
   const customRef = useRef<HTMLInputElement>(null)
 
@@ -94,6 +98,7 @@ export default function SelectionView() {
     setAnswer('')
     setError(null)
     setCopied(false)
+    setSavedPath('')
     setBusy(true)
     const ac = new AbortController()
     abortRef.current = ac
@@ -198,13 +203,25 @@ export default function SelectionView() {
         </button>
         <div className="flex-1" />
         {answered && !busy && !error && (
-          <button
-            onClick={() => void copy()}
-            className="rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-            title="复制结果"
-          >
-            {copied ? '✓ 已复制' : '复制'}
-          </button>
+          <>
+            <SaveTextToVault
+              content={answer}
+              title="把这份回答存进 vault 的产出区"
+              onSaved={(a) => setSavedPath(a.path)}
+            />
+            <button
+              onClick={() => void copy()}
+              className="rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              title="复制结果"
+            >
+              {copied ? '✓ 已复制' : '复制'}
+            </button>
+            {savedPath ? (
+              <span className="text-xs text-teal-400" title={savedPath}>
+                ✓ 已存入产出
+              </span>
+            ) : null}
+          </>
         )}
         {text.current && (
           <span className="max-w-[200px] truncate text-xs text-zinc-600" title={text.current}>
