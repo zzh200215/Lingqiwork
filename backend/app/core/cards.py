@@ -682,7 +682,7 @@ async def save_cards(
     from app.db import SessionLocal
     from app.models import Card
 
-    added, skipped, ids = 0, 0, []
+    added, skipped, ids, new_rows = 0, 0, [], []
     now = utcnow()
     async with SessionLocal() as db:
         known = {
@@ -718,18 +718,13 @@ async def save_cards(
             db.add(row)
             known.add(front)
             added += 1
+            new_rows.append(row)
         await db.commit()
-        if added:
-            ids = [
-                r
-                for r in (
-                    await db.execute(
-                        select(Card.id).order_by(Card.id.desc()).limit(added)
-                    )
-                ).scalars().all()
-            ]
+        # id 只从本次插入的行对象取（commit 时回填主键）。不要 SELECT 回取：并发插入
+        # 时会取到别人刚插的行，ids 与内容错位。
+        ids = [r.id for r in new_rows]
     await _announce_cards_made(added, source, source_label)
-    return {"added": added, "skipped": skipped, "ids": list(reversed(ids))}
+    return {"added": added, "skipped": skipped, "ids": list(ids)}
 
 
 async def _announce_cards_made(added: int, source: str, source_label: str) -> None:

@@ -101,7 +101,7 @@ def clone(url: str, name: str | None = None) -> dict:
     REPOS_DIR.mkdir(parents=True, exist_ok=True)
     log.info("cloning %s -> %s", url, target)
     try:
-        _git("clone", "--depth", "1", url, str(target))
+        _git("clone", "--depth", "1", "--", url, str(target))
     except Exception:
         _rmtree(target)
         raise

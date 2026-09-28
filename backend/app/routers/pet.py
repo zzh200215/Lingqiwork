@@ -5,6 +5,7 @@ assistant); P5（加深脑子）让它落库（`pet_chats`）——「它记得�
 那 6 轮兜不住，刷新、隔天回来就断。仍然**不是**又一个会话列表：没有标题、
 没有管理界面，只有最近几轮，给界面回放、给后端在客户端没带历史时补上下文。
 """
+import asyncio
 import json
 
 from fastapi import APIRouter, HTTPException
@@ -142,7 +143,8 @@ async def pet_state(idle_sec: int | None = None, path: str = ""):
     """
     from app.core import pet_state as state
 
-    return state.snapshot(idle_sec=idle_sec, path=(path or "")[:100])
+    # snapshot 里的 sqlite3 / 目录扫描是同步的；放线程里跑，别卡事件循环。
+    return await asyncio.to_thread(state.snapshot, idle_sec=idle_sec, path=(path or "")[:100])
 
 
 @router.get("/chats")
@@ -225,7 +227,7 @@ async def _pet_stream(since_id: int):
     from app.core import pet_state as state
 
     last = max(0, int(since_id or 0))
-    fingerprint = state.work_fingerprint()
+    fingerprint = await asyncio.to_thread(state.work_fingerprint)
     yield _sse("hello", {"since_id": last, "poll": PET_STREAM_POLL})
     idle = 0.0
     while True:
@@ -237,7 +239,7 @@ async def _pet_stream(since_id: int):
             for r in reversed(rows):
                 yield _sse("event", r)
             spoke = True
-        fresh = state.work_fingerprint()
+        fresh = await asyncio.to_thread(state.work_fingerprint)
         if fresh != fingerprint:
             fingerprint = fresh
             yield _sse("work", {"fingerprint": fresh})
@@ -422,7 +424,7 @@ async def pet_chat(body: PetChatIn):
     turns = pet_context.history(body.history)
     system = pet_context.apply(
         system,
-        said=pet.day_statement(),
+        said=await asyncio.to_thread(pet.day_statement),
         lines=pet_context.recent_lines(),
         has_history=bool(turns),
     )

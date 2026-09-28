@@ -119,10 +119,43 @@ async def finish(draft: dict | None, *, usage: dict | None = None, error: str = 
         _pending.set(None)
 
 
+# `_write` 认得的全部草稿键（含私有键）。`_write` 按列取值，未知键会被**静默丢掉**——
+# 那是诊断账本最危险的坏法：挂进去的数字悄悄不存在，账面看着还齐。所以落库前对一遍名单，
+# 多出来的键记警告（不抛：记账失败不许影响已经答完的那一轮）。
+_KNOWN_DRAFT_KEYS = frozenset(
+    {
+        "conversation_id",
+        "model_id",
+        "prompt_sha",
+        "route_level",
+        "route_kind",
+        "rounds",
+        "tool_calls",
+        "tokens_in",
+        "tokens_out",
+        "artifacts",
+        "answer_chars",
+        "claim_checked",
+        "claim_truthful",
+        "retried",
+        "sources_injected",
+        "sources_cited",
+        "sub_traces",
+        "quality",
+        "error",
+        "_t0",
+        "_usage_active",
+    }
+)
+
+
 async def _write(draft: dict, usage: dict, error: str) -> dict:
     from app.db import SessionLocal
     from app.models import TurnTrace
 
+    unknown = sorted(set(draft) - _KNOWN_DRAFT_KEYS)
+    if unknown:
+        log.warning("回合账本草稿带未知键（不会落库）: %s", unknown)
     tin = _int(usage.get("input")) or _int(draft.get("tokens_in"))
     tout = _int(usage.get("output")) or _int(draft.get("tokens_out"))
     seconds = round(time.monotonic() - float(draft.get("_t0") or time.monotonic()), 2)

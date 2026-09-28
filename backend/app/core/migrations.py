@@ -688,28 +688,6 @@ MIGRATIONS: list[Migration] = [
 ]
 
 
-async def _m021_thread_status_deadline(conn) -> None:
-    """v21：`threads` 加状态与截止日（方案 §8.4 事项页）。
-
-    **只存两个字段**：`status`（`open`/`done`，你自己设的）与 `deadline`（`YYYY-MM-DD`）。
-
-    **「停滞」刻意不存**：那是「N 天没动静」，一个**算得出来**的事实——
-    存进来的话它会在没人碰的某一天悄悄过期（库里写着 open、其实早停了），
-    而界面还得靠第二次判断去纠正。算的话永远和 `updated_at` 一致。
-
-    老行补 `'open'`：这个功能上线之前，每一件事都还没被判定过——「进行中」是事实，
-    不是「读不到」（`docs` 里那条「读不到 ≠ 零」的另一面：这里确实读得到，就是默认态）。
-    """
-    added: list[str] = []
-    for col, ddl in (
-        ("status", "ALTER TABLE threads ADD COLUMN status VARCHAR(12) DEFAULT 'open'"),
-        ("deadline", "ALTER TABLE threads ADD COLUMN deadline DATE"),
-    ):
-        if await _add_column(conn, "threads", col, ddl):
-            added.append(col)
-    log.info("迁移 v21：threads 补上 %s（状态与截止日）", added or "无")
-
-
 def _version_of(m: Migration) -> int:
     return int(m.version)
 

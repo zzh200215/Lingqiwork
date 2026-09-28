@@ -310,8 +310,8 @@ describe('设计纪律 · 全仓守卫', () => {
     //   · 变少了 = 有人清了，**这是好事，改这一行就行**；
     //   · 两种都让这条红一次，好过那个数字没人看着。
     //
-    // 2026-09-25 实测：**46 处 / 16 个文件**。压在前几名的是 `TutorPage` 9（症状最像
-    // 「你还没学过」）、`CompanionPage` 5、`App`/`AssetsPage`/`DashboardPage`/`ReviewPage` 各 4。
+    // 2026-09-25 实测（2026-09-28 复核对齐下面这份清单）：**48 处 / 18 个文件**。压在前几名的
+    // 是 `TutorPage` 9（症状最像「你还没学过」）、`CompanionPage` 5、`App`/`AssetsPage`/`DashboardPage`/`ReviewPage` 各 4。
     // 清哪一处都要单独判是哪种静默，所以这条清单是**按文件计数**，不是一句「全仓禁止」。
     const counts: Record<string, number> = {}
     for (const s of sources()) {

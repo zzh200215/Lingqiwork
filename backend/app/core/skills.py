@@ -11,8 +11,10 @@ should not pollute RAG retrieval.
 """
 import asyncio
 import logging
+import os
 import re
 import shutil
+import stat
 from html import unescape
 from pathlib import Path
 from urllib.parse import urlparse
@@ -224,9 +226,15 @@ async def install_from_url(url: str, name: str = "", overwrite: bool = False) ->
     return _install_text(name, text, overwrite)
 
 
+def _rm_readonly(func, path, exc) -> None:
+    """Windows 上只读文件会让 rmtree 直接失败：摘掉只读位再删一次，还失败就抛。"""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def remove(name: str) -> dict:
     d = _skill_dir(name)
     if not d.exists():
         raise ValueError(f"技能 '{name}' 不存在")
-    shutil.rmtree(d)
+    shutil.rmtree(d, onexc=_rm_readonly)
     return {"ok": True, "name": name}

@@ -13,6 +13,7 @@ Deliberately all-sync: emit() fires from scheduler threads and task coroutines
 alike, so it uses plain sqlite3 (same pattern as digest._resolve_model) and
 never awaits. A failed emit must never break the triggering job.
 """
+import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -808,7 +809,9 @@ async def greeting(mode: str = "morning", now: datetime | None = None) -> str:
 
     `now` 只给测试用：把「今天是周几」钉死。生产路径不传，走系统时钟。
     """
-    st = status()
+    # 这些读数是同步 sqlite3 / 目录扫描；greeting 在事件循环上（定时任务与 /say 都走它），
+    # 放线程里跑，别让整圈循环等一次 COUNT。
+    st = await asyncio.to_thread(status)
     gr = growth()
     mode_label = {"morning": "早间", "evening": "晚间"}.get(mode, "")
     fallback = compose("greeting")
@@ -820,13 +823,13 @@ async def greeting(mode: str = "morning", now: datetime | None = None) -> str:
         from app.core import pet_state as state
 
         if mode == "morning":
-            ask = state.last_digest_point(now)
+            ask = await asyncio.to_thread(state.last_digest_point, now)
         elif mode == "evening":
             from app.core import weekly
 
             weekly_rep = await weekly.sunday_report(now)
             # 周报优先：它就是周日那句。日陈述是它的子集，两句都说等于同一件事说两遍。
-            said = weekly_rep["text"] if weekly_rep else day_statement(now)
+            said = weekly_rep["text"] if weekly_rep else await asyncio.to_thread(day_statement, now)
     except Exception:  # noqa: BLE001 - 仪式读不出来就让位给普通问候
         log.debug("pet greeting ritual facts failed", exc_info=True)
         weekly_rep, said = None, ""
