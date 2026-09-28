@@ -189,7 +189,7 @@ async def overview() -> dict:
     from sqlalchemy import select
 
     from app.db import SessionLocal
-    from app.models import ModelProfile
+    from app.models import ModelProfile, iso_utc
 
     async with SessionLocal() as db:
         rows = {r.model_id: r for r in (await db.execute(select(ModelProfile))).scalars().all()}
@@ -213,7 +213,9 @@ async def overview() -> dict:
                         "judged": row.baseline_judged,
                         "seconds": row.baseline_seconds,
                         "tokens_out_per_turn": row.baseline_tokens_out,
-                        "at": row.baseline_at.isoformat() if row.baseline_at else "",
+                        # SQLite 把 DateTime round-trip 成 naive——裸 isoformat 会让浏览器
+                        # 把 UTC 当本地读（本时区差 8 小时）。与 history() 同走 iso_utc。
+                        "at": iso_utc(row.baseline_at) or "",
                     }
                     if row is not None
                     else None
@@ -343,6 +345,8 @@ async def bless(model_id: str, run_id: int | None = None, *, note: str = "") -> 
 
 async def baseline_status(model_id: str) -> dict:
     """这个模型的基线三项（分数 / 成本 / 延迟）—— 没有就如实说没有。"""
+    from app.models import iso_utc
+
     row = await get(model_id)
     if row is None or not row.baseline_run_id:
         return {"model_id": model_id, "has_baseline": False}
@@ -356,7 +360,8 @@ async def baseline_status(model_id: str) -> dict:
         "judged": row.baseline_judged,
         "seconds": row.baseline_seconds,
         "tokens_out_per_turn": row.baseline_tokens_out,
-        "at": row.baseline_at.isoformat() if row.baseline_at else "",
+        # 同 overview()：naive datetime 裸 isoformat 会造成浏览器时区偏移，走 iso_utc。
+        "at": iso_utc(row.baseline_at) or "",
     }
 
 

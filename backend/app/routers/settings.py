@@ -14,7 +14,7 @@ from app.core.mcp import mcp_manager
 from app.core.prefs import load_config, save_config
 from app.core.secrets import SECRET_KEYS
 from app.db import get_db
-from app.models import ProviderConfig
+from app.models import ProviderConfig, iso_utc
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -222,7 +222,8 @@ async def get_memories():
             "content": m.content,
             "source": m.source or "manual",
             "kind": m.kind if m.kind in memory.AUTO_KINDS else "fact",
-            "created_at": str(m.created_at),
+            # naive datetime 裸 str() 会让浏览器把 UTC 当本地读（本时区差 8 小时）；走 iso_utc。
+            "created_at": iso_utc(m.created_at) or "",
             # 证据链：洞察/合并行带着它们的原句依据，页面可展开看「从哪来的」
             "evidence": memory.parse_evidence(m.evidence_json),
         }

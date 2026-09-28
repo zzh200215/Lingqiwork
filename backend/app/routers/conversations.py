@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import get_db
-from app.models import Conversation, Message
+from app.models import Conversation, Message, iso_utc
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -43,8 +43,10 @@ def _dump(c: Conversation, with_messages: bool = False, quality_by_msg: dict | N
         "model_id": c.model_id,
         "pinned": bool(getattr(c, "pinned", False)),
         "folder": getattr(c, "folder", "") or "",
-        "created_at": c.created_at.isoformat(),
-        "updated_at": c.updated_at.isoformat(),
+        # naive UTC 裸 isoformat 会被前端 new Date() 当本地读（本时区差 8 小时，
+        # DashboardPage 按天显示时可能跨天）；走 iso_utc 补上 UTC 偏移。
+        "created_at": iso_utc(c.created_at),
+        "updated_at": iso_utc(c.updated_at),
     }
     quality_by_msg = quality_by_msg or {}
     if with_messages:
@@ -68,7 +70,7 @@ def _dump(c: Conversation, with_messages: bool = False, quality_by_msg: dict | N
                 "feedback": getattr(m, "feedback", None),
                 "tokens_in": getattr(m, "tokens_in", None),
                 "tokens_out": getattr(m, "tokens_out", None),
-                "created_at": m.created_at.isoformat(),
+                "created_at": iso_utc(m.created_at),
             }
             for m in c.messages
         ]

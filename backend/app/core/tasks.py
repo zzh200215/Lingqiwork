@@ -327,6 +327,29 @@ async def _has_running_run(task_id: int) -> bool:
     return row is not None
 
 
+async def reset_orphan_runs() -> int:
+    """启动清理（BUG-012）：把上一进程遗留的 running 行落成 error，返回清理条数。
+
+    并发守卫认 `status='running'`。进程崩溃 / 被杀 / 事件循环取消时 `_finish_run` 没机会跑，
+    那一行就永远停在 running——于是 `_has_running_run` / `_create_run` **永久跳过**这条任务
+    （一次异常退出把它锁死，再也起不来）。进程重启即意味着上一趟已中断：把所有 running 行
+    改成 error（注明原因、补 finished_at）。**必须在调度器起任何一趟之前调用。**
+    """
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(select(TaskRun).where(TaskRun.status == "running"))
+        ).scalars().all()
+        for row in rows:
+            row.status = "error"
+            row.error = "进程重启前中断，未正常收尾（启动清理）"
+            if row.finished_at is None:
+                row.finished_at = utcnow()
+        if rows:
+            await db.commit()
+            log.warning("reset %d orphan running task_run(s) to error on startup", len(rows))
+        return len(rows)
+
+
 async def run_task(
     task_id: int,
     manual: bool = False,
@@ -420,6 +443,18 @@ async def run_task(
     run_id = await _create_run(
         task_id, trigger, upstream_task_id, snapshot["mode"], snapshot.get("thread_id")
     )
+    if run_id is None:
+        # 锁内复检撞上了：早期快路检查之后、这里之前的 await 窗口里，另一趟已把 running
+        # 行插进去。本趟让路，语义同上面的早期跳过（返回带 reason，日志留一行）。
+        log.warning(
+            "task %s (%s) skipped: a run is already in flight (race)", task_id, snapshot["name"]
+        )
+        return {
+            "status": "skipped",
+            "reason": "already_running",
+            "task_id": task_id,
+            "name": snapshot["name"],
+        }
 
     started = datetime.now()
     attempts = 1 if manual else 1 + max(0, min(int(snapshot["retry"] or 0), 3))
@@ -564,6 +599,23 @@ async def run_task(
                 pet.emit("task_failed", name=snapshot["name"], detail=error[:160])
         except Exception:  # noqa: BLE001
             log.debug("pet emit failed", exc_info=True)
+    except asyncio.CancelledError:
+        # 取消不是「失败」是控制流（手动触发时客户端断连、进程关停都会取消这趟）。
+        # `except Exception` 抓不到它（CancelledError 是 BaseException）——不接就直接穿出去，
+        # running 行留在库里，并发守卫把这条任务锁死到下次重启（才由 reset_orphan_runs 兜底）。
+        # 这里当场落成 error 再把取消**原样抛出**（取消必须往上传）：单次 cancel 只投递一次
+        # CancelledError，已经被这个 except 接住，下面的 await 能正常跑完那次落库。
+        if not finished:
+            try:
+                await _finish_run(
+                    run_id, "error", error="run cancelled", model_id=model_id,
+                    rounds=rounds, tool_calls=tool_calls, log_entries=log_entries,
+                    tokens_in=tokens_in, tokens_out=tokens_out,
+                    run_dir=snapshot.get("run_dir") or "",
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("finish_run on cancel failed")
+        raise
     except Exception as e:  # noqa: BLE001 - 兜底：绝不让 run 停在 running
         log.exception("task %s crashed after execution", task_id)
         status, error = "error", f"{type(e).__name__}: {e}"
@@ -719,18 +771,49 @@ async def _fire_chain(
     return nxt_id
 
 
+# 并发守卫的原子化（BUG-011）：run_task 早期那道 `_has_running_run` 只是**快路探测**——
+# 从它到 `_create_run` 之间隔着多个 await（解析 run_dir、认领 thread_id……），两趟触发
+# 能同时越过那道读检查、各插一行 running（异步 TOCTOU：一起烧钱、各写一份产物）。
+# 本进程是**单事件循环**（调度器 / 接口 / 链 / watch 全跑在同一个 loop 上），用一把按
+# `task_id` 的 `asyncio.Lock` 把「查 running + 插 running」这段串起来即可根除：锁内再确认
+# 一次，已有 running 就返回 None（本趟让路，run_task 按 skipped 收场，语义同早期跳过）。
+_RUN_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _run_lock(task_id: int) -> asyncio.Lock:
+    lock = _RUN_LOCKS.get(task_id)
+    if lock is None:
+        lock = _RUN_LOCKS[task_id] = asyncio.Lock()
+    return lock
+
+
 async def _create_run(
     task_id: int, trigger: str, upstream: int | None, mode: str, thread_id: int | None = None
-) -> int:
-    async with SessionLocal() as db:
-        row = TaskRun(
-            task_id=task_id, trigger=trigger, upstream_task_id=upstream, mode=mode,
-            thread_id=thread_id,
-        )
-        db.add(row)
-        await db.commit()
-        await db.refresh(row)
-        return row.id
+) -> int | None:
+    """插一行 running 并返回其 id；该任务此刻已有 running 行时返回 None（本趟让路）。
+
+    「查 running + 插入」在按 `task_id` 的锁内完成，对本进程内并发的 run_task 是原子的
+    ——早期 `_has_running_run` 只是省掉建快照的快路，真正的守卫在这里。
+    """
+    async with _run_lock(task_id):
+        async with SessionLocal() as db:
+            exists = (
+                await db.execute(
+                    select(TaskRun.id)
+                    .where(TaskRun.task_id == task_id, TaskRun.status == "running")
+                    .limit(1)
+                )
+            ).first()
+            if exists is not None:
+                return None
+            row = TaskRun(
+                task_id=task_id, trigger=trigger, upstream_task_id=upstream, mode=mode,
+                thread_id=thread_id,
+            )
+            db.add(row)
+            await db.commit()
+            await db.refresh(row)
+            return row.id
 
 
 async def _finish_run(

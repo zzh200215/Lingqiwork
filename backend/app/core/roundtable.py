@@ -119,11 +119,25 @@ def _slug(topic: str) -> str:
 
 
 def _save(topic: str, turns: list[dict]) -> Path:
-    """纪要按天落盘；同一天同话题追加「## 场次」而不是覆盖。"""
+    """纪要按天落盘；同一天同话题**追加**一个「## 场次」区块，不覆盖前一场。
+
+    原来直接 `write_text` 整文件重写——同题第二次开圆桌会**静默清掉**上一场纪要
+    （data loss）。改成：文件已存在就把这一场接到末尾（首场保持原格式；第二场起
+    冠一个 `## 场次 N` 标题）。轮次标题仍是 `## 第 N 轮`——`parse_file` 只认
+    `**名字**：`，追加多少场都读得回来，播客端点照旧能把整份文件拆成块。
+    """
     ROUND_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now()
     path = ROUND_DIR / f"{now:%Y-%m-%d}-{_slug(topic)}.md"
-    body = [f"# 学习小组圆桌：{topic}", "", f"{now:%Y-%m-%d %H:%M} · {' · '.join(_names_in(turns))}", ""]
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+
+    body: list[str] = []
+    if existing:
+        # 第 N 场：数已有几场（原始首场没有「## 场次」标记，算第 1 场，故 +2）。
+        session_no = existing.count("\n## 场次 ") + 2
+        body += [f"## 场次 {session_no} · {now:%Y-%m-%d %H:%M} · {' · '.join(_names_in(turns))}", ""]
+    else:
+        body += [f"# 学习小组圆桌：{topic}", "", f"{now:%Y-%m-%d %H:%M} · {' · '.join(_names_in(turns))}", ""]
     round_no = 0
     for i, t in enumerate(turns):
         if i % len(PERSONAS) == 0:
@@ -132,7 +146,9 @@ def _save(topic: str, turns: list[dict]) -> Path:
             body.append("")
         body.append(f"**{t['name']}**：{t['text']}")
         body.append("")
-    path.write_text("\n".join(body), encoding="utf-8")
+    block = "\n".join(body).rstrip("\n") + "\n"
+    content = (existing.rstrip("\n") + "\n\n" + block) if existing else block
+    path.write_text(content, encoding="utf-8")
     return path
 
 

@@ -127,6 +127,12 @@ async def lifespan(app: FastAPI):
     from app.core import ingest
 
     await asyncio.to_thread(ingest.warm_ocr)  # must load before the watcher needs it
+    # 启动清理（BUG-012）：把上一进程遗留的 running 行落成 error，解开并发守卫的死锁。
+    # 必须在**任何触发源起来之前**——watcher / triggers / 调度器都可能起 run_task，
+    # 而守卫认 running 行，遗留行不清就把对应任务永久锁死。
+    from app.core import tasks as _tasks
+
+    await _tasks.reset_orphan_runs()
     watcher.start()
     from app.core import triggers
 

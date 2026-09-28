@@ -76,13 +76,15 @@ async def get_user_memory(limit: int = 50) -> list[dict]:
     回答个人相关问题前值得先看一眼。
     """
     from app.core.memory import list_memories, parse_evidence
+    from app.models import iso_utc
 
     rows = await list_memories()
     return [
         {
             "kind": m.kind,
             "content": m.content,
-            "at": m.created_at.isoformat() if m.created_at else None,
+            # naive UTC 裸 isoformat 会被消费方当本地读（本时区差 8 小时）；走 iso_utc 补偏移。
+            "at": iso_utc(m.created_at),
             "evidence_n": len(parse_evidence(m.evidence_json)),
         }
         for m in rows[: max(1, min(limit, 100))]

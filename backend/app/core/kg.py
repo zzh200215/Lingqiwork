@@ -225,27 +225,26 @@ def _upsert_file(path: str, digest: str, data: dict) -> None:
                     f"MATCH (a:KgEntity {{name:$src}}), (b:KgEntity {{name:$dst}}) "
                     f"MERGE (a)-[r:`{rtype}`]->(b) "
                     f"SET r.description=$description, r.file=$path",
-                    **rel,
+                    # 参数名必须与 Cypher 的 $src/$dst/$path 对齐：rel 的键是
+                    # source/target/description，直接 `**rel` 会缺 src/dst/path → Neo4j
+                    # 报 ParameterMissing，**每条关系写入必失败**（实体已写、关系全丢）。
+                    src=rel["source"],
+                    dst=rel["target"],
+                    description=rel["description"],
+                    path=path,
                 )
             )
 
 
-async def _embed_entities(names: list[str]) -> int:
-    """(Re)embed the given entities' name+description onto their nodes."""
-    if not names:
-        return 0
+def _fetch_entity_descs(names: list[str]) -> list[dict]:
     with get_driver().session() as s:
-        rows = s.run(
+        return s.run(
             "MATCH (e:KgEntity) WHERE e.name IN $names RETURN e.name AS name, e.description AS d",
             names=names,
         ).data()
-    if not rows:
-        return 0
-    from app.core import embedder
 
-    vecs = await asyncio.to_thread(
-        embedder.embed, [f"{r['name']}——{r['d'] or ''}" for r in rows]
-    )
+
+def _write_entity_vectors(rows: list[dict], vecs: list) -> None:
     with get_driver().session() as s:
         for r, v in zip(rows, vecs):
             s.execute_write(
@@ -253,6 +252,26 @@ async def _embed_entities(names: list[str]) -> int:
                     "MATCH (e:KgEntity {name:$name}) SET e.embedding=$vec", name=name, vec=vec
                 )
             )
+
+
+async def _embed_entities(names: list[str]) -> int:
+    """(Re)embed the given entities' name+description onto their nodes.
+
+    neo4j 是同步驱动，`s.run` / `s.execute_write` 会**阻塞事件循环**——与本文件
+    `build()` 里 `await asyncio.to_thread(_upsert_file, ...)` 同一套路：把两段读写各自
+    收进同步 helper，再和 embed 一起 `to_thread` 出去，循环期间不被 IO 卡住。
+    """
+    if not names:
+        return 0
+    rows = await asyncio.to_thread(_fetch_entity_descs, names)
+    if not rows:
+        return 0
+    from app.core import embedder
+
+    vecs = await asyncio.to_thread(
+        embedder.embed, [f"{r['name']}——{r['d'] or ''}" for r in rows]
+    )
+    await asyncio.to_thread(_write_entity_vectors, rows, vecs)
     return len(rows)
 
 

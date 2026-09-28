@@ -103,6 +103,25 @@ async def test_empty_topic_raises(monkeypatch):
         await core.run("   ")
 
 
+def test_second_session_same_day_appends_not_overwrites(monkeypatch):
+    """同一天同话题再开一场圆桌：追加「## 场次 2」，不清掉第一场（BUG-010）。
+
+    `_save` 原来整文件 `write_text`——第二场会静默覆盖掉第一场的纪要。
+    """
+    _patch_dir(monkeypatch, "append")
+    t1 = [{"persona": "mentor", "name": "苏格拉底老师", "text": "第一场先问一句"}]
+    t2 = [{"persona": "peer", "name": "费曼同侪", "text": "第二场说个人话"}]
+    p1 = core._save("同一个话题", t1)
+    p2 = core._save("同一个话题", t2)
+    assert p1 == p2  # 同一天同话题落同一个文件
+    text = p2.read_text(encoding="utf-8")
+    assert "第一场先问一句" in text and "第二场说个人话" in text  # 前一场没被覆盖
+    assert "## 场次 2" in text
+    assert text.count("# 学习小组圆桌：同一个话题") == 1  # 顶层标题只出现一次
+    _, turns = core.parse_file(p2)
+    assert len(turns) == 2  # 两场的发言都解析得回来
+
+
 async def test_all_turns_failing_raises_runtimeerror(monkeypatch):
     _patch_dir(monkeypatch, "four")
     monkeypatch.setattr("app.core.tasks._candidates", _fake_candidates)

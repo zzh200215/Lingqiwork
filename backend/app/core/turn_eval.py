@@ -39,7 +39,7 @@ from app.core.llm import ProviderInfo
 from app.core.prompt_eval import wilson
 from app.core.structured import extract_json
 from app.db import SessionLocal
-from app.models import TurnEvalRun
+from app.models import TurnEvalRun, iso_utc
 
 log = logging.getLogger(__name__)
 
@@ -929,7 +929,8 @@ async def history(scenario: str = "", limit: int = 20) -> dict:
     runs = [
         {
             "id": r.id,
-            "at": r.created_at.isoformat(timespec="seconds") if r.created_at else None,
+            # naive UTC 裸 isoformat 会被前端当本地读（本时区差 8 小时）；走 iso_utc 补偏移。
+            "at": iso_utc(r.created_at),
             "scenario": r.scenario,
             "scenario_sha": r.scenario_sha,
             "prompt_sha": r.prompt_sha,
