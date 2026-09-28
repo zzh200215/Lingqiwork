@@ -89,6 +89,9 @@ export interface StreamCallbacks {
   onSaved?: (messageId: number, uid?: string) => void
   onFollowups?: (questions: string[]) => void
   onModelDone?: (uid: string) => void
+  /** 单个模型分支失败（对比模式里 A/B 之一，或单模型）。后端 `done_one` 发 `model_error`
+   *  但流不中断——界面拿它把那条流式气泡收尾成错误，而不是空着转圈到 done。 */
+  onModelError?: (message: string, uid?: string) => void
   onMemorized?: (facts: string[]) => void
   /** 协作的**逐步账**（A2）：每跑完一步就来一条——谁跑的、几轮、调了哪些工具、几秒、
    *  有没有把轮数烧光。与后端 `collab._fact` 那份事实同形（界面不自己算）。 */
@@ -175,9 +178,11 @@ export async function streamChat(
       else if (event === 'saved') cb.onSaved?.(data.message_id as number, data.uid as string | undefined)
       else if (event === 'followups') cb.onFollowups?.(data.questions as string[])
       else if (event === 'answer_done') cb.onModelDone?.(data.uid as string)
+      else if (event === 'model_error') cb.onModelError?.(data.message as string, data.uid as string | undefined)
       else if (event === 'memorized') cb.onMemorized?.(data.facts as string[])
       else if (event === 'error') cb.onError(data.message as string)
       else if (event === 'done') cb.onDone()
+      else console.warn('[stream] 未识别的 SSE 事件，已忽略：', event)
     }
   }
 }

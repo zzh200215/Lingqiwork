@@ -785,8 +785,16 @@ function ChatView() {
             })
           },
           onToolResult: (_name, meta, uid) => {
-            const art = meta.artifact as ArtifactRef | undefined
-            if (!art?.href) return
+            // 后端有两条回执形态：非结构化工具路径发**复数** `meta.artifacts`（支持
+            // delegate/多产物，见 chat.py:987），结构化路径发**单数** `meta.artifact`
+            // （chat.py:1041）。两种都要认——只读单数会漏掉前者，且 artifacts 空 +
+            // 正文说「已存为」会误触发 saveHint 的假告警「说了存却没落盘」。
+            const plural = (Array.isArray(meta.artifacts) ? meta.artifacts : []) as ArtifactRef[]
+            const single = meta.artifact as ArtifactRef | undefined
+            const incoming = (plural.length ? plural : single ? [single] : []).filter(
+              (a) => a?.href,
+            )
+            if (!incoming.length) return
             setMessages((prev) => {
               const next = [...prev]
               // uid 只在对比模式（A/B 两路）里有值；单路时找最后一条流式消息
@@ -799,7 +807,9 @@ function ChatView() {
               // 按 path 去重留最后一条：同一轮里同一个文件被存了两版时，流式期间
               // 不能并排出现两条指向同一处的回执（刷新后从库里读到的只有一条，
               // 两边不一致更糟）。见 `artifacts.ts`。
-              next[idx] = { ...cur, artifacts: upsertArtifact(cur.artifacts, art) }
+              let artifacts = cur.artifacts
+              for (const art of incoming) artifacts = upsertArtifact(artifacts, art)
+              next[idx] = { ...cur, artifacts }
               return next
             })
           },
@@ -861,6 +871,32 @@ function ChatView() {
                   : next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
               if (idx === -1) return next
               next[idx] = { ...next[idx], content: fix.text }
+              return next
+            })
+          },
+          onModelError: (message, uid) => {
+            // 单个模型分支失败（对比模式 A/B 之一，或单模型）。后端仍会走到 done，
+            // 界面若不认这一帧，那条流式气泡就空着转圈到结束。把它当场收尾成错误。
+            const key = uid ?? 'none'
+            pending[key] = ''
+            if (rafs[key]) {
+              cancelAnimationFrame(rafs[key])
+              delete rafs[key]
+            }
+            const notice = `⚠️ 模型出错：${message}`
+            setMessages((prev) => {
+              const next = [...prev]
+              const idx =
+                uid != null
+                  ? next.findLastIndex((m) => m.streaming && m.streamUid === uid)
+                  : next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
+              if (idx === -1) return next
+              const cur = next[idx]
+              next[idx] = {
+                ...cur,
+                content: cur.content ? `${cur.content}\n\n${notice}` : notice,
+                streaming: false,
+              }
               return next
             })
           },
