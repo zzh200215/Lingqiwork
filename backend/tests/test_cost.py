@@ -8,7 +8,7 @@ from sqlalchemy import delete
 
 from app.core import cost
 from app.db import SessionLocal, engine
-from app.models import Base, Conversation, Message, TaskRun
+from app.models import Base, Conversation, Message, ModelUsage, TaskRun
 
 
 async def _init_db() -> None:
@@ -20,6 +20,7 @@ async def _clear() -> None:
     async with SessionLocal() as db:
         await db.execute(delete(Message))
         await db.execute(delete(TaskRun))
+        await db.execute(delete(ModelUsage))
         await db.execute(delete(Conversation))
         await db.commit()
 
@@ -149,3 +150,28 @@ async def test_budget_under_flag(monkeypatch):
     assert out["enabled"] is True
     assert out["spent"] == 0.1  # 0.1M * $1/M = $0.1
     assert out["over"] is False
+
+
+async def test_budget_counts_the_ledger_leg(monkeypatch):
+    """BUG-007：预算护栏必须把 `model_usage` 账本那条腿也算进去。
+
+    研究/产出/复盘/教学/圆桌/播客/卡片/记忆整理烧的 token 只落在这张表里——护栏以前只
+    数 messages + task_runs，把整类后台开销漏在账外，于是明明超了预算也判「没超」。
+    """
+    await _init_db()
+    await _clear()
+    async with SessionLocal() as db:
+        db.add(ModelUsage(kind="research", model_id="m", tokens_in=3_000_000, tokens_out=0, calls=1))
+        await db.commit()
+    monkeypatch.setattr(
+        "app.core.cost.load_config",
+        lambda: {
+            "monthly_budget_usd": 1.0,
+            "model_prices": {"m": {"input": 1.0, "output": 1.0}},
+        },
+    )
+    out = await cost.monthly_budget_status()
+    assert out["enabled"] is True
+    assert out["spent"] == 3.0  # 3M * $1/M = $3，全来自账本这条腿
+    assert out["over"] is True
+    assert out["tokens"] == 3_000_000

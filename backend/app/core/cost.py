@@ -243,7 +243,14 @@ async def _monthly_usage() -> dict:
     total = 0
 
     async with SessionLocal() as db:
-        for table, ts_col in (("messages", "created_at"), ("task_runs", "started_at")):
+        # 三条腿，与 usage_summary（:95-96）同源、互不重复：messages=聊天、task_runs=定时
+        # 任务、model_usage=其余全部（研究/产出/复盘/教学/圆桌/播客/卡片/记忆整理…）。
+        # 预算护栏以前只算前两条，把整类后台开销漏在账外 → 系统性少报，明明超了也判没超。
+        for table, ts_col in (
+            ("messages", "created_at"),
+            ("task_runs", "started_at"),
+            ("model_usage", "created_at"),
+        ):
             rows = (
                 await db.execute(
                     sql(
