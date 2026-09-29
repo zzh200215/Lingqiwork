@@ -363,6 +363,9 @@ describe('设计纪律 · 全仓守卫', () => {
     // usePetDrag/usePetDodge + PetPanel/PetPluginRow，本体只剩 806 行编排——同批移出。
     // `DashboardPage.tsx`（2249 行）同日拆成 dashboardCards / dashboardEvalCards /
     // DashboardDecisions，本体只剩 774 行——同批移出（测试引用的卡名经原路径 re-export）。
+    // `TutorPage.tsx`（3205 行）同日分四刀拆成 tutorShared / TutorReportCards /
+    // TutorRecordsPanels / TutorOpening / TutorSessionView / useTutorToolRuns，
+    // 本体只剩 847 行状态机与编排——同批移出。
     //
     // 它变多了 = 有人往大文件里继续堆；变少了 = 有人拆了，**这是好事，改这一行就行**。
     // 两种都应该让这条用例红一次，好过让那个数字没人看着。
@@ -377,7 +380,6 @@ describe('设计纪律 · 全仓守卫', () => {
       'NotesPage.tsx',
       'ReviewPage.tsx',
       'SettingsPage.tsx',
-      'TutorPage.tsx',
     ])
   })
 })
