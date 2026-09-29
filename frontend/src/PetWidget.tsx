@@ -1,121 +1,3 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
-
-import {
-  api,
-  type CardContradiction,
-  type CardStats,
-  type DecisionWitness,
-  type DeliverWitness,
-  type PetGrowth,
-  type PetPlugin,
-  type PetRoom,
-  type PetState,
-  type PetStateMode,
-  type ScheduledTask,
-  type TutorMastery,
-  type TutorStuckRow,
-} from './api'
-import { historyOf, receiptLabel, streamPetChat, toolCallLabel, type PetToolReceipt } from './petChat'
-// Animation states come from the Codex pet atlas (awesome-codex-pet v1):
-// 9 states, each shipped as an animated webp under /pet/<state>.webp.
-// The browser plays them natively, so switching state is just swapping src.
-import { asPetAction, petSprite, type PetAction } from './petFace'
-import { blipOn as isBlipOn, playBlip, setBlipOn as storeBlipOn } from './petSound'
-import { ago } from './reltime'
-import { STARTER_CARDS } from './StarterCards'
-import { streamPet } from './stream'
-import { makeSpeech, useVoiceInput } from './voice'
-
-export type { PetAction }
-
-// 面板里给「此刻」一个说法。与后端 `pet_state._line()` 分工是刻意的：
-// 那边是零柒的**台词**（会说话的只有它，没话说就闭嘴），这里是界面的**事实**——
-// 面板是你主动打开看细节的地方，所以 `idle` 也得有字。
-const MODE_LABEL: Record<PetStateMode, string> = {
-  idle: '待机',
-  focusing: '专注中',
-  working: '陪你干活',
-  learning: '陪你学',
-  reviewing: '陪你过卡',
-  celebrating: '刚交出成品',
-  gated: '有一步等你点头',
-  busy: '有活在跑',
-  idling: '你走开了一会儿',
-  pupil: '在听你讲',
-  resting: '你走开挺久了',
-  tired: '有点蔫',
-  sleepy: '深夜',
-  night_owl: '这几天都熬得晚',
-  returning: '好几天没见',
-}
-
-// 「你人不在」的那两个模式 → 宠物区降饱和。**只降宠物自己，不动页面**：
-// 陪伴不该变成管教，何况你很可能只是切去别的窗口干正事。
-const DIM_MODES: PetStateMode[] = ['idling', 'resting']
-
-// 右下角留白的**唯一真值**（px）。容器定位（style 里的 bottom/right）与让位计算
-// 读的是同一个常量——不再有「class 写 5、常数写 20」的手工同步。
-const PET_CORNER = 20
-// 页面上「宠物必须让开」的东西都标这个属性：对话页的输入行、学页的作答行、
-// 笔记页的「问笔记」输入行。要谁躲开就给它标这个，量与让都是挂件自己的事。
-const PET_CLEAR_SELECTOR = '[data-pet-clear]'
-
-// ---------- 拖拽（P5 · 做活）的算术 ----------
-//
-// 位置记的是**离右下角自然位置的偏移**，不记绝对坐标：窗口一缩放，绝对坐标能把
-// 宠物拽出屏幕外；偏移量 + 夹紧，天生跟着窗口走。
-// 精灵的自然大小（xl 档 h-24 w-24；<768px 缩到 h-16 w-16 = 64px，不占 375px 屏的
-// 四分之一）。夹紧按较大的 96 算：窄屏上只会让宠物离边更远一点，绝不会推出屏幕外。
-const PET_SIZE = 96
-
-function clampDrag(dx: number, dy: number, w = window.innerWidth, h = window.innerHeight) {
-  return {
-    dx: Math.min(PET_CORNER, Math.max(-(w - PET_CORNER - PET_SIZE), dx)),
-    dy: Math.min(PET_CORNER, Math.max(-(h - PET_CORNER - PET_SIZE), dy)),
-  }
-}
-
-function loadDrag(): { dx: number; dy: number } {
-  try {
-    const v = JSON.parse(localStorage.getItem('pet:drag') || 'null')
-    if (v && typeof v.dx === 'number' && typeof v.dy === 'number') return clampDrag(v.dx, v.dy)
-  } catch {
-    /* 记不了位置就待在右下角 */
-  }
-  return { dx: 0, dy: 0 }
-}
-
-// ---------- 弹出置顶（P5 · Document Picture-in-Picture）----------
-//
-// Chrome / Edge 116+ 能开一个**总在最前**的系统小窗：你切去写代码、看视频，零柒
-// 都浮在屏幕上。浏览器给不了真透明与点击穿透（那是桌面壳的活），但「它一直在」
-// 这件事先到手，且零桌面开发——同一份状态、同一条 SSE，只是换了个窗子摆。
-type PipWindow = Window & { document: Document }
-
-function copyStyles(target: Document) {
-  // PiP 是另一份 document，样式得自己搬。内联 <style> 抄规则文本；跨域的 <link>
-  // 读不了 cssRules，原样复制标签让浏览器自己去取。
-  Array.from(document.styleSheets).forEach((sheet) => {
-    try {
-      const el = target.createElement('style')
-      el.textContent = Array.from(sheet.cssRules)
-        .map((r) => r.cssText)
-        .join('\n')
-      target.head.appendChild(el)
-    } catch {
-      const src = sheet.ownerNode
-      if (src instanceof HTMLLinkElement) {
-        const link = target.createElement('link')
-        link.rel = 'stylesheet'
-        link.href = src.href
-        target.head.appendChild(link)
-      }
-    }
-  })
-}
-
 // 零柒 — the resident companion avatar fixed to the corner of the main workspace.
 //
 // This is NOT a separate window (that's PetView / QuickView). This is the
@@ -126,261 +8,39 @@ function copyStyles(target: Document) {
 //
 // All data comes from the same /api/pet/* endpoints the companion already
 // exposes — this is a second, visual face of the same 零柒, not a new brain.
+//
+// 本体只留状态与编排（方向 6 第四刀，2026-09-29）：
+// 纯逻辑在 petNudges / petDrag / petPip / petShared，展示层在 PetPanel / PetPluginRow，
+// 拖拽与让位的指针/测量状态机在 usePetDrag / usePetDodge。
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
-interface PetEvent {
-  id: number
-  kind: string
-  text: string
-  detail: string
-  created_at: string
-}
+import {
+  api,
+  type PetGrowth,
+  type PetPlugin,
+  type PetRoom,
+  type PetState,
+  type TutorMastery,
+} from './api'
+import { historyOf, streamPetChat, toolCallLabel, type PetToolReceipt } from './petChat'
+// Animation states come from the Codex pet atlas (awesome-codex-pet v1):
+// 9 states, each shipped as an animated webp under /pet/<state>.webp.
+// The browser plays them natively, so switching state is just swapping src.
+import { asPetAction, petSprite, type PetAction } from './petFace'
+import { blipOn as isBlipOn, playBlip, setBlipOn as storeBlipOn } from './petSound'
+import { MODE_LABEL, DIM_MODES, type ChatMsg, type PetEvent } from './petShared'
+import { gatherNudges, markNudged, wasNudged, type Nudge } from './petNudges'
+import { PET_CORNER } from './petDrag'
+import { copyStyles, type PipWindow } from './petPip'
+import { streamPet } from './stream'
+import { makeSpeech, useVoiceInput } from './voice'
+import { usePetDrag } from './usePetDrag'
+import { usePetDodge } from './usePetDodge'
+import PetPanel from './PetPanel'
 
-interface ChatMsg {
-  role: 'user' | 'pet'
-  text: string
-  /** 这一轮零柒**真的做了什么**（P3）。空 = 它只是回了句话。 */
-  tools?: PetToolReceipt[]
-}
-
-function timeLabel(iso: string) {
-  try {
-    return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return ''
-  }
-}
-
-// 心情 1–5 的表情。index 0 = 1 分。面板里点一下就记下今天的心情。
-const MOOD_FACES = ['😞', '😕', '😐', '🙂', '😄']
-
-/** 主动提醒：宠物跨模块看到的「你欠的账」，挑最急的一件先开口。
- *
- *  和 feed（任务/摘要/备份的系统事件）分工：feed 是「系统发生了什么」，
- *  nudge 是「**你**有什么没处理」——等你点头的工作流、跑挂的任务、攒着的卡点、
- *  到期没过的卡。安静是默认：一件都没有就一个字都不冒。
- *  同一件事一天只念一次（localStorage 按日期记账），别变成唠叨。
- */
-interface Nudge {
-  key: string
-  text: string
-  to: string
-  toLabel: string
-}
-
-const nudgeStorageKey = (k: string) =>
-  `pet:nudged:${new Date().toISOString().slice(0, 10)}:${k}`
-
-function wasNudged(key: string): boolean {
-  try {
-    return localStorage.getItem(nudgeStorageKey(key)) === '1'
-  } catch {
-    return false
-  }
-}
-
-function markNudged(key: string): void {
-  try {
-    localStorage.setItem(nudgeStorageKey(key), '1')
-  } catch {
-    /* 无痕模式下记不了就不记，顶多今天多念一遍 */
-  }
-}
-
-/** 台词里的引文一律先裁再进句子：气泡是一行，长依据会把那一行撑成一段。 */
-function cut(s: string, n: number): string {
-  const t = (s || '').trim()
-  return t.length > n ? `${t.slice(0, n)}…` : t
-}
-
-/** 顺序即优先级：等你点头 > 跑挂了 > 卡点 > 到期卡 > 到点的决策见证 > **到点的交付见证**。
- *
- *  前四条都是「今天不处理会挡住、会过期」的事；两条见证排在最后，因为**它们不挡任何事**
- *  （`cards.reschedule` 那条纪律：主动开口越少越好）。但排在最后不等于可以永不开口——
- *  它们是唯一两个「不主动说就永远不会有下次机会」的来源：其余四条下次开机还在，
- *  而一条三个月前的判断、一份三周前交出去的东西，只有被念到才会有人回头看
- *  （理由写在 `core/decision_log.py` 与 `core/delivery.py`）。
- *  一天只念一条（服务端只回一条 + 这里的 localStorage 记账），念的是**当时的事实**：
- *  判断原文 + 当时的依据 + 当时的信心（或：交给了谁 + 什么东西 + 多久以前），不催、不评。
- *
- *  **第六个来源（交付见证）是一次明确让开**（M5 · PLAN3 §13）：同 `decision_log` 那个理由
- *  ——一份交出去的东西沉在 `deliver/` 里，纯拉取式的下场同样是没人回头看，而它比判断更短命
- *  （连一条记录都没有，真值只在文件系统里）。代价一起写在原地：这一层的「回看过」只有
- *  👍/👎 那一个动作，所以定义偏弱（`core/delivery.py` 里写明了为什么要求 24 小时的时差）。
- *  下面那句「§2 T1：不加第六个来源」说的是**当时那件事**（对质那句话只换措辞、不加来源），
- *  不是一条永久禁令——但每加一个都得像这次一样，把「为什么它值得开口」写在原地。
- *
- *  **到期卡那条会换一句话**（PLAN2 T1 场景 A）：卡对应的概念你已经说通 ×2、可它的卡这周
- *  反复重来（≥2）时，念的是那句对质——「你说通过两次，可它的卡这周重来三回，再讲一遍？」。
- *  换的只是**那句话的内容**：来源、优先级、key、去处一样没动。
- *  它只陈述两边的事实，不判谁对——「再讲一遍？」是个问句，裁决权在你。
- *
- *  每个请求各自兜底，挂了当没有。 */
-async function gatherNudges(): Promise<Nudge[]> {
-  const [tasks, stuck, stats, witness, delivered] = await Promise.all([
-    api.listTasks().catch((): ScheduledTask[] => []),
-    api.tutorStuck().catch((): { stuck: TutorStuckRow[] } => ({ stuck: [] })),
-    api.cardStats().catch((): CardStats | null => null),
-    api.decisionWitness().catch((): DecisionWitness | null => null),
-    api.deliverWitness().catch((): DeliverWitness | null => null),
-  ])
-  const out: Nudge[] = []
-  for (const t of tasks) {
-    if (t.awaiting_run_id != null)
-      out.push({
-        key: `approve-${t.id}`,
-        text: `「${t.name}」跑完一步了，等你点头才继续。`,
-        to: `/work?tab=workflow&task=${t.id}`,
-        toLabel: '去放行',
-      })
-  }
-  for (const t of tasks) {
-    if (t.enabled && t.awaiting_run_id == null && t.last_status === 'error')
-      out.push({
-        key: `failed-${t.id}-${t.last_run ?? ''}`,
-        text: `「${t.name}」上次跑挂了，失败原因我给你留着。`,
-        to: `/work?tab=workflow&task=${t.id}`,
-        toLabel: '去看看',
-      })
-  }
-  const open = stuck.stuck.filter((s) => !s.resolved_at)
-  if (open.length > 0)
-    out.push({
-      key: 'stuck',
-      text:
-        open.length === 1
-          ? `「${open[0].concept}」还卡着，要不要现在把它说通？`
-          : `攒了 ${open.length} 个卡点没解，清一个是一个。`,
-      to: '/tutor',
-      toLabel: '去清卡点',
-    })
-  if (stats && stats.due_now > 0) {
-    // 只有真的有到期卡时才去问那句对照（省一次往返，也免得为一个没人看的数开口）
-    const x = await api.cardContradiction().catch((): CardContradiction | null => null)
-    const c = x?.contradiction
-    out.push(
-      c
-        ? {
-            key: 'due',
-            // 数字全读得出来才说：说通几次、重来几回，两个数都来自后端算出来的事实。
-            // 「再讲一遍？」——**问句不是判决**：不说「你其实没懂」，不替你改任何判定。
-            text: `「${cut(c.concept, 24)}」你说通过 ${c.said_n} 次，可它的卡这周重来 ${c.again_7d} 回，再讲一遍？`,
-            to: '/review',
-            toLabel: '去重讲',
-          }
-        : {
-            key: 'due',
-            text: `今天还有 ${stats.due_now} 张卡没过，趁脑子还在。`,
-            to: '/review',
-            toLabel: '去复习',
-          }
-    )
-  }
-  if (witness?.due) {
-    const w = witness.due
-    // 「几个月前」按天算：90 天 ≈ 3 个月。不足一个月就说天数，别把三周说成「1 个月」。
-    const age = w.age_days >= 30 ? `${Math.round(w.age_days / 30)} 个月前` : `${w.age_days} 天前`
-    const basis = cut(w.basis, 30)
-    out.push({
-      key: `witness-${w.id}`,
-      // **引用原文依据**：这条提醒的全部价值就是「当时的你怎么想」，转述一遍就没了。
-      // 没有依据那一栏就只说到「当时几成把握」——宁可少一句，也不替当时的你编一个理由。
-      // 把握写成 `%`（与决策日志页那一行同一个写法）：`70` 后面接「成」会读成七倍。
-      text: `${age}你判断：「${cut(w.text, 40)}」。当时 ${w.confidence}% 把握${
-        basis ? `，凭的是「${basis}」` : ''
-      }。`,
-      to: `/dashboard?decision=${w.id}`,
-      toLabel: '翻回去看看',
-    })
-  }
-  if (delivered?.due) {
-    const d = delivered.due
-    // 交给谁那一栏可能空着（老交付没有 frontmatter，或当初就没填）——那就只说「交出去的」，
-    // 不替当时的你补一个收件人。
-    const who = d.audience ? `交给${d.audience}的` : '交出去的'
-    out.push({
-      key: `delivered-${d.path}`,
-      // 事实三样：多久以前、什么东西、给谁。**问句结尾**——「后来有回音吗」不是「你该去回访」。
-      text: `${ago(d.at)}${who}《${cut(d.title, 30)}》—— 后来有回音吗？`,
-      to: `/notes?path=${encodeURIComponent(d.path)}`,
-      toLabel: '翻回去看看',
-    })
-  }
-  return out
-}
-
-/** 面板底部的一格插件。三种面板（计数 / 计时 / 心情）各是一行动作。 */
-function PluginRow({
-  p,
-  onCommand,
-}: {
-  p: PetPlugin
-  onCommand: (name: string, command: string, args?: Record<string, unknown>) => void
-}) {
-  const row = 'flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300'
-  const btn =
-    'rounded-md border border-neutral-300 px-2 py-0.5 text-xs transition-colors hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'
-
-  if (p.panel.kind === 'counter') {
-    return (
-      <div className={row}>
-        <span>💧 {p.label}</span>
-        <span className="text-neutral-400 dark:text-neutral-500">
-          {p.panel.value ?? 0}/{p.panel.target ?? 0} {p.panel.unit ?? ''}
-        </span>
-        <div className="flex-1" />
-        <button className={btn} onClick={() => onCommand(p.name, 'drink')}>
-          +1 杯
-        </button>
-      </div>
-    )
-  }
-
-  if (p.panel.kind === 'mood') {
-    const v = p.panel.value ?? 0
-    return (
-      <div className={row}>
-        <span>🙂 {p.label}</span>
-        <span className="text-neutral-400 dark:text-neutral-500">
-          {v ? `今天 ${v}/${p.panel.scale ?? 5}` : '今天还没记'}
-        </span>
-        <div className="flex-1" />
-        <div className="flex gap-0.5">
-          {MOOD_FACES.map((face, i) => (
-            <button
-              key={face}
-              title={`${i + 1} 分`}
-              onClick={() => onCommand(p.name, 'set', { value: i + 1 })}
-              className={
-                'rounded px-0.5 text-base leading-none transition-opacity ' +
-                (v === i + 1 ? '' : 'opacity-35 hover:opacity-100')
-              }
-            >
-              {face}
-            </button>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className={row}>
-      <span>⏱ {p.label}</span>
-      <span className="text-neutral-400 dark:text-neutral-500">
-        {p.panel.running
-          ? `剩余 ${Math.ceil((p.panel.remaining ?? 0) / 60)} 分`
-          : `${p.panel.minutes ?? p.panel.default_minutes ?? 25} 分`}
-      </span>
-      <div className="flex-1" />
-      <button
-        className={btn}
-        onClick={() => onCommand(p.name, p.panel.running ? 'stop' : 'start')}
-      >
-        {p.panel.running ? '停' : '开始'}
-      </button>
-    </div>
-  )
-}
+export type { PetAction }
 
 export default function PetWidget() {
   const navigate = useNavigate()
@@ -404,7 +64,6 @@ export default function PetWidget() {
   const [chat, setChat] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
-  // 工具正在跑时的一句话：模型调完工具还要再走一轮才开口，那段空白得有个交代
   const [toolBusy, setToolBusy] = useState<string | null>(null)
   // 朗读：开着的话，零柒说完一句就读出来。**说完了才读**——边流边读会念成一堆碎片。
   const [speakOn, setSpeakOn] = useState(false)
@@ -427,27 +86,9 @@ export default function PetWidget() {
   const squashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [blipOn, setBlipOn] = useState(true)
 
-  // ---------- 拖拽（P5 · 做活）----------
-  const [drag, setDrag] = useState(loadDrag)
-  const [dragging, setDragging] = useState(false)
-  const draggedRef = useRef(false) // 拖完那一下 click 是拖拽的尾巴，不是点击
-  const rafRef = useRef(0)
-  // 惯性滑行要从**最新的**位置接着算：move/up 挂在 window 上，闭包里那个 drag
-  // 是按下那一刻的旧值——每次渲染同步一份到 ref，glide 只读这份。
-  const dragPosRef = useRef(drag)
-  dragPosRef.current = drag
-  const dragRef = useRef<{
-    sx: number
-    sy: number
-    bx: number
-    by: number
-    moved: boolean
-    lx: number
-    ly: number
-    lt: number
-    vx: number
-    vy: number
-  } | null>(null)
+  // ---------- 拖拽（P5 · 做活）与让位 ----------
+  const { drag, dragging, draggedRef, onSpritePointerDown } = usePetDrag()
+  const dodge = usePetDodge(panelRef, open, bubble, nudge, location.pathname)
 
   // ---------- 弹出置顶（P5 · Document PiP）----------
   const [pipWin, setPipWin] = useState<PipWindow | null>(null)
@@ -457,80 +98,6 @@ export default function PetWidget() {
   // 此刻摆哪个姿势：一次性覆盖 > 正在想 > 状态机。
   const action: PetAction = flash ?? (thinking ? 'review' : asPetAction(state?.action))
   const dimmed = state != null && DIM_MODES.includes(state.mode)
-
-  // 宠物是 fixed 悬浮层，页面排版不知道它占着右下角。对话页的输入行正好在那儿——
-  // 窄屏（实测窗口 <1240px）上「发送」会被压住，Playwright 点击直接报
-  // `img[alt="零柒"]` 拦截。与其让每个页面自己留白躲它，不如让宠物**自己让开**：
-  // 量一量有没有撞上标了 `[data-pet-clear]` 的东西，撞了就整块上移。
-  const [dodge, setDodge] = useState(0)
-
-  // 量与让都是幂等的：值没变 setDodge 就不再渲染，所以谁都可以放心调它。
-  const measure = useCallback(() => {
-    const el = panelRef.current
-    if (!el) return
-    // 用 offset* 而不是 getBoundingClientRect：位移不能反馈进下一次测量，
-    // 否则每次 setDodge 都把结果再推一遍，收不住。
-    const w = el.offsetWidth
-    const h = el.offsetHeight
-    const right = window.innerWidth - PET_CORNER
-    const bottom = window.innerHeight - PET_CORNER
-    const left = right - w
-    const top = bottom - h
-    let lift = 0
-    document.querySelectorAll(PET_CLEAR_SELECTOR).forEach((target) => {
-      const r = target.getBoundingClientRect()
-      if (r.width === 0 && r.height === 0) return  // 还没排版出来
-      if (right > r.left && left < r.right && bottom > r.top && top < r.bottom) {
-        lift = Math.max(lift, bottom - r.top + 8)
-      }
-    })
-    // 夹紧：再怎么让位，面板顶也不能被推出视口上沿——最多抬到离屏幕顶还有 8px。
-    // 横屏矮视口上不夹紧的话，「让位」会把整块推出屏幕外面。
-    lift = Math.min(lift, Math.max(0, bottom - h - 8))
-    setDodge(lift)
-  }, [])
-
-  useEffect(() => {
-    measure()
-    window.addEventListener('resize', measure)
-    // 面板展开 / 气泡冒出来都会改变占地，撞没撞上要重算。jsdom 没有
-    // ResizeObserver，测试环境下跳过（那边本来也量不出布局）。
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
-    if (ro && panelRef.current) ro.observe(panelRef.current)
-    // 首屏输入行是异步量出来的，补一次；路由换了也要重算
-    const late = window.setTimeout(measure, 400)
-    return () => {
-      window.removeEventListener('resize', measure)
-      ro?.disconnect()
-      window.clearTimeout(late)
-    }
-  }, [measure, open, bubble, nudge, location.pathname])
-
-  // 页面自己会动：内容滚动（学页的作答行跟着滚进角落）、面板后开（笔记页的
-  // 「问笔记」侧栏）、「谁在右下角」随时会变——resize 和 400ms 补量都赶不上。
-  // 捕获阶段的 scroll + 一颗 body 观察器，合并到每轮宏任务量一次：一次批量的
-  // DOM 变更只量一回，量是幂等的，不会滚成性能洞。
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null
-    // 清了再排（尾沿去抖）：一批变更只留最后一颗定时器，但每一脚都保证有得发——
-    // 不用「来了就跳过」的布尔，那种标志一旦遇上没被冲走的定时器就永远卡住。
-    const kick = () => {
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
-        timer = null
-        measure()
-      }, 0)
-    }
-    const onScroll = () => kick()
-    const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(kick)
-    window.addEventListener('scroll', onScroll, { passive: true, capture: true })
-    if (mo) mo.observe(document.body, { childList: true, subtree: true })
-    return () => {
-      window.removeEventListener('scroll', onScroll, true)
-      mo?.disconnect()
-      if (timer) window.clearTimeout(timer)
-    }
-  }, [measure])
 
   useEffect(() => {
     openRef.current = open
@@ -1008,91 +575,6 @@ export default function PetWidget() {
     setOpen((v) => !v)
   }
 
-  // ---------- 拖拽（P5 · 做活）：拽着走，松手带一点惯性，撞墙就停 ----------
-  //
-  // 指针事件挂在精灵上（touch-none 免得拖动变成滚动）；位移与「给输入行让位」
-  // 共用同一套 translate 轴。6px 死区把「点」和「拖」分开；惯性只做衰减不做反弹
-  // ——弹来弹去像球，不像猫。
-  function saveDrag(v: { dx: number; dy: number }) {
-    try {
-      localStorage.setItem('pet:drag', JSON.stringify(v))
-    } catch {
-      /* 无痕模式记不了就算了 */
-    }
-  }
-
-  function glide(vx: number, vy: number) {
-    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null
-    if (!raf || Math.abs(vx) + Math.abs(vy) < 0.05) {
-      saveDrag(dragPosRef.current)
-      return
-    }
-    cancelAnimationFrame(rafRef.current)
-    let { dx, dy } = dragPosRef.current
-    const step = () => {
-      vx *= 0.9
-      vy *= 0.9
-      if (Math.abs(vx) + Math.abs(vy) < 0.02) {
-        saveDrag({ dx, dy })
-        return
-      }
-      const next = clampDrag(dx + vx * 16, dy + vy * 16)
-      dx = next.dx
-      dy = next.dy
-      setDrag({ dx, dy })
-      rafRef.current = raf(step)
-    }
-    rafRef.current = raf(step)
-  }
-
-  function onSpritePointerDown(e: React.PointerEvent) {
-    if (e.button !== 0) return
-    const d = {
-      sx: e.clientX,
-      sy: e.clientY,
-      bx: drag.dx,
-      by: drag.dy,
-      moved: false,
-      lx: e.clientX,
-      ly: e.clientY,
-      lt: performance.now(),
-      vx: 0,
-      vy: 0,
-    }
-    dragRef.current = d
-    // move / up 挂在 **window** 上而不是精灵上：宠物一挪就跑到了指针下面之外，
-    // 靠元素收事件的话，抓住一半就断（真机验收撞过：只走到路径第二个点）。
-    // 收尾在 pointerup 与 pointercancel 两处（触屏拖出屏幕是 cancel）。
-    const onMove = (ev: PointerEvent) => {
-      const dx = ev.clientX - d.sx
-      const dy = ev.clientY - d.sy
-      if (!d.moved && Math.hypot(dx, dy) < 6) return // 过了死区才算拖，点一下还是点
-      if (!d.moved) setDragging(true)
-      d.moved = true
-      const now = performance.now()
-      const dt = Math.max(1, now - d.lt)
-      d.vx = 0.7 * d.vx + 0.3 * ((ev.clientX - d.lx) / dt)
-      d.vy = 0.7 * d.vy + 0.3 * ((ev.clientY - d.ly) / dt)
-      d.lx = ev.clientX
-      d.ly = ev.clientY
-      d.lt = now
-      setDrag(clampDrag(d.bx + dx, d.by + dy))
-    }
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-      dragRef.current = null
-      setDragging(false)
-      if (!d.moved) return
-      draggedRef.current = true // 松手那下的 click 是拖拽的尾巴，不是点击
-      glide(d.vx, d.vy)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
-  }
-
   // ---------- 音效开关（P5 · 做活）----------
   function toggleBlip() {
     const next = !blipOn
@@ -1213,255 +695,33 @@ export default function PetWidget() {
         {/* expanded panel：高度封顶 70vh、宽度封顶 320px——横屏矮视口（667×375）上
             面板不超出屏幕高，窄手机（375px）上不顶满整屏宽（§P0 #19/#20）。 */}
         {open && (
-          <div className="pet-bubble pointer-events-auto mb-2 flex h-[380px] max-h-[70vh] w-[calc(100vw-32px)] max-w-[320px] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/20 dark:border-neutral-700 dark:bg-neutral-900">
-            {/* 头部一行七样（§#24）：成长链 min-w-0 flex-1 truncate 吃掉弹性、
-                尾部按钮 shrink-0 保活——窄面板上被裁的是「正在靠近…」，不再是按钮。 */}
-            <div className="flex items-center gap-2 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
-              <span className="shrink-0 text-sm font-semibold text-neutral-800 dark:text-neutral-100">零柒</span>
-              {growth && (
-                <Link
-                  to="/growth"
-                  onClick={() => setOpen(false)}
-                  title="看成长"
-                  className="min-w-0 flex-1 truncate text-xs text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
-                >
-                  Lv.{growth.level} {growth.title} · EXP {growth.exp}
-                  {growth.next_title && ` · 正在靠近「${growth.next_title}」`}
-                </Link>
-              )}
-              <button
-                onClick={toggleSpeak}
-                title={speakOn ? '朗读：开（点一下关掉）' : '朗读：关'}
-                className={`shrink-0 text-xs transition-colors ${
-                  speakOn ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
-                } hover:text-violet-500`}
-              >
-                {speaking ? '🔊' : speakOn ? '🔈' : '🔇'}
-              </button>
-              <button
-                onClick={toggleBlip}
-                title={blipOn ? '音效：开（点一下关掉）' : '音效：关'}
-                className={`shrink-0 text-xs transition-colors ${
-                  blipOn ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
-                } hover:text-violet-500`}
-              >
-                {blipOn ? '🔔' : '🔕'}
-              </button>
-              <button
-                onClick={() => void openPip()}
-                title={
-                  pipWin ? '收回置顶小窗' : '弹出置顶小窗：切去别的应用，它也浮在屏幕上'
-                }
-                className={`shrink-0 text-xs transition-colors ${
-                  pipWin ? 'text-violet-500' : 'text-neutral-400 dark:text-neutral-500'
-                } hover:text-violet-500`}
-              >
-                📌
-              </button>
-              <Link
-                to="/companion"
-                onClick={() => setOpen(false)}
-                title="整页聊天 / 教它 / 成长 / 小屋 / 有声"
-                className="shrink-0 text-xs text-neutral-400 transition-colors hover:text-violet-500 dark:text-neutral-500"
-              >
-                陪伴页 →
-              </Link>
-              <button
-                onClick={() => setOpen(false)}
-                className="shrink-0 rounded-md px-1.5 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* 成长进度条：只画「正在靠近」，不写「还差 N」 */}
-            {growth && (
-              <div className="h-0.5 w-full bg-neutral-100 dark:bg-neutral-800">
-                <div
-                  className="h-0.5 bg-violet-500 transition-all"
-                  style={{ width: `${Math.round(growth.progress * 100)}%` }}
-                />
-              </div>
-            )}
-
-            {/* 此刻（P1）：状态机给的姿势与精力。零柒的台词放在前，界面的说法在后——
-                它是**当下**的量，跨天归零，不是「还欠 N」的账。 */}
-            {state && (
-              <div className="flex items-center gap-2 border-b border-neutral-100 px-3 py-1.5 text-xs text-neutral-400 dark:border-neutral-800 dark:text-neutral-500">
-                <span className="min-w-0 flex-1 truncate" data-pet-mode={state.mode}>
-                  {state.line || MODE_LABEL[state.mode]}
-                </span>
-                <span className="shrink-0" title="此刻的精神——只描述现在，不是要还的债">
-                  精力
-                </span>
-                <div
-                  data-pet-energy={state.energy}
-                  className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700"
-                >
-                  <div
-                    className="h-full bg-violet-400 transition-all"
-                    style={{ width: `${Math.max(0, Math.min(100, state.energy))}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2 text-sm leading-relaxed">
-              {growth && growth.parts.length > 0 && (
-                <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-neutral-400 dark:text-neutral-500">
-                  {growth.parts.map((p) => (
-                    <span key={p.key}>
-                      {p.label} +{p.exp}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {mastery && mastery.events.length > 0 && (
-                <div className="text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
-                  最近搞懂：
-                  {mastery.events.slice(0, 3).map((e) => e.concept).join('、')}
-                  {mastery.mastered > 3 ? ` 等 ${mastery.mastered} 个` : ''}
-                  <Link
-                    to="/tutor"
-                    onClick={() => setOpen(false)}
-                    className="ml-1 text-violet-500 hover:underline"
-                  >
-                    看学习地图
-                  </Link>
-                </div>
-              )}
-              {room?.carried && (
-                <div className="text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
-                  它最近叼回来：{room.carried.icon} {room.carried.label}
-                  <Link
-                    to="/companion?tab=room"
-                    onClick={() => setOpen(false)}
-                    className="ml-1 text-violet-500 hover:underline"
-                  >
-                    去小屋
-                  </Link>
-                </div>
-              )}
-              {!events.length && !chat.length && !error && (
-                <div className="text-neutral-400 dark:text-neutral-500">
-                  零柒还没说过话。它会在任务、摘要、备份、订阅有动静时主动开口——你也可以现在跟它聊。
-                </div>
-              )}
-              {events.map((e) => (
-                <div key={`e${e.id}`} className="max-w-[92%] break-words rounded-lg rounded-bl-sm bg-neutral-100 px-3 py-2 dark:bg-neutral-800">
-                  <div className="whitespace-pre-wrap text-neutral-700 dark:text-neutral-200">{e.text}</div>
-                  <div className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">{timeLabel(e.created_at)}</div>
-                </div>
-              ))}
-              {chat.map((m, i) =>
-                m.role === 'user' ? (
-                  <div key={`u${i}`} className="ml-auto max-w-[92%] whitespace-pre-wrap break-words rounded-lg rounded-br-sm bg-violet-600 px-3 py-2 text-white">
-                    {m.text}
-                  </div>
-                ) : (
-                  <div
-                    key={`p${i}`}
-                    className="max-w-[92%] break-words rounded-lg rounded-bl-sm bg-neutral-100 px-3 py-2 dark:bg-neutral-800"
-                  >
-                    {/* 它真的做了什么。写在话**前面**：先有动作，再有解释。 */}
-                    {m.tools && m.tools.length > 0 && (
-                      <ul className="mb-1 flex flex-wrap gap-1">
-                        {m.tools.map((r, k) => (
-                          <li
-                            key={k}
-                            className="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
-                          >
-                            {receiptLabel(r)}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {m.text ? (
-                      <span className="whitespace-pre-wrap text-neutral-700 dark:text-neutral-200">
-                        {m.text}
-                      </span>
-                    ) : null}
-                    {!m.text && (
-                      <span className="text-xs text-neutral-400 dark:text-neutral-500">
-                        {toolBusy ?? (
-                          <span className="inline-block animate-pulse text-violet-400">▊</span>
-                        )}
-                      </span>
-                    )}
-                  </div>
-                ),
-              )}
-              {error && <div className="rounded-lg bg-rose-100 px-3 py-2 text-xs text-rose-600 dark:bg-rose-950/60 dark:text-rose-300">{error}</div>}
-              <div ref={panelBottomRef} />
-            </div>
-
-            {plugins.length > 0 && (
-              <div className="flex flex-col gap-1 border-t border-neutral-200 px-3 py-2 dark:border-neutral-800">
-                {plugins.map((p) => (
-                  <PluginRow
-                    key={p.name}
-                    p={p}
-                    onCommand={(name, command, args) => void runPlugin(name, command, args)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* 快捷对话条：还没开聊的时候，一键起头——开口的门槛越低，陪伴越真 */}
-            {chat.length === 0 && (
-              <div className="flex flex-wrap gap-1.5 border-t border-neutral-200 px-3 pt-2 dark:border-neutral-800">
-                {/* 文案与陪伴页空态同源（STARTER_CARDS 前三张）——两处维护必漂移（§#26） */}
-                {STARTER_CARDS.slice(0, 3).map((c) => (
-                  <button
-                    key={c.title}
-                    onClick={() => void send(c.q)}
-                    disabled={busy}
-                    className="rounded-full border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 transition-colors hover:border-violet-300 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-violet-500/50"
-                  >
-                    {c.title}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="border-t border-neutral-200 p-2 dark:border-neutral-800">
-              <div className="flex gap-2">
-                {/* 对着零柒说话：说完直接发，不用再按一下（见 voice 那段注释） */}
-                <button
-                  onClick={voice.toggle}
-                  disabled={voice.transcribing || busy}
-                  title={voice.recording ? '停止并转写' : '对着零柒说话（说完直接发）'}
-                  className={`flex w-9 shrink-0 items-center justify-center rounded-lg border text-sm transition-colors disabled:opacity-40 ${
-                    voice.recording
-                      ? 'border-rose-400 bg-rose-50 text-rose-500 dark:border-rose-500/50 dark:bg-rose-500/10'
-                      : 'border-neutral-300 text-neutral-400 hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:hover:border-violet-500/50'
-                  }`}
-                >
-                  {voice.transcribing ? (
-                    '⏳'
-                  ) : voice.recording ? (
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" />
-                  ) : (
-                    '🎤'
-                  )}
-                </button>
-                <input
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={onKeyDown}
-                  placeholder="跟零柒说点什么"
-                  className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-                />
-                <button
-                  onClick={() => void send()}
-                  disabled={busy || !input.trim()}
-                  className="rounded-lg bg-violet-600 px-3 text-sm text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
-                >
-                  发送
-                </button>
-              </div>
-            </div>
-          </div>
+          <PetPanel
+            growth={growth}
+            state={state}
+            mastery={mastery}
+            room={room}
+            events={events}
+            chat={chat}
+            error={error}
+            toolBusy={toolBusy}
+            plugins={plugins}
+            speakOn={speakOn}
+            speaking={speaking}
+            blipOn={blipOn}
+            pipWin={pipWin}
+            voice={voice}
+            input={input}
+            setInput={setInput}
+            busy={busy}
+            panelBottomRef={panelBottomRef}
+            onToggleSpeak={toggleSpeak}
+            onToggleBlip={toggleBlip}
+            onOpenPip={() => void openPip()}
+            onClose={() => setOpen(false)}
+            onRunPlugin={(name, command, args) => void runPlugin(name, command, args)}
+            onSend={(text) => void send(text)}
+            onKeyDown={onKeyDown}
+          />
         )}
 
         {/* the avatar itself — animated webp per state, PNG fallback on error.
