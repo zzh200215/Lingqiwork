@@ -332,7 +332,9 @@ describe('设计纪律 · 全仓守卫', () => {
       'CardList.tsx': 1,
       'CommandPalette.tsx': 3,
       'CompanionPage.tsx': 5,
-      'DashboardPage.tsx': 4,
+      // 2026-09-29：决策日志节从 DashboardPage 拆出（DashboardDecisions），那条「读不到就不摆」跟着走
+      'DashboardDecisions.tsx': 1,
+      'DashboardPage.tsx': 3,
       'Layout.tsx': 2,
       'NotesPage.tsx': 1,
       'PetWidget.tsx': 3,
@@ -356,6 +358,8 @@ describe('设计纪律 · 全仓守卫', () => {
     // `KBPage.tsx`（1766 行）同日按页签拆成 Kb*Tab.tsx + kbShared.ts，本体只剩 96 行——同批移出。
     // `PetWidget.tsx`（1546 行）同日拆成 petNudges/petDrag/petPip/petShared +
     // usePetDrag/usePetDodge + PetPanel/PetPluginRow，本体只剩 806 行编排——同批移出。
+    // `DashboardPage.tsx`（2249 行）同日拆成 dashboardCards / dashboardEvalCards /
+    // DashboardDecisions，本体只剩 774 行——同批移出（测试引用的卡名经原路径 re-export）。
     //
     // 它变多了 = 有人往大文件里继续堆；变少了 = 有人拆了，**这是好事，改这一行就行**。
     // 两种都应该让这条用例红一次，好过让那个数字没人看着。
@@ -367,7 +371,6 @@ describe('设计纪律 · 全仓守卫', () => {
     expect(over).toEqual([
       'App.tsx',
       'CompanionPage.tsx',
-      'DashboardPage.tsx',
       'NotesPage.tsx',
       'ReviewPage.tsx',
       'SettingsPage.tsx',
