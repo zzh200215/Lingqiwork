@@ -342,7 +342,10 @@ describe('设计纪律 · 全仓守卫', () => {
       'ReviewPage.tsx': 4,
       'SelfCheckLine.tsx': 1,
       'ThreadsPage.tsx': 1,
-      'TutorPage.tsx': 9,
+      // 2026-09-29：概念轨/概览/历史三面板从 TutorPage 拆出（TutorRecordsPanels），
+      // openConceptRow 那条「邻居拉不到就不摆」的 catch 跟着走
+      'TutorRecordsPanels.tsx': 1,
+      'TutorPage.tsx': 8,
       // 2026-09-26：EnginePulse 从 WorkPage 搬出（那两条「读不到就不摆」的 catch 跟着走）
       'WorkPage.tsx': 1,
       'EnginePulse.tsx': 2,
