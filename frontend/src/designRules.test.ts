@@ -194,9 +194,10 @@ describe('设计纪律 · 全仓守卫', () => {
     expect(bad, '长任务没走 RunPanel——六态、停止、重试就都没了').toEqual([])
 
     // 上面那份接口名清单不能悄悄失效（改名/删掉之后，这条守卫会变成永远绿的摆设）
-    // 方向 6 分片后方法名住在 `src/api/*.ts` 域文件里——api.ts 只剩类型与组合处
-    const apiNames = readdirSync(join(SRC, 'api'), 'utf8')
-      .map((f) => readFileSync(join(SRC, 'api', f), 'utf8'))
+    // 方向 6 分片后方法名住在 `src/api/*.ts` 域文件里——api.ts 只剩转发与组合处，类型在 api/types/
+    const apiNames = readdirSync(join(SRC, 'api'), { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith('.ts'))
+      .map((e) => readFileSync(join(SRC, 'api', e.name), 'utf8'))
       .join('\n')
     const gone = LONG_CALLS.filter((n) => !new RegExp(`\\b${n}:`).test(apiNames))
     expect(gone, 'api 里没有这些名字了——清单过期，改它').toEqual([])
@@ -350,7 +351,8 @@ describe('设计纪律 · 全仓守卫', () => {
 
   it('全仓超 1000 行的文件——**记下来**，别让它悄悄变多', () => {
     // 这不是验收线，是一份欠账清单：上面那条只管工作模块，这里是**其余模块**的实情。
-    // `api.ts` 是方案 §十二 明确「本轮不分片」的那个。
+    // `api.ts`（3778 行）已于方向 6 拆干净：方法进 `api/*.ts`，类型进 `api/types/*.ts`，
+    // 本体只剩 163 行转发 + 组合——2026-09-29 移出本清单。
     //
     // 它变多了 = 有人往大文件里继续堆；变少了 = 有人拆了，**这是好事，改这一行就行**。
     // 两种都应该让这条用例红一次，好过让那个数字没人看着。
@@ -369,7 +371,6 @@ describe('设计纪律 · 全仓守卫', () => {
       'ReviewPage.tsx',
       'SettingsPage.tsx',
       'TutorPage.tsx',
-      'api.ts',
     ])
   })
 })

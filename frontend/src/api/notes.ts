@@ -1,4 +1,5 @@
 import { request } from './request'
+import type { NotesChatTurn } from './types/notes'
 import type { NoteSearchHit, SearchHit, VoicePending } from '../api'
 
 export const notesApi = {
@@ -54,4 +55,44 @@ export const notesApi = {
     }),
 
   /** 信念演化时间线：automemory 事实按语义聚成的「信念线」 */
+}
+
+// 笔记 AI 流式改写（SSE），走独立 fetch——与 notesApi 一起构成笔记域的出口
+export async function streamNotesAi(
+  action: 'continue' | 'polish' | 'summarize' | 'rewrite' | 'chat',
+  content: string,
+  onDelta: (text: string) => void,
+  signal: AbortSignal,
+  extra?: { selection?: string; instruction?: string; question?: string; history?: NotesChatTurn[] }
+): Promise<void> {
+  const res = await fetch('/api/notes/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, content, ...extra }),
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(`ai failed: ${res.status}`)
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let sep: number
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const raw = buf.slice(0, sep)
+      buf = buf.slice(sep + 2)
+      let event = 'message'
+      const dataLines: string[] = []
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('event: ')) event = line.slice(7)
+        else if (line.startsWith('data: ')) dataLines.push(line.slice(6))
+      }
+      if (!dataLines.length) continue
+      const data = JSON.parse(dataLines.join('\n'))
+      if (event === 'delta') onDelta(data.text as string)
+      else if (event === 'error') throw new Error(data.message as string)
+    }
+  }
 }
