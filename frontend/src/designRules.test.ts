@@ -366,6 +366,10 @@ describe('设计纪律 · 全仓守卫', () => {
     // `TutorPage.tsx`（3205 行）同日分四刀拆成 tutorShared / TutorReportCards /
     // TutorRecordsPanels / TutorOpening / TutorSessionView / useTutorToolRuns，
     // 本体只剩 847 行状态机与编排——同批移出。
+    // `SettingsPage.tsx`（3657 行）分五刀拆成 SettingsTasks / SettingsAgents /
+    // SettingsPrompts / SettingsSkills / SettingsEval / SettingsMcp / SettingsContent /
+    // SettingsData / SettingsAutomationPrefs / SettingsWebsearch（共享件进 settingsShared.ts），
+    // 本体只剩 872 行编排——2026-09-30 移出本清单。
     //
     // 它变多了 = 有人往大文件里继续堆；变少了 = 有人拆了，**这是好事，改这一行就行**。
     // 两种都应该让这条用例红一次，好过让那个数字没人看着。
@@ -379,7 +383,6 @@ describe('设计纪律 · 全仓守卫', () => {
       'CompanionPage.tsx',
       'NotesPage.tsx',
       'ReviewPage.tsx',
-      'SettingsPage.tsx',
     ])
   })
 })
