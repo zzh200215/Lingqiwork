@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { McpView } from './api'
-import { toolCostLine } from './SettingsPage'
+import { toolCostLine } from './SettingsMcp'
 
 const tools = (over: Partial<NonNullable<McpView['tools']>> = {}): McpView['tools'] => ({
   count: 12,

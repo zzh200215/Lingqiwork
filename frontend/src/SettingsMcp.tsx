@@ -1,0 +1,256 @@
+// MCP 工具域（方向 6 第十四刀，2026-09-30 自 SettingsPage 拆出）：
+// `?section=mcp` 的 server 清单卡（连接状态 / 测试探针 / 增删改）+ 编辑器表单 + 页尾提示。
+// 状态与五个处理器整体住在这里；挂载时自拉 getMcp，失败走 failLoad 汇总到页级错误条
+// （原先挂在 refresh() 的串行 try 块里，失败会中断 refresh 后续取数——搬家后不再挡道）。
+import { useEffect, useState } from 'react'
+import { Plug } from 'lucide-react'
+import { api, type McpProbe, type McpServer, type McpView } from './api'
+import { inputCls } from './settingsShared'
+
+/** A3 那一栏的**成本读数**（2026-09-22：A3 改成症状驱动，不再是「工具数 > 20」）。
+ *
+ *  工具定义每一轮都要重发一遍——这段话把「重发多少」念出来：总字数 + 最占地方的三个，
+ *  再给一句**提示**（到 20 个工具就复看一遍）。**是提示不是及格线**：这行字里不许出现
+ *  「到线 / 没到线」这种判词，`review_hint` 是提醒你看一眼，不是判你合不合格。
+ *
+ *  **读不到就明说读不到**（§4-8）：`undefined` 走「没拿到」，绝不当成 0 印出来——
+ *  「0 字」是在说「工具定义不要钱」，而事实是这一格没读到。
+ *
+ *  纯函数，所以只钉它（`SettingsPage.tools.test.tsx`）：整页要拉一堆端点，
+ *  而这一行的规矩只有三条——照实念、最占地方的排前面、读不到不许印 0。 */
+export function toolCostLine(tools: McpView['tools']): string {
+  if (!tools) return '工具定义的字数没拿到——这一格不编一个 0 出来。'
+  const top = (tools.biggest ?? []).slice(0, 3)
+  const body = top.map((t) => `${t.name} ${t.chars} 字`).join('、')
+  // 只有一条时不能写成「最占地方的是 X」（读起来像半句话），用「是」而不是「是…的」
+  const biggest = body ? `最占地方的是 ${body}。` : ''
+  return `${tools.count} 个工具的说明合起来 ${tools.chars} 字：这些每一轮都重发一遍。${biggest}到 ${tools.review_hint} 个工具就复看一遍——这是提示，不是及格线。`
+}
+
+const EMPTY_MCP: McpServer = { name: '', type: 'stdio', command: '', args: [], url: '', enabled: true }
+
+export default function SettingsMcp({ failLoad }: { failLoad: (what: string, e: unknown) => void }) {
+  const [mcpView, setMcpView] = useState<McpView | null>(null)
+  const [mcpDraft, setMcpDraft] = useState<McpServer>({ ...EMPTY_MCP })
+  const [mcpArgs, setMcpArgs] = useState('')
+  const [mcpEditIdx, setMcpEditIdx] = useState<number | null>(null)
+  const [probe, setProbe] = useState<Record<string, McpProbe | 'loading'>>({})
+  const [mcpError, setMcpError] = useState('')
+
+  useEffect(() => {
+    api.getMcp().then(setMcpView).catch((e) => failLoad('MCP', e))
+  }, [])
+
+  // ---- MCP server management ----
+
+  async function saveMcp(list: McpServer[]) {
+    try {
+      setMcpView(await api.saveMcp(list))
+      setMcpEditIdx(null)
+      setMcpDraft({ ...EMPTY_MCP })
+      setMcpArgs('')
+      setMcpError('')
+    } catch (e) {
+      setMcpError(String(e))
+    }
+  }
+
+  function applyMcpDraft() {
+    if (!mcpDraft.name.trim()) {
+      setMcpError('名称必填')
+      return
+    }
+    const item: McpServer = {
+      ...mcpDraft,
+      name: mcpDraft.name.trim(),
+      args: mcpArgs
+        .split(/[\n,]/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    }
+    const list = mcpView?.servers ?? []
+    const next =
+      mcpEditIdx == null ? [...list, item] : list.map((s, i) => (i === mcpEditIdx ? item : s))
+    void saveMcp(next)
+  }
+
+  function removeMcp(idx: number) {
+    const list = mcpView?.servers ?? []
+    if (!confirm(`删除 MCP server「${list[idx]?.name ?? ''}」？`)) return
+    void saveMcp(list.filter((_, i) => i !== idx))
+  }
+
+  function editMcp(idx: number) {
+    const s = mcpView?.servers[idx]
+    if (!s) return
+    setMcpEditIdx(idx)
+    setMcpDraft({ ...s })
+    setMcpArgs(s.args.join('\n'))
+    setMcpError('')
+  }
+
+  async function testMcp(s: McpServer, idx: number) {
+    setProbe((prev) => ({ ...prev, [String(idx)]: 'loading' }))
+    const r = await api.testMcp(s).catch((e): McpProbe => ({ name: s.name, ok: false, tools: [], error: String(e) }))
+    setProbe((prev) => ({ ...prev, [String(idx)]: r }))
+  }
+
+  const mcpServers = mcpView?.servers ?? []
+  const activeToolCount = mcpView?.active_tools.length ?? 0
+
+  return (
+    <>
+      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Plug className="h-3.5 w-3.5" /></span></h2>
+          <span className="text-xs text-neutral-400">{activeToolCount} 个可用工具</span>
+        </div>
+        <p className="-mt-1 text-xs leading-relaxed text-neutral-400">{toolCostLine(mcpView?.tools)}</p>
+        <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
+          内置工具始终可用：<code className="text-neutral-500">vault_read_file</code> /{' '}
+          <code className="text-neutral-500">vault_list_files</code> /{' '}
+          <code className="text-neutral-500">vault_write_file</code> /{' '}
+          <code className="text-neutral-500">fetch_url</code> /{' '}
+          <code className="text-neutral-500">web_search</code> /{' '}
+          <code className="text-neutral-500">memory_save</code> 等。配置 MCP server 可接入文件系统、浏览器、数据库等任意工具。
+        </p>
+        {mcpServers.map((s, i) => {
+          const st = mcpView?.status[s.name]
+          const pr = probe[String(i)]
+          return (
+            <div
+              key={`${s.name}-${i}`}
+              className="flex items-start justify-between rounded-lg border border-neutral-200 px-4 py-3 dark:border-neutral-800"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{s.name}</span>
+                  <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
+                    {s.type}
+                  </span>
+                  {!s.enabled && <span className="text-xs text-red-500">已禁用</span>}
+                </div>
+                <div className="truncate text-xs text-neutral-500">
+                  {s.type === 'sse' ? s.url : [s.command, ...s.args].join(' ')}
+                </div>
+                <div className="mt-1 text-xs">
+                  {st ? (
+                    st.ok ? (
+                      <span className="text-emerald-600 dark:text-emerald-400">● 已连接 · {st.tools} 个工具</span>
+                    ) : (
+                      <span className="text-red-500" title={st.error ?? ''}>● 连接失败</span>
+                    )
+                  ) : (
+                    <span className="text-neutral-400">○ 未连接</span>
+                  )}
+                  {'  '}
+                  {pr === 'loading' && <span className="text-neutral-400">测试中…</span>}
+                  {pr && pr !== 'loading' && (
+                    pr.ok ? (
+                      <span className="text-emerald-600 dark:text-emerald-400">测试通过：{pr.tools.join(', ') || '(无工具)'}</span>
+                    ) : (
+                      <span className="text-red-500">测试失败：{pr.error}</span>
+                    )
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2 text-sm">
+                <button onClick={() => testMcp(s, i)} className="text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100">
+                  测试
+                </button>
+                <button onClick={() => editMcp(i)} className="text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100">
+                  编辑
+                </button>
+                <button onClick={() => removeMcp(i)} className="text-red-400 hover:text-red-600">
+                  删除
+                </button>
+              </div>
+            </div>
+          )
+        })}
+        {!mcpServers.length && (
+          <p className="text-sm text-neutral-400">尚未配置任何 MCP server（可选，内置工具已可用）</p>
+        )}
+      </section>
+
+      {/* MCP editor */}
+      <section className="wb-card p-5">
+        <h2 className="mb-4 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Plug className="h-3.5 w-3.5" /></span> {mcpEditIdx != null ? `编辑 ${mcpDraft.name}` : '新增 MCP Server'}</h2>
+        <div className="grid grid-cols-2 gap-4">
+          <label className="flex flex-col gap-1 text-sm">
+            名称
+            <input value={mcpDraft.name} onChange={(e) => setMcpDraft({ ...mcpDraft, name: e.target.value })} placeholder="filesystem" className={inputCls} />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            传输类型
+            <select
+              value={mcpDraft.type}
+              onChange={(e) => setMcpDraft({ ...mcpDraft, type: e.target.value as 'stdio' | 'sse' })}
+              className={inputCls}
+            >
+              <option value="stdio">stdio（本地子进程）</option>
+              <option value="sse">SSE（远程服务）</option>
+            </select>
+          </label>
+          {mcpDraft.type === 'sse' ? (
+            <label className="col-span-2 flex flex-col gap-1 text-sm">
+              SSE URL
+              <input value={mcpDraft.url} onChange={(e) => setMcpDraft({ ...mcpDraft, url: e.target.value })} placeholder="https://example.com/mcp/sse" className={inputCls} />
+            </label>
+          ) : (
+            <>
+              <label className="flex flex-col gap-1 text-sm">
+                启动命令
+                <input value={mcpDraft.command} onChange={(e) => setMcpDraft({ ...mcpDraft, command: e.target.value })} placeholder="python / npx / uvx" className={inputCls} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                参数（逗号或换行分隔）
+                <textarea
+                  value={mcpArgs}
+                  onChange={(e) => setMcpArgs(e.target.value)}
+                  rows={2}
+                  placeholder={'-y @modelcontextprotocol/server-filesystem C:\\path\\to\\dir'}
+                  className={inputCls}
+                />
+              </label>
+            </>
+          )}
+        </div>
+        <div className="mt-4 flex items-center justify-between">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={mcpDraft.enabled}
+              onChange={(e) => setMcpDraft({ ...mcpDraft, enabled: e.target.checked })}
+            />
+            启用
+          </label>
+          <div className="flex gap-2">
+            {mcpEditIdx != null && (
+              <button
+                onClick={() => {
+                  setMcpEditIdx(null)
+                  setMcpDraft({ ...EMPTY_MCP })
+                  setMcpArgs('')
+                  setMcpError('')
+                }}
+                className="rounded-md px-4 py-1.5 text-sm text-neutral-500"
+              >
+                取消
+              </button>
+            )}
+            <button onClick={applyMcpDraft} className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110">
+              {mcpEditIdx != null ? '保存修改' : '添加'}
+            </button>
+          </div>
+        </div>
+        {mcpError && <p className="mt-3 text-xs text-red-500">{mcpError}</p>}
+      </section>
+
+      <p className="mt-6 text-xs leading-relaxed text-neutral-400">
+        提示：模型在对话页显示为 provider名/模型名。OpenAI 兼容协议可接 DeepSeek、Qwen、Moonshot、Ollama、OpenRouter 等，填对应 base_url 即可。
+        MCP server 支持 stdio 与 SSE，可在对话中让模型调用外部工具。
+      </p>
+    </>
+  )
+}
