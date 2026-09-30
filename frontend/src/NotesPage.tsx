@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -7,7 +7,6 @@ import {
   Columns2,
   Eye,
   FileText,
-  Headphones,
   ImagePlus,
   Layers,
   List,
@@ -19,17 +18,18 @@ import {
   ScrollText,
   Sparkles,
 } from 'lucide-react'
-import CardMaker from './CardMaker'
 import CodeBlock from './CodeBlock'
 import FeedbackButtons from './FeedbackButtons'
 import InjectedLine from './InjectedLine'
 import VoiceTriage from './VoiceTriage'
-import ArtifactReceipt from './ArtifactReceipt'
-import { upsertArtifact } from './artifacts'
-import { SaveTextToVault } from './SaveToVault'
-import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type NotesChatTurn, type PodcastEntry, type VoicePending } from './api'
+import { useNoteChat } from './useNoteChat'
+import NoteChatPanel from './NoteChatPanel'
+import { usePodcast } from './usePodcast'
+import NotePodcastPanel from './NotePodcastPanel'
+import NoteCardsPanel from './NoteCardsPanel'
+import { api, streamNotesAi, type CardDraft, type NoteSearchHit, type VoicePending } from './api'
 import { ago } from './reltime'
-import { streamCompose, streamPodcastGenerate, type ArtifactRef, type ReportDraft } from './stream'
+import { streamCompose, type ReportDraft } from './stream'
 
 type AiAction = 'continue' | 'polish' | 'summarize' | 'rewrite'
 type ViewMode = 'edit' | 'split' | 'preview'
@@ -63,11 +63,6 @@ interface RewritePreview {
   text: string
 }
 
-interface ChatMsg {
-  role: 'user' | 'assistant'
-  content: string
-}
-
 const REWRITE_PRESETS: { label: string; instruction: string }[] = [
   { label: '润色', instruction: '润色这一段：修正错别字和语病，表达更流畅清晰，保持原意与篇幅。' },
   { label: '扩展', instruction: '扩写这一段：补充细节、例子或解释，使内容更充实，保持原意与语气。' },
@@ -96,22 +91,7 @@ export default function NotesPage() {
   const [clozeBusy, setClozeBusy] = useState(false)
   const [flash, setFlash] = useState('')
   const [chatOpen, setChatOpen] = useState(false)
-  const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([])
-  // 方向 1：笔记对话里 AI 的回答也能沉淀成产出（与「插入到笔记」并列的第三条路）。
-  const [chatSaved, setChatSaved] = useState<Record<number, ArtifactRef[]>>({})
-  const [chatInput, setChatInput] = useState('')
-  const [chatBusy, setChatBusy] = useState(false)
-  const [podOpen, setPodOpen] = useState(false)
   const [cardsOpen, setCardsOpen] = useState(false)
-  const [podBusy, setPodBusy] = useState(false)
-  const [podMsg, setPodMsg] = useState('')
-  const [podList, setPodList] = useState<PodcastEntry[]>([])
-  const [podHost, setPodHost] = useState('')
-  const [podGuest, setPodGuest] = useState('')
-  const [podVoices, setPodVoices] = useState<string[]>([])
-  const [podScriptId, setPodScriptId] = useState<string | null>(null)
-  const [podSources, setPodSources] = useState<string[]>([])
-  const [podStage, setPodStage] = useState('')
   const [composeBusy, setComposeBusy] = useState(false)
   const [composeMsg, setComposeMsg] = useState('')
   // 最近一次产出的来源信息——喂给质量闭环（这条链路此前没有任何地方记录过满不满意）
@@ -123,13 +103,38 @@ export default function NotesPage() {
   // S1：这次产出吃到了哪份工序（引擎匹配出来的）。手动跑引擎没有运行记录，
   // 所以它是那条路上唯一的窗口——顺带喂给这次 👍/👎（说得出来才带，说不出就是「不知道」）。
   const [composeInjected, setComposeInjected] = useState<string[]>([])
+  const { chatMsgs, setChatMsgs, chatSaved, setChatSaved, chatInput, setChatInput, chatBusy, sendChat, stopChat, chatBottomRef } = useNoteChat({
+    activePath,
+    draft,
+    setError,
+  })
+  const {
+    podOpen,
+    togglePod,
+    setPodOpen,
+    podSources,
+    setPodSources,
+    addPodSource,
+    podHost,
+    setPodHost,
+    podGuest,
+    setPodGuest,
+    podVoices,
+    generatePod,
+    podBusy,
+    podStage,
+    podMsg,
+    podList,
+    removePod,
+    podScriptId,
+    setPodScriptId,
+  } = usePodcast({ activePath, setChatOpen, setCardsOpen })
+
   const abortRef = useRef<AbortController | null>(null)
   const composeAbortRef = useRef<AbortController | null>(null)
-  const chatAbortRef = useRef<AbortController | null>(null)
   const saveTimer = useRef<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const cursorRef = useRef<number | null>(null)
-  const chatBottomRef = useRef<HTMLDivElement | null>(null)
 
   const [searchParams, setSearchParams] = useSearchParams()
   const pathParam = searchParams.get('path')
@@ -596,81 +601,6 @@ export default function NotesPage() {
     await flushSave(next, true)
   }
 
-  // ---- note-side chat ----
-
-  useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ block: 'end' })
-  }, [chatMsgs])
-
-  async function sendChat() {
-    const q = chatInput.trim()
-    if (!q || chatBusy || !activePath) return
-    setChatInput('')
-    setError('')
-    const history: ChatMsg[] = [...chatMsgs]
-    setChatMsgs([...history, { role: 'user', content: q }, { role: 'assistant', content: '' }])
-    setChatBusy(true)
-    const controller = new AbortController()
-    chatAbortRef.current = controller
-    let acc = ''
-    try {
-      await streamNotesAi(
-        'chat',
-        draft,
-        (t) => {
-          acc += t
-          setChatMsgs((prev) => {
-            const next = [...prev]
-            next[next.length - 1] = { ...next[next.length - 1], content: acc }
-            return next
-          })
-        },
-        controller.signal,
-        {
-          question: q,
-          history: history.slice(-6).map((m) => ({ role: m.role, content: m.content }) as NotesChatTurn),
-        }
-      )
-    } catch (e) {
-      if (!controller.signal.aborted) setError(String(e))
-    } finally {
-      setChatBusy(false)
-      chatAbortRef.current = null
-    }
-  }
-
-  function stopChat() {
-    chatAbortRef.current?.abort()
-    setChatBusy(false)
-    chatAbortRef.current = null
-  }
-
-  // ---- two-person podcast ----
-
-  const loadPodcasts = useCallback(async () => {
-    try {
-      const { podcasts } = await api.listPodcasts()
-      setPodList(podcasts)
-    } catch (e) {
-      setPodMsg(String(e))
-    }
-  }, [])
-
-  function togglePod() {
-    const next = !podOpen
-    setPodOpen(next)
-    if (next) {
-      setChatOpen(false)
-      setCardsOpen(false)
-      setPodSources(activePath ? [activePath] : [])
-      if (!podVoices.length)
-        api
-          .ttsVoices()
-          .then((r) => setPodVoices(r.voices))
-          .catch(() => setPodVoices([]))
-      void loadPodcasts()
-    }
-  }
 
   // Cards take a SINGLE note on purpose: merging several sources would blur
   // which file a card came from, and that link is what makes "O = open source"
@@ -681,54 +611,6 @@ export default function NotesPage() {
     if (next) {
       setChatOpen(false)
       setPodOpen(false)
-    }
-  }
-
-  function addPodSource(rel: string) {
-    if (!rel || podSources.includes(rel) || podSources.length >= 5) return
-    setPodSources((prev) => [...prev, rel])
-  }
-
-  async function generatePod() {
-    if (podBusy || !podSources.length) return
-    if (podHost && podGuest && podHost === podGuest) {
-      if (!confirm('主持人与嘉宾音色相同，会听不出对话感。仍要继续吗？')) return
-    }
-    const label = podSources.length > 1 ? `${podSources.length} 篇笔记合并` : `「${podSources[0]}」`
-    if (!confirm(`把${label}生成为双人播客音频？LLM 写脚本 + 逐句配音，约 1-3 分钟。`)) return
-    setPodBusy(true)
-    setPodMsg('')
-    setPodStage('准备中')
-    try {
-      const done = await streamPodcastGenerate(podSources, podHost, podGuest, '', (s) => {
-        setPodStage(
-          s.stage === 'script'
-            ? '写脚本中'
-            : s.stage === 'tts'
-              ? `配音 ${s.index ?? '?'}/${s.total ?? '?'} 句`
-              : s.stage === 'assemble'
-                ? '拼接音频'
-                : s.stage
-        )
-      })
-      if (done.ok) await loadPodcasts()
-      else setPodMsg(done.error || '生成失败')
-    } catch (e) {
-      setPodMsg(String(e))
-    } finally {
-      setPodBusy(false)
-      setPodStage('')
-    }
-  }
-
-  async function removePod(id: string) {
-    if (!confirm('删除这期播客音频？')) return
-    try {
-      await api.deletePodcast(id)
-      setPodScriptId((s) => (s === id ? null : s))
-      await loadPodcasts()
-    } catch (e) {
-      setPodMsg(String(e))
     }
   }
 
@@ -1199,312 +1081,51 @@ export default function NotesPage() {
 
         {/* note-side chat panel */}
         {chatOpen && (
-          <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
-            <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
-              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-                <MessageSquare className="h-4 w-4" />
-                笔记对话
-              </h2>
-              <div className="flex items-center gap-2">
-                {chatMsgs.length > 0 && !chatBusy && (
-                  <button
-                    onClick={() => setChatMsgs([])}
-                    className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
-                  >
-                    清空
-                  </button>
-                )}
-                <button
-                  onClick={() => setChatOpen(false)}
-                  className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 space-y-3 overflow-y-auto px-3 py-3">
-              {chatMsgs.map((m, i) => (
-                <div key={i} className={m.role === 'user' ? 'text-right' : ''}>
-                  <div
-                    className={`inline-block max-w-[92%] whitespace-pre-wrap rounded-lg px-2.5 py-1.5 text-left text-xs leading-relaxed ${
-                      m.role === 'user'
-                        ? 'bg-violet-100 text-violet-800 dark:bg-violet-500/15 dark:text-violet-200'
-                        : 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800/80 dark:text-neutral-200'
-                    }`}
-                  >
-                    {m.content || (chatBusy && i === chatMsgs.length - 1 ? '…' : '')}
-                  </div>
-                  {m.role === 'assistant' && m.content && !chatBusy && (
-                    <>
-                      <div className="mt-1 flex gap-2 text-xs text-neutral-400">
-                        <button
-                          onClick={() => insertAtCaret(m.content)}
-                          className="hover:text-violet-600 dark:hover:text-violet-300"
-                        >
-                          ⤵ 插入到笔记
-                        </button>
-                        <button
-                          onClick={() => navigator.clipboard.writeText(m.content)}
-                          className="hover:text-neutral-600 dark:hover:text-neutral-200"
-                        >
-                          复制
-                        </button>
-                        <SaveTextToVault
-                          content={m.content}
-                          label="存进产出"
-                          title="把这条回答存进 vault 的产出区"
-                          onSaved={(a) =>
-                            setChatSaved((p) => ({ ...p, [i]: upsertArtifact(p[i], a) }))
-                          }
-                        />
-                      </div>
-                      {(chatSaved[i] ?? []).map((a) => (
-                        <div key={a.path} className="mt-1">
-                          <ArtifactReceipt art={a} />
-                        </div>
-                      ))}
-                    </>
-                  )}
-                </div>
-              ))}
-              {!chatMsgs.length && (
-                <p className="py-8 text-center text-xs leading-relaxed text-neutral-400">
-                  基于当前笔记内容提问
-                  <br />
-                  如「给这篇列一个行动清单」
-                </p>
-              )}
-              <div ref={chatBottomRef} />
-            </div>
-            <div className="border-t border-neutral-200/80 p-2 dark:border-neutral-800/80">
-              {/* data-pet-clear：这行钉在右栏（全高侧栏）的底部，侧栏开着的窗口里
-                  它就在右下角——零柒按这个属性给自己让位（见 PetWidget 的 dodge）。 */}
-              <div data-pet-clear className="flex items-end gap-2">
-                <textarea
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      void sendChat()
-                    }
-                  }}
-                  rows={2}
-                  placeholder={activePath ? '问这篇笔记…（Enter 发送）' : '先打开一篇笔记'}
-                  disabled={!activePath}
-                  className="flex-1 resize-none rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-violet-400 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900"
-                />
-                {chatBusy ? (
-                  <button
-                    onClick={stopChat}
-                    className="shrink-0 rounded-md border border-red-300 px-2 py-1.5 text-xs text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-950/30"
-                  >
-                    停止
-                  </button>
-                ) : (
-                  <button
-                    onClick={sendChat}
-                    disabled={!chatInput.trim() || !activePath}
-                    className="shrink-0 rounded-md bg-violet-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-40 dark:bg-violet-500 dark:hover:bg-violet-400"
-                  >
-                    发送
-                  </button>
-                )}
-              </div>
-            </div>
-          </aside>
+          <NoteChatPanel
+            chatMsgs={chatMsgs}
+            setChatMsgs={setChatMsgs}
+            chatSaved={chatSaved}
+            setChatSaved={setChatSaved}
+            chatInput={chatInput}
+            setChatInput={setChatInput}
+            chatBusy={chatBusy}
+            sendChat={sendChat}
+            stopChat={stopChat}
+            activePath={activePath}
+            insertAtCaret={insertAtCaret}
+            setChatOpen={setChatOpen}
+            chatBottomRef={chatBottomRef}
+          />
         )}
         {/* podcast panel */}
         {podOpen && (
-          <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
-            <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2.5 dark:border-neutral-800/80">
-              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-                <Podcast className="h-4 w-4" />
-                双人播客
-              </h2>
-              <button
-                onClick={togglePod}
-                className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
-              >
-                ×
-              </button>
-            </div>
-            <div className="border-b border-neutral-200/80 px-3 py-3 dark:border-neutral-800/80">
-              <p className="text-xs text-neutral-500 dark:text-neutral-400">来源笔记（可合并，最多 5 篇）：</p>
-              <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                {podSources.map((s) => (
-                  <span
-                    key={s}
-                    className="inline-flex max-w-full items-center gap-1 rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
-                  >
-                    <span className="max-w-[180px] truncate">{s}</span>
-                    <button
-                      onClick={() => setPodSources((prev) => prev.filter((x) => x !== s))}
-                      className="text-neutral-400 hover:text-red-500"
-                      title="移除"
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-                {podSources.length < 5 && (
-                  <select
-                    value=""
-                    onChange={(e) => addPodSource(e.target.value)}
-                    className="rounded-full border border-dashed border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 outline-none dark:border-neutral-600 dark:text-neutral-400"
-                  >
-                    <option value="">＋ 添加笔记…</option>
-                    {files
-                      .filter((f) => !podSources.includes(f.path))
-                      .map((f) => (
-                        <option key={f.path} value={f.path}>
-                          {f.path}
-                        </option>
-                      ))}
-                  </select>
-                )}
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <label className="block text-xs text-neutral-400">
-                  主持人音色
-                  <select
-                    value={podHost}
-                    onChange={(e) => setPodHost(e.target.value)}
-                    className="mt-1 w-full rounded-md border border-neutral-200 bg-white px-1.5 py-1 text-xs outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
-                  >
-                    <option value="">跟随设置</option>
-                    {podVoices.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-xs text-neutral-400">
-                  嘉宾音色
-                  <select
-                    value={podGuest}
-                    onChange={(e) => setPodGuest(e.target.value)}
-                    className="mt-1 w-full rounded-md border border-neutral-200 bg-white px-1.5 py-1 text-xs outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
-                  >
-                    <option value="">跟随设置</option>
-                    {podVoices.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <button
-                onClick={generatePod}
-                disabled={podBusy || !podSources.length}
-                className="mt-2 w-full rounded-md bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 py-1.5 text-xs font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
-              >
-                {podBusy ? (
-                  <>
-                    <Podcast className="mr-1 inline h-3 w-3" />
-                    {podStage}…
-                  </>
-                ) : (
-                  <>
-                    <Podcast className="mr-1 inline h-3 w-3" />
-                    生成播客
-                  </>
-                )}
-              </button>
-              {podMsg && <p className="mt-2 text-xs text-red-500">{podMsg}</p>}
-            </div>
-            <div className="flex-1 space-y-3 overflow-y-auto px-3 py-3">
-              {podList.map((p) => (
-                <div
-                  key={p.id}
-                  className="wb-card p-2.5"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="flex items-center gap-1.5 truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
-                        <Headphones className="h-3 w-3 shrink-0 text-neutral-400" />
-                        {p.title}
-                      </p>
-                      <p className="mt-0.5 text-xs text-neutral-400">
-                        {p.turns} 轮 · {Math.floor(p.duration_sec / 60)}分{Math.round(p.duration_sec % 60)}秒 ·{' '}
-                        {p.created_at.replace('T', ' ').slice(5, 16)}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => removePod(p.id)}
-                      className="shrink-0 text-neutral-400 hover:text-red-500"
-                      title="删除"
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <audio controls preload="none" src={`/api/podcast/audio/${p.file}`} className="mt-2 h-8 w-full" />
-                  <button
-                    onClick={() => setPodScriptId((s) => (s === p.id ? null : p.id))}
-                    className="mt-1.5 text-xs text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
-                  >
-                    {podScriptId === p.id ? '收起文稿' : '查看文稿'}
-                  </button>
-                  {podScriptId === p.id && (
-                    <div className="mt-1.5 max-h-60 space-y-1.5 overflow-y-auto">
-                      {p.script.map((t, i) => (
-                        <p key={i} className="text-xs leading-snug">
-                          <span
-                            className={`mr-1 font-medium ${
-                              t.speaker === 'host' ? 'text-amber-600 dark:text-amber-400' : 'text-sky-600 dark:text-sky-400'
-                            }`}
-                          >
-                            {t.speaker === 'host' ? '主持人' : '嘉宾'}：
-                          </span>
-                          <span className="text-neutral-600 dark:text-neutral-300">{t.text}</span>
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-              {!podList.length && (
-                <p className="py-8 text-center text-xs leading-relaxed text-neutral-400">
-                  把笔记变成一期 5 分钟左右的
-                  <br />
-                  主持人 × 嘉宾 对谈音频
-                </p>
-              )}
-            </div>
-          </aside>
+          <NotePodcastPanel
+            files={files}
+            podSources={podSources}
+            setPodSources={setPodSources}
+            addPodSource={addPodSource}
+            podHost={podHost}
+            setPodHost={setPodHost}
+            podGuest={podGuest}
+            setPodGuest={setPodGuest}
+            podVoices={podVoices}
+            generatePod={generatePod}
+            podBusy={podBusy}
+            podStage={podStage}
+            podMsg={podMsg}
+            podList={podList}
+            removePod={removePod}
+            podScriptId={podScriptId}
+            setPodScriptId={setPodScriptId}
+            togglePod={togglePod}
+          />
         )}
-
         {cardsOpen && activePath && (
-          <aside className="hidden w-80 shrink-0 flex-col overflow-hidden border-l border-neutral-200/80 bg-white/60 md:flex dark:border-neutral-800/80 dark:bg-neutral-950/60">
-            <div className="flex items-center justify-between border-b border-neutral-200/80 px-3 py-2 dark:border-neutral-800/80">
-              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
-                <Layers className="h-4 w-4" />
-                出复习卡
-              </h2>
-              <button
-                onClick={() => setCardsOpen(false)}
-                className="text-xs text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
-              >
-                收起
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              <CardMaker
-                sourcePath={activePath}
-                sourceLabel={activePath}
-                compact
-                onSaved={(n) => setSavedAt(n > 0 ? `入库 ${n} 张卡片` : '')}
-              />
-              <Link
-                to="/review"
-                className="mt-3 block text-center text-xs text-neutral-400 hover:text-violet-600 dark:hover:text-violet-300"
-              >
-                去复习页 →
-              </Link>
-            </div>
-          </aside>
+          <NoteCardsPanel
+            activePath={activePath}
+            setCardsOpen={setCardsOpen}
+            setSavedAt={setSavedAt}
+          />
         )}
       </div>
     </>
