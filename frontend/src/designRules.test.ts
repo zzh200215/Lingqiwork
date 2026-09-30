@@ -345,7 +345,10 @@ describe('设计纪律 · 全仓守卫', () => {
       'NoteSidebar.tsx': 1,
       'PetWidget.tsx': 3,
       'ReportPage.tsx': 1,
-      'ReviewPage.tsx': 4,
+      // 2026-09-30：petEvents/listConversations/dashboard 三笔「读不到就不摆」随 RecentPulse
+      // 搬到 RecentPulse.tsx；crosscheck 那笔仍在本体
+      'ReviewPage.tsx': 1,
+      'RecentPulse.tsx': 3,
       'SelfCheckLine.tsx': 1,
       'ThreadsPage.tsx': 1,
       // 2026-09-29：概念轨/概览/历史三面板从 TutorPage 拆出（TutorRecordsPanels），
@@ -394,13 +397,15 @@ describe('设计纪律 · 全仓守卫', () => {
     //
     // 它变多了 = 有人往大文件里继续堆；变少了 = 有人拆了，**这是好事，改这一行就行**。
     // 两种都应该让这条用例红一次，好过让那个数字没人看着。
+    // `ReviewPage.tsx`（1084 行）同日拆出 RecentPulse.tsx（最近三件套）+
+    // ReviewOverview.tsx（概览屏）+ ReviewSummary.tsx（总结屏），本体只剩 768 行
+    // （复习状态机 + 卡片视图 + 键盘 effect）——2026-09-30 移出本清单。
+    // 方向 6 至此收官：台账清零。
     const over = sources()
       .map((s) => ({ name: s.name, n: s.text.replace(/\n$/, '').split('\n').length }))
       .filter((s) => s.n > 1000)
       .map((s) => s.name)
       .sort()
-    expect(over).toEqual([
-      'ReviewPage.tsx',
-    ])
+    expect(over).toEqual([])
   })
 })
