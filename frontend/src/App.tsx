@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import CollabPins, { type PinnedMaterial } from './CollabPins'
 import { upsertArtifact } from './artifacts'
 import SakuraLayer from './SakuraLayer'
@@ -14,7 +14,7 @@ import {
 import { useVoiceInput } from './voice'
 import { MessageRow, toChatMessage, type ChatMessage } from './ChatMessageRow'
 import Welcome from './Welcome'
-import type { SearchHit } from './api'
+import ChatSearchOverlay from './ChatSearchOverlay'
 
 export default function App() {
   return (
@@ -46,7 +46,6 @@ function ChatView() {
   // 氛围粒子（🌸）：二次元个性化的开关，localStorage 记住选择
   const [ambience, setAmbience] = useState(ambienceOn)
   const [convQuery, setConvQuery] = useState('')
-  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [agents, setAgents] = useState<AgentPreset[]>([])
   const [agentId, setAgentId] = useState<number | null>(null)
@@ -122,11 +121,6 @@ function ChatView() {
   useEffect(() => {
     queuedRef.current = queuedMsgs
   }, [queuedMsgs])
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [searchQ, setSearchQ] = useState('')
-  const [searchHits, setSearchHits] = useState<SearchHit[]>([])
-  const [searching, setSearching] = useState(false)
-  const globalSearchRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -150,7 +144,7 @@ function ChatView() {
     localStorage.setItem('useRag', useRag ? '1' : '0')
   }, [useRag])
 
-  // global shortcuts: Ctrl+K focus search, Ctrl+N new chat, Ctrl+P global search
+  // global shortcuts: Ctrl+K focus search, Ctrl+N new chat（Ctrl+P 全局搜索在 ChatSearchOverlay）
   useEffect(() => {
     // tray menu (desktop shell) asks for a new conversation
     const onNewChat = () => void newChat()
@@ -169,47 +163,11 @@ function ChatView() {
       } else if (k === 'n') {
         e.preventDefault()
         newChat()
-      } else if (k === 'p') {
-        e.preventDefault()
-        setSearchOpen(true)
-        setSearchQ('')
-        setSearchHits([])
-        setTimeout(() => globalSearchRef.current?.focus(), 50)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
-
-  // debounced global search
-  useEffect(() => {
-    if (!searchOpen) return
-    const q = searchQ.trim()
-    if (!q) {
-      setSearchHits([])
-      return
-    }
-    const t = setTimeout(() => {
-      setSearching(true)
-      api
-        .globalSearch(q)
-        .then(setSearchHits)
-        .catch(() => setSearchHits([]))
-        .finally(() => setSearching(false))
-    }, 250)
-    return () => clearTimeout(t)
-  }, [searchQ, searchOpen])
-
-  async function jumpToHit(hit: SearchHit) {
-    setSearchOpen(false)
-    // 教学命中跳「学」页深链打开那次会话；教学是另一个模块，不能只切状态
-    if (hit.source === 'tutor') {
-      navigate(`/tutor?session=${hit.ref_id}`)
-      return
-    }
-    await openConversation(hit.ref_id)
-  }
-
   const refreshProviders = useCallback(async () => {
     try {
       setProviders(await api.listProviders())
@@ -1570,71 +1528,8 @@ function ChatView() {
         )}
       </div>
 
-      {/* global search modal (Ctrl+P) */}
-      {searchOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[12vh] backdrop-blur-sm"
-          onClick={() => setSearchOpen(false)}
-        >
-          <div
-            className="w-full max-w-xl animate-slide-up overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-2 border-b border-neutral-100 px-4 py-3 dark:border-neutral-800">
-              <span className="text-neutral-400">🔍</span>
-              <input
-                ref={globalSearchRef}
-                value={searchQ}
-                onChange={(e) => setSearchQ(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') setSearchOpen(false)
-                  if (e.key === 'Enter' && searchHits.length > 0) jumpToHit(searchHits[0])
-                }}
-                placeholder="搜索所有会话内容…  Enter 跳第一条"
-                className="flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
-              />
-              <button onClick={() => setSearchOpen(false)} className="text-xs text-neutral-400 hover:text-neutral-600">
-                Esc
-              </button>
-            </div>
-            <div className="max-h-[50vh] overflow-y-auto">
-              {searching && <p className="px-4 py-4 text-xs text-neutral-400">搜索中…</p>}
-              {!searching && searchQ.trim() && !searchHits.length && (
-                <p className="px-4 py-4 text-xs text-neutral-400">没有找到包含「{searchQ.trim()}」的消息</p>
-              )}
-              {!searchQ.trim() && (
-                <p className="px-4 py-4 text-xs text-neutral-400">
-                  输入关键词搜索全部历史消息（Ctrl+P 随时唤起）
-                </p>
-              )}
-              {searchHits.map((hit) => (
-                <button
-                  key={`${hit.source}-${hit.id}`}
-                  onClick={() => jumpToHit(hit)}
-                  className="block w-full border-b border-neutral-50 px-4 py-3 text-left transition-colors last:border-0 hover:bg-violet-50 dark:border-neutral-800/60 dark:hover:bg-violet-500/10"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-xs font-medium text-neutral-700 dark:text-neutral-200">
-                      {hit.source === 'tutor' && <span className="mr-1 text-amber-600 dark:text-amber-400">🎓</span>}
-                      {hit.title}
-                    </span>
-                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
-                      hit.source === 'tutor'
-                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
-                        : hit.role === 'user'
-                          ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300'
-                          : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
-                    }`}>
-                      {hit.source === 'tutor' ? '教学' : hit.role === 'user' ? '我' : 'AI'}
-                    </span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-neutral-400">{hit.excerpt}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 全局搜索遮罩（Ctrl+P）：整体在 ChatSearchOverlay */}
+      <ChatSearchOverlay openConversation={openConversation} />
     </main>
   )
 }
