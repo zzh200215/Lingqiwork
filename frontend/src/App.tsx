@@ -1,14 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import CollabPins, { type PinnedMaterial } from './CollabPins'
 import { upsertArtifact } from './artifacts'
 import SakuraLayer from './SakuraLayer'
 import { api, type AgentPreset, type Conversation, type PromptItem, type ProviderConfig } from './api'
 import {
   streamChat,
-  streamCollab,
   type ArtifactRef,
-  type CollabStep,
   type SourceRef,
 } from './stream'
 import { useVoiceInput } from './voice'
@@ -16,6 +13,8 @@ import { MessageRow, toChatMessage, type ChatMessage } from './ChatMessageRow'
 import Welcome from './Welcome'
 import ChatSearchOverlay from './ChatSearchOverlay'
 import ConversationList from './ConversationList'
+import { useCollabChat } from './useCollabChat'
+import CollabPanel from './CollabPanel'
 
 export default function App() {
   return (
@@ -49,12 +48,6 @@ function ChatView() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [agents, setAgents] = useState<AgentPreset[]>([])
   const [agentId, setAgentId] = useState<number | null>(null)
-  const [collabOpen, setCollabOpen] = useState(false)
-  const [collabPick, setCollabPick] = useState<number[]>([])
-  const [collabPattern, setCollabPattern] = useState<'pipeline' | 'review' | 'fanout'>('pipeline')
-  // 「这一轮读哪几份」（材料清单的第二个来源，2026-09-22）：只有 fanout 吃材料清单，
-  // 所以这一栏也只在 fanout 下露出来（后端对别的模式会记一行"钉了不生效"，见 agents.py）。
-  const [collabPins, setCollabPins] = useState<PinnedMaterial[]>([])
   const [followups, setFollowups] = useState<string[]>([])
   const [memorizedNote, setMemorizedNote] = useState<string | null>(null)
   const memorizedTimer = useRef<number | null>(null)
@@ -595,104 +588,21 @@ function ChatView() {
     await runStream(convId, text, false, files)
   }
 
-  // ---- multi-agent collaboration ----
-
-  async function startCollab() {
-    const goal = input.trim()
-    if (!goal || busy) return
-    if (collabPick.length < 2) {
-      setError('协作至少选择 2 个智能体（设置页可创建）')
-      return
-    }
-    setInput('')
-    setCollabOpen(false)
-    let convId = activeId
-    if (!convId) {
-      if (!currentModel) {
-        setError('请先在设置页配置 provider 和模型')
-        return
-      }
-      const c = await api.createConversation(currentModel)
-      convId = c.id
-      setActiveId(c.id)
-      await refreshConversations()
-    }
-    await runCollab(convId, goal)
-  }
-
-  async function runCollab(convId: number, goal: string) {
-    setError('')
-    setMessages((prev) => [...prev, { role: 'user', content: goal }, { role: 'assistant', content: '', streaming: true }])
-    const controller = new AbortController()
-    abortRef.current = controller
-    setBusy(true)
-    let acc = ''
-    let raf = 0
-    // A2 的逐步账：流式事件一条条来，攒在这里再挂到那条消息上（与 `sources` 同一个写法）
-    const steps: CollabStep[] = []
-    const flush = () => {
-      raf = 0
-      setMessages((prev) => {
-        const next = [...prev]
-        const last = next[next.length - 1]
-        if (last.role === 'assistant') next[next.length - 1] = { ...last, content: acc }
-        return next
-      })
-    }
-    try {
-      await streamCollab(
-        convId,
-        goal,
-        collabPick,
-        collabPattern,
-        useRag,
-        // 钉的材料原样发：只有 fanout 吃，而且后端会跳过读步打不开的那些
-        collabPins.map((p) => p.spec),
-        {
-          onDelta: (t) => {
-            acc += t
-            if (!raf) raf = requestAnimationFrame(flush)
-          },
-          onSources: (sources) => {
-            setMessages((prev) => {
-              const next = [...prev]
-              const idx = next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
-              if (idx !== -1) next[idx] = { ...next[idx], sources }
-              return next
-            })
-          },
-          // A2 的逐步账：每跑完一步来一条。**照抄后端那份事实**（谁/几轮/几次工具/几秒/
-          // 有没有烧光），界面不聚合、不加权——那会与后端那笔账分叉。
-          onStep: (fact) => {
-            steps.push(fact)
-            setMessages((prev) => {
-              const next = [...prev]
-              const idx = next.findLastIndex((m) => m.role === 'assistant' && m.streaming)
-              if (idx !== -1) next[idx] = { ...next[idx], collabSteps: [...steps] }
-              return next
-            })
-          },
-          onError: (msg) => setError(msg),
-          onDone: () => {},
-        },
-        controller.signal
-      )
-    } catch (e) {
-      if (!controller.signal.aborted) setError(String(e))
-    } finally {
-      if (raf) cancelAnimationFrame(raf)
-      flush()
-      setMessages((prev) => {
-        const next = [...prev]
-        const last = next[next.length - 1]
-        if (last.role === 'assistant') next[next.length - 1] = { ...last, streaming: false }
-        return next
-      })
-      setBusy(false)
-      abortRef.current = null
-      await refreshConversations()
-    }
-  }
+  // ---- multi-agent collaboration：选择状态与两条处理器在 useCollabChat ----
+  const { collabOpen, setCollabOpen, collabPick, setCollabPick, collabPattern, setCollabPattern, collabPins, setCollabPins, startCollab } = useCollabChat({
+    input,
+    setInput,
+    busy,
+    setBusy,
+    setError,
+    activeId,
+    setActiveId,
+    currentModel,
+    refreshConversations,
+    setMessages,
+    abortRef,
+    useRag,
+  })
 
   async function regenerate() {
     if (busy || !activeId) return
@@ -1250,94 +1160,20 @@ function ChatView() {
               📎
             </button>
           </div>
-          <button
-            onClick={() => setCollabOpen((v) => !v)}
-            title="智能体协作：选 2-4 个智能体按流水线或评审回路协作完成输入框里的目标"
-            className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border text-lg transition-all ${
-              collabOpen
-                ? 'border-violet-400 bg-violet-50 text-violet-600 dark:border-violet-500/50 dark:bg-violet-500/10'
-                : 'border-neutral-300 bg-white text-neutral-400 hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50'
-            }`}
-          >
-            👥
-          </button>
-          {collabOpen && (
-            <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
-              <p className="border-b border-neutral-100 px-3 py-1.5 text-xs uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
-                智能体协作 · 以输入框内容为目标
-              </p>
-              <div className="flex gap-1.5 px-3 pt-2.5">
-                {(
-                  [
-                    ['pipeline', '流水线', '依次接力完成'],
-                    ['review', '评审回路', '初稿→评审→修订'],
-                    ['fanout', '并行分派', '各自独立做→汇总'],
-                  ] as const
-                ).map(([id, label, hint]) => (
-                  <button
-                    key={id}
-                    onClick={() => setCollabPattern(id)}
-                    className={`flex-1 rounded-lg border px-2 py-1.5 text-left transition-colors ${
-                      collabPattern === id
-                        ? 'border-violet-400 bg-violet-50 dark:border-violet-500/50 dark:bg-violet-500/10'
-                        : 'border-neutral-200 hover:border-violet-300 dark:border-neutral-700'
-                    }`}
-                  >
-                    <span className="block text-xs font-medium text-neutral-700 dark:text-neutral-200">{label}</span>
-                    <span className="block text-xs text-neutral-400">{hint}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="max-h-44 overflow-y-auto px-3 py-2">
-                <p className="pb-1 text-xs text-neutral-400">选择 {collabPattern === 'review' ? '2 个（起草者与评审者）' : '2-4 个'}智能体：</p>
-                {collabPattern === 'fanout' && (
-                  <p className="pb-1 text-xs text-neutral-400">
-                    每个智能体各做一版（互不依赖，服务端并行跑），最后一个负责汇总
-                  </p>
-                )}
-                {agents.length ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {agents
-                      .filter((a) => a.enabled)
-                      .map((a) => {
-                        const picked = collabPick.includes(a.id)
-                        return (
-                          <button
-                            key={a.id}
-                            onClick={() => setCollabPick((p) => (picked ? p.filter((x) => x !== a.id) : [...p, a.id]))}
-                            className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
-                              picked
-                                ? 'border-violet-400 bg-violet-100 text-violet-700 dark:border-violet-500/50 dark:bg-violet-500/15 dark:text-violet-300'
-                                : 'border-neutral-200 text-neutral-500 hover:border-violet-300 dark:border-neutral-700 dark:text-neutral-400'
-                            }`}
-                          >
-                            {a.avatar} {a.name}
-                          </button>
-                        )
-                      })}
-                  </div>
-                ) : (
-                  <p className="py-2 text-xs text-neutral-400">还没有智能体 — 在设置页「智能体预设」创建</p>
-                )}
-              </div>
-              {collabPattern === 'fanout' && (
-                <CollabPins pins={collabPins} onChange={setCollabPins} />
-              )}
-              <div className="flex items-center gap-2 border-t border-neutral-100 px-3 py-2 dark:border-neutral-800">
-                <span className="text-xs leading-snug text-neutral-400">
-                  已选 {collabPick.length} 个 · 评审回路用前 2 个
-                  {collabPattern === 'fanout' && ' · 并行分派：第 1 个负责汇总'}
-                </span>
-                <button
-                  onClick={startCollab}
-                  disabled={busy || !input.trim() || collabPick.length < 2}
-                  className="ml-auto rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-40 dark:bg-violet-500"
-                >
-                  ▶ 开始协作
-                </button>
-              </div>
-            </div>
-          )}
+          <CollabPanel
+            collabOpen={collabOpen}
+            setCollabOpen={setCollabOpen}
+            collabPattern={collabPattern}
+            setCollabPattern={setCollabPattern}
+            collabPick={collabPick}
+            setCollabPick={setCollabPick}
+            collabPins={collabPins}
+            setCollabPins={setCollabPins}
+            agents={agents}
+            input={input}
+            busy={busy}
+            startCollab={startCollab}
+          />
           <button
             onClick={() => void captureScreen()}
             title="截取屏幕/窗口进行问答（截图会附加为图片）"
