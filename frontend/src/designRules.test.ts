@@ -341,7 +341,8 @@ describe('设计纪律 · 全仓守卫', () => {
       'DashboardDecisions.tsx': 1,
       'DashboardPage.tsx': 3,
       'Layout.tsx': 2,
-      'NotesPage.tsx': 1,
+      // 2026-09-30：notesBriefing 那笔静默 catch 随文件列表侧栏搬到 NoteSidebar.tsx
+      'NoteSidebar.tsx': 1,
       'PetWidget.tsx': 3,
       'ReportPage.tsx': 1,
       'ReviewPage.tsx': 4,
@@ -387,13 +388,18 @@ describe('设计纪律 · 全仓守卫', () => {
     // 两种都应该让这条用例红一次，好过让那个数字没人看着。
     // `CompanionPage.tsx`（1045 行）同日拆出 TeachPane.tsx（394 行，教学面板）+
     // companionShared.ts，本体只剩 658 行（五个 pane 组合）——2026-09-30 移出本清单。
+    // `NotesPage.tsx`（1512 行）分两刀拆出 useNoteChat/NoteChatPanel、
+    // usePodcast/NotePodcastPanel、NoteCardsPanel（右栏三面板）与 NoteSidebar
+    // （文件列表侧栏，随栏走的简报/搜索/语音分诊），本体只剩 973 行编排——移出本清单。
+    //
+    // 它变多了 = 有人往大文件里继续堆；变少了 = 有人拆了，**这是好事，改这一行就行**。
+    // 两种都应该让这条用例红一次，好过让那个数字没人看着。
     const over = sources()
       .map((s) => ({ name: s.name, n: s.text.replace(/\n$/, '').split('\n').length }))
       .filter((s) => s.n > 1000)
       .map((s) => s.name)
       .sort()
     expect(over).toEqual([
-      'NotesPage.tsx',
       'ReviewPage.tsx',
     ])
   })
