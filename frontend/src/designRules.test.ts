@@ -327,7 +327,9 @@ describe('设计纪律 · 全仓守卫', () => {
       if (n) counts[s.name] = n
     }
     expect(counts).toEqual({
-      'App.tsx': 4,
+      // 2026-09-30：listPrompts/listNotes 那两笔随附件/联想子系统搬到 useAttachments.ts，
+      // 移动不是消灭，照实记到新文件名下
+      'App.tsx': 2,
       'AssetsPage.tsx': 4,
       'CardList.tsx': 1,
       'CommandPalette.tsx': 3,
@@ -351,6 +353,8 @@ describe('设计纪律 · 全仓守卫', () => {
       'EnginePulse.tsx': 2,
       'EvalNightlyCard.tsx': 1,
       'workData.ts': 1,
+      // 2026-09-30：App.tsx 的提示词/笔记清单两笔静默 catch 随 useAttachments 搬来
+      'useAttachments.ts': 2,
     })
   })
 
