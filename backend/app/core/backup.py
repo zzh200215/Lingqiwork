@@ -10,7 +10,9 @@ the whole path and will tell you if any of this drifts.
 """
 import json
 import logging
+import os
 import sqlite3
+import subprocess
 import tempfile
 import zipfile
 from datetime import datetime
@@ -25,6 +27,46 @@ DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP = 7
 _PREFIX = "workbench-backup-"
 _SUFFIX = ".zip"
+# T8：backup_removable 开着时，归档落第一块 USB 外接盘的这个子目录。
+REMOVABLE_DIRNAME = "workbench-backup"
+
+
+class NoRemovableDrive(RuntimeError):
+    """backup_removable 模式下当前没有任何 USB 外接盘——计划任务跳过、手动跑收到人话。"""
+
+
+def removable_drives() -> list[str]:
+    """USB 总线挂载的盘符（U 盘/移动硬盘/SSD），如 ["E:\\"]；非 Windows 恒 []。
+
+    GetDriveTypeW 只认得出 U 盘（DRIVE_REMOVABLE）——移动硬盘/SSD 报 FIXED 会漏，
+    所以反查 Win32_LogicalDiskToPartition → Win32_DiskDrive(InterfaceType='USB')。
+    PowerShell 冷启动 1-2 秒，对每天一次的备份可承受。探测失败按「没插盘」处理：
+    少备一次有日志可查，比挂掉强。
+    """
+    if os.name != "nt":
+        return []
+    script = (
+        "$usb = @(Get-CimInstance Win32_DiskDrive -Filter \"InterfaceType='USB'\""
+        " | Select-Object -ExpandProperty Index);"
+        "if ($usb.Count -eq 0) { exit 0 };"
+        "Get-CimInstance Win32_LogicalDiskToPartition | ForEach-Object {"
+        "$p = [wmi]$_.Antecedent; $l = [wmi]$_.Dependent;"
+        "if ($usb -contains $p.DiskIndex) { $l.DeviceID } }"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        log.warning("USB 外接盘探测失败（按没插盘处理）", exc_info=True)
+        return []
+    if r.returncode != 0:
+        log.warning("USB 外接盘探测返回 %s: %s", r.returncode, (r.stderr or "").strip()[:150])
+        return []
+    return sorted({line.strip() for line in r.stdout.splitlines() if line.strip()})
 
 # Everything else under data/ and why it is acceptable to lose. Written into the
 # manifest so a restore three months from now does not have to guess which dead
@@ -40,11 +82,36 @@ NOT_INCLUDED = {
 }
 
 
-def backup_dir() -> Path:
+def _fixed_dir() -> Path:
     raw = (load_config().get("backup_dir") or "").strip()
     d = Path(raw).expanduser() if raw else DEFAULT_BACKUP_DIR
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def backup_landing() -> Path:
+    """create_backup 真正用的落点。backup_removable 开着 → 第一块 USB 外接盘；
+    没插盘抛 NoRemovableDrive（调度跳过 / 手动跑收到人话），绝不退回正本同盘。
+    关着 → 旧行为：配置的 backup_dir 或项目下 backups/。"""
+    if load_config().get("backup_removable"):
+        drives = removable_drives()
+        if not drives:
+            raise NoRemovableDrive(
+                "没找到 USB 外接盘——插上盘再备份，或在设置里改用固定备份目录"
+            )
+        d = Path(drives[0]) / REMOVABLE_DIRNAME
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    return _fixed_dir()
+
+
+def backup_dir() -> Path:
+    """展示/列表用的**宽容**落点：外接盘没插时退回固定目录，列表页不能 500。
+    「现在到底落哪儿」以 create_backup 用的 backup_landing() 为准。"""
+    try:
+        return backup_landing()
+    except NoRemovableDrive:
+        return _fixed_dir()
 
 
 def _keep() -> int:
@@ -55,8 +122,12 @@ def _keep() -> int:
 
 
 def _archives() -> list[Path]:
-    """Our own archives in the backup dir, newest first."""
-    d = backup_dir()
+    """Our own archives in the (tolerant) backup dir, newest first."""
+    return _archives_in(backup_dir())
+
+
+def _archives_in(d: Path) -> list[Path]:
+    """Our own archives in the given dir, newest first."""
     items = [p for p in d.glob(f"{_PREFIX}*{_SUFFIX}") if p.is_file()]
     items.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
     return items
@@ -95,7 +166,7 @@ def _snapshot_db(tmp: Path) -> Path | None:
 
 def create_backup(reason: str = "manual") -> dict:
     """Write one archive, then prune to the configured retention count."""
-    bdir = backup_dir()
+    bdir = backup_landing()
     base = f"{_PREFIX}{datetime.now():%Y%m%d-%H%M%S}"
     out = bdir / f"{base}{_SUFFIX}"
     n = 2
@@ -172,18 +243,30 @@ def prune() -> list[str]:
 
 
 def list_backups() -> dict:
-    items = [
-        {
-            "name": p.name,
-            "size": p.stat().st_size,
-            "created_at": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
-        }
-        for p in _archives()
-    ]
+    """外接盘模式没插盘时**不报错**：归档本来就在那块盘上，返回空的清单
+    加一句 `removable_missing` 人话，让设置页照实说「为什么是空的」。"""
+    try:
+        landing = backup_landing()
+        missing = ""
+    except NoRemovableDrive as e:
+        landing, missing = None, str(e)
+    items = (
+        [
+            {
+                "name": p.name,
+                "size": p.stat().st_size,
+                "created_at": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
+            }
+            for p in _archives_in(landing)
+        ]
+        if landing
+        else []
+    )
     from app.core import scheduler as sched
 
     return {
-        "dir": str(backup_dir()),
+        "dir": str(landing) if landing else "",
+        "removable_missing": missing,
         "keep": _keep(),
         "next_run": sched.next_run("auto_backup"),
         "backups": items,
@@ -217,5 +300,8 @@ async def _run() -> None:
     try:
         result = await asyncio.to_thread(create_backup, "scheduled")
         log.info("scheduled backup result: %s", result)
+    except NoRemovableDrive as e:
+        # T8：外接盘没插是**正常状态**不是故障——这一轮安静跳过，留一行日志。
+        log.info("scheduled backup skipped: %s", e)
     except Exception:  # noqa: BLE001 - a failed run must not kill the scheduler
         log.exception("scheduled backup failed")

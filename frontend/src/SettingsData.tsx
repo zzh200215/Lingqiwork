@@ -85,13 +85,22 @@ export default function SettingsData({
             />
             <span className="text-neutral-500">份（超出自动滚动删除）</span>
           </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={prefs.backup_removable}
+              onChange={(e) => setPrefs({ ...prefs, backup_removable: e.target.checked })}
+            />
+            落到外接盘（自动探测 U 盘/移动硬盘，插上才备；正本与备份不同盘，盘坏不两失）
+          </label>
           <label className="flex flex-col gap-1 text-sm">
-            备份目录（留空 = 项目下 backups/）
+            备份目录（留空 = 项目下 backups/；勾了外接盘时忽略此项）
             <input
               value={prefs.backup_dir}
+              disabled={prefs.backup_removable}
               onChange={(e) => setPrefs({ ...prefs, backup_dir: e.target.value })}
               placeholder={backups?.dir || 'D:\\TP\\A\\backups'}
-              className={inputCls}
+              className={`${inputCls} disabled:opacity-40`}
             />
           </label>
           <div className="flex flex-wrap items-center gap-3">
@@ -109,6 +118,9 @@ export default function SettingsData({
           </div>
           {backupMsg && <div className="text-xs text-neutral-600 dark:text-neutral-300">{backupMsg}</div>}
           <div className="flex flex-col gap-1">
+            {backups?.removable_missing && (
+              <div className="text-xs text-amber-600 dark:text-amber-400">🔌 {backups.removable_missing}</div>
+            )}
             {(backups?.backups ?? []).length === 0 && (
               <div className="text-xs text-neutral-400">还没有备份</div>
             )}

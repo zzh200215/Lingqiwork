@@ -44,6 +44,7 @@ export type WorkbenchPrefs = {
     backup_time: string
     backup_keep: number
     backup_dir: string
+    backup_removable: boolean
     image_enabled: boolean
     image_api: string
     image_provider: string

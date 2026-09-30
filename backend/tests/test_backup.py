@@ -249,3 +249,41 @@ def test_a_backup_dir_inside_the_vault_does_not_archive_the_archives(monkeypatch
         names = z.namelist()
     assert not [n for n in names if n.endswith(".zip")], names
     assert second["vault_files"] == 3
+
+
+# ---------- T8：外接盘落点（backup_removable） ----------
+
+
+def test_removable_mode_lands_on_first_usb_drive(monkeypatch):
+    _cfg(backup_removable=True)
+    usb = _TMP / "usb1"
+    usb.mkdir(exist_ok=True)
+    monkeypatch.setattr(backup, "removable_drives", lambda: [str(usb)])
+    d = backup.backup_landing()
+    assert d == usb / backup.REMOVABLE_DIRNAME
+    assert d.is_dir(), "落点目录应自动创建"
+    assert backup.backup_dir() == d, "盘在时宽容解析与真实落点一致"
+
+
+def test_removable_mode_without_a_drive_skips_instead_of_failing(monkeypatch):
+    _cfg(backup_removable=True)
+    monkeypatch.setattr(backup, "removable_drives", lambda: [])
+    with pytest.raises(backup.NoRemovableDrive):
+        backup.backup_landing()
+    with pytest.raises(backup.NoRemovableDrive):
+        backup.create_backup("manual")  # 手动跑拿到人话（路由转 400），绝不退回正本同盘
+    out = backup.list_backups()
+    assert out["removable_missing"], "列表页要照实说为什么是空的"
+    assert out["backups"] == []
+    assert out["dir"] == ""
+
+
+def test_removable_mode_off_keeps_the_old_fixed_behaviour(monkeypatch):
+    fixed = _TMP / "fixed-bak"
+    _cfg(backup_dir=str(fixed))
+
+    def _must_not_probe():
+        raise AssertionError("开关关着就不该发起 USB 探测")
+
+    monkeypatch.setattr(backup, "removable_drives", _must_not_probe)
+    assert backup.backup_landing() == fixed

@@ -71,6 +71,7 @@ class PrefsIn(BaseModel):
     backup_time: str | None = None
     backup_keep: int | None = None
     backup_dir: str | None = None
+    backup_removable: bool | None = None
     image_enabled: bool | None = None
     image_api: str | None = None
     image_provider: str | None = None

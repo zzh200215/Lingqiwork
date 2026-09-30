@@ -98,6 +98,7 @@ export default function SettingsPage() {
         backup_time: p.backup_time || '03:00',
         backup_keep: p.backup_keep ?? 7,
         backup_dir: p.backup_dir || '',
+        backup_removable: p.backup_removable ?? false,
         image_enabled: p.image_enabled ?? true,
         image_api: p.image_api || 'dashscope',
         image_provider: p.image_provider || '',

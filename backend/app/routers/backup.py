@@ -21,6 +21,9 @@ async def list_backups():
 async def run_backup():
     try:
         return await asyncio.to_thread(backup.create_backup, "manual")
+    except backup.NoRemovableDrive as e:
+        # T8：手动点「立即备份」而外接盘没插——给人话，不是 500 堆栈。
+        raise HTTPException(400, str(e)) from e
     except OSError as e:
         raise HTTPException(500, f"备份失败: {e}") from e
 

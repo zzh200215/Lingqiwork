@@ -59,6 +59,9 @@ _DEFAULTS: dict[str, Any] = {
     "backup_time": "03:00",
     "backup_keep": 7,  # rolling retention count
     "backup_dir": "",  # "" = <project>/backups
+    # T8：开着则忽略 backup_dir，自动落「第一块 USB 外接盘的 workbench-backup/」；
+    # 没插盘的那次计划备份安静跳过。正本与备份不同盘，盘坏不两失。
+    "backup_removable": False,
     "image_enabled": True,  # expose the image_gen tool to the model
     "image_api": "dashscope",  # dashscope (multimodal-generation) | openai (/images/generations)
     "image_provider": "",  # provider name whose key/base_url to use; "" = first enabled
