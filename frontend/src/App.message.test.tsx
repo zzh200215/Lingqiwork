@@ -5,7 +5,7 @@
 // **`null` 不许变成空数组**、其余字段照抄）。
 import { describe, expect, it } from 'vitest'
 
-import { toChatMessage } from './App'
+import { toChatMessage } from './ChatMessageRow'
 import type { Message } from './api'
 
 const base: Message = {
