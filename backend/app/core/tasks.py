@@ -777,6 +777,8 @@ async def _fire_chain(
 # 本进程是**单事件循环**（调度器 / 接口 / 链 / watch 全跑在同一个 loop 上），用一把按
 # `task_id` 的 `asyncio.Lock` 把「查 running + 插 running」这段串起来即可根除：锁内再确认
 # 一次，已有 running 就返回 None（本趟让路，run_task 按 skipped 收场，语义同早期跳过）。
+# WONTFIX（方案 7.1-6 定论）：此 dict 按 task_id 键、无清理——键空间有界（任务总数）、
+# 每锁极小，而清理要引入锁竞态，得不偿失。
 _RUN_LOCKS: dict[int, asyncio.Lock] = {}
 
 
