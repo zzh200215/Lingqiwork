@@ -6,9 +6,11 @@ expected at ~/.cache/huggingface/hub/models--BAAI--bge-reranker-base.
 
 **处置更新（2026-09-28，用户决策）**：不做「30 天用量裁决删留」，**本功能保留**——
 转入优化升级路线；设置页已有 `rerank_enabled` 开关，要开它随时可以。
-开之前仍建议先跑一次「rerank on/off」的检索对照（金标在
-`backend/evals/retrieval/`，跑法见 `core/evals.run_eval`），拿数字说话——
-CPU 上每次查询重排 20 候选的延迟成本，必须换得回可测的召回/排序收益。
+
+**对照已跑（2026-09-30，`backend/rerank_ab.py`，34 题在库金标）**：rerank 开
+hit@1 0.618→0.588、MRR 0.721→0.702（11 题排序变化，6 升 5 降 1 跌出），耗时
+4s→512s（≈15s/题的 CPU 重排）。**排序收益为负、延迟成本巨大——保持默认关**；
+要翻案先换更小的重排模型或减候选池，再跑同一脚本复测。
 （历史：2026-09-27 CTO review #3 曾定「封存观察、零使用则删除裁决」，已被上述决策取代。）
 """
 import logging
