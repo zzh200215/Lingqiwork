@@ -40,6 +40,36 @@ log = logging.getLogger(__name__)
 _VAULT_ROOT = VAULT_DIR.resolve()
 _OUTPUT_LIMIT = 40000  # chars, keep tool output from blowing up the context
 
+# P2-2：server 名就是路由的一部分（工具名拼成 `{server}__{tool}`），撞上内建
+# 命名空间的名字会让整只 server 的工具静默不可达——`call_tool` 的内建/pet 分支
+# 按单下划线前缀分发，先于 MCP 分支命中。四条红线以 `server_name_problem` 为
+# 唯一出处：设置页保存时显式报错，reload 时对绕过设置页的手改配置记警告。
+_BUILTIN_NS = ("vault", "memory", "skill", "pet")
+
+
+def server_name_problem(name: str) -> str:
+    """可用返回 ""，否则返回人话原因。规则 = 路由的真实形状，不另造规范。
+
+    · 空名 / 首尾空白 → 工具名带空格，OpenAI 兼容接口直接拒收 function name；
+    · 含 "__" → `partition("__")` 从最左切，server/tool 会切错位；
+    · 等于 vault/memory/skill/pet 或以其加 "_" 开头 → 这个 server 的所有
+      `{name}__*` 工具都会被内建/pet 前缀分支抢走，最终报「未知工具」。
+      （fetch_url 等精确名不可能撞：`{server}__{tool}` 必含双下划线。）
+    """
+    if not name or not name.strip():
+        return "server 名不能为空"
+    if name != name.strip():
+        return "server 名不能带首尾空格"
+    if "__" in name:
+        return 'server 名不能包含 "__"：工具名按 {server}__{tool} 拼接，双下划线是路由分隔符'
+    for ns in _BUILTIN_NS:
+        if name == ns or name.startswith(ns + "_"):
+            return (
+                f"server 名不能用「{ns}」或「{ns}_」开头：内建工具占用单下划线 {ns}_* "
+                f"命名空间，这个 server 的 {name}__* 工具会全部不可达"
+            )
+    return ""
+
 # 工具跑完想「额外告诉界面一件事」时的旁路。
 #
 # 为什么不用返回值：`call_tool -> str` 是**给模型看**的形状，塞 JSON 进去等于让模型
@@ -1025,6 +1055,11 @@ class McpManager:
             servers = [s for s in load_config().get("mcp_servers", []) if s.get("enabled", True)]
             for sv in servers:
                 name = sv.get("name") or "?"
+                problem = server_name_problem(name)
+                if problem:
+                    # P2-2：手改 config.json 绕过了设置页校验的，在这里留一句日志——
+                    # 别让「连得上但工具全不可达」无人知晓。
+                    log.warning("MCP server %r 命名不可用：%s（其工具将不可达）", name, problem)
                 try:
                     count = await self._connect(sv)
                     self._status[name] = {"ok": True, "tools": count, "error": None}

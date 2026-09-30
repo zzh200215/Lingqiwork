@@ -118,3 +118,42 @@ def test_the_selection_symptom_lives_in_the_a0_report_not_here():
 def test_the_manager_is_reachable_offline():
     """这条测试**不连任何 MCP 服务器**：`inventory()` 读的是内存里那份清单。"""
     assert asyncio.run(asyncio.sleep(0)) is None
+
+
+def test_server_names_that_would_shadow_builtins_are_rejected():
+    """P2-2：撞内建命名空间/路由分隔符的名字在保存前就被拒——不靠「工具静默消失」暴露。
+
+    规则与 `call_tool` 的真实形状一一对应：
+    · vault/memory/skill/pet 及其 `_` 前缀族 → 被内建/pet 分支抢走；
+    · 含 `__` → `{server}__{tool}` 从最左切分，server/tool 切错位；
+    · 空名/首尾空白 → 拼出的 function name 带 == 空，OpenAI 兼容接口不收。
+    """
+    from app.core.mcp import server_name_problem
+
+    for bad in ("vault", "memory", "skill", "pet", "vault_extra", "memory_", "pet_x", "a__b", "", "   ", " x", "x "):
+        assert server_name_problem(bad), f"{bad!r} 应该被拒，实际放行"
+    for ok in ("my-server", "workbench_memory", "tools2", "fetch", "fetch_url_extra"):
+        assert server_name_problem(ok) == "", f"{ok!r} 应该可用，实际被拒：{server_name_problem(ok)!r}"
+    # 「fetch」放行是有意的：精确名（fetch_url）不可能被 `{server}__{tool}` 撞出，
+    # 中间必含双下划线；会被前缀分支抢走的只有单下划线三族 + pet_。
+
+
+def test_save_mcp_rejects_reserved_names_with_422(monkeypatch):
+    """P2-2 的「显式报错」落点：PUT /settings/mcp 对撞名 server 返回 422 带人话，
+    不写一行配置（Pydantic 校验在 save_config 之前挡下）。"""
+    from fastapi.testclient import TestClient
+
+    from app.core import auth
+
+    monkeypatch.setenv("WB_API_TOKEN", "test-token-123")
+    monkeypatch.setattr(auth, "_cached", None)
+    from app.main import app
+
+    client = TestClient(app)
+    r = client.put(
+        "/api/settings/mcp",
+        headers={auth.HEADER: "test-token-123"},
+        json={"servers": [{"name": "vault", "type": "stdio", "command": "whatever"}]},
+    )
+    assert r.status_code == 422, r.text
+    assert "vault" in r.text and "不可达" in r.text

@@ -10,7 +10,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.mcp import mcp_manager
+from app.core.mcp import mcp_manager, server_name_problem
 from app.core.prefs import load_config, save_config
 from app.core.secrets import SECRET_KEYS
 from app.db import get_db
@@ -309,6 +309,16 @@ class McpServerIn(BaseModel):
     args: list[str] = []
     url: str = ""
     enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _name_must_route(cls, v: str) -> str:
+        # P2-2 的「显式报错」落点：撞内建命名空间/路由分隔符的名字在这里 422，
+        # 不等这只 server 的工具静默消失才被发现。
+        problem = server_name_problem(v)
+        if problem:
+            raise ValueError(problem)
+        return v
 
 
 class McpServersIn(BaseModel):
