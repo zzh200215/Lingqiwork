@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { QualityGroup } from './api'
-import { injectSplit } from './SettingsPage'
+import { injectSplit } from './SettingsEval'
 
 function group(split: Partial<QualityGroup['split']>): QualityGroup {
   return {
