@@ -239,7 +239,7 @@ export default function KbEvalTab({ active, onCounts }: Props) {
           <button
             onClick={runEvalNow}
             disabled={running || !evalItems.length}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:from-neutral-200 disabled:to-neutral-200 disabled:text-neutral-400 dark:disabled:from-neutral-800 dark:disabled:to-neutral-800"
+            className="wb-btn-primary px-3 py-1.5 text-sm"
           >
             {running ? '评估中…' : '运行评估'}
           </button>

@@ -81,7 +81,7 @@ export default function NoteSidebar(props: {
             <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">我的笔记</h2>
             <button
               onClick={newNote}
-              className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-2 py-1 text-xs font-medium text-white transition-all hover:brightness-110"
+              className="wb-btn-primary px-2 py-1 text-xs"
             >
               ＋ 新建
             </button>

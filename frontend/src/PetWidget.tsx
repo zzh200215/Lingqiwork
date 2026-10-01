@@ -658,7 +658,7 @@ export default function PetWidget() {
       >
         {/* speech bubble above the sprite：主动提醒（带去处）优先，系统气泡让位 */}
         {nudge && !open ? (
-          <div className="pet-bubble pointer-events-auto mb-2 max-w-[280px] rounded-lg rounded-br-sm border border-violet-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-violet-900/10 dark:border-violet-500/40 dark:bg-neutral-800 dark:text-neutral-100">
+          <div className="pet-bubble pointer-events-auto mb-2 max-w-[280px] rounded-lg rounded-br-sm border border-violet-200 wb-float bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-violet-900/10 dark:border-violet-500/40 dark:bg-neutral-800 dark:text-neutral-100">
             <div className="flex items-start gap-2">
               <span className="min-w-0 flex-1 break-words">{nudge.text}</span>
               <button
@@ -685,7 +685,7 @@ export default function PetWidget() {
           <button
             onClick={() => setOpen(true)}
             // 与 nudge 气泡同一个 max-w（280）：两种气泡互替时左缘不跳（§#27）
-            className="pet-bubble pointer-events-auto mb-2 max-w-[280px] break-words rounded-lg rounded-br-sm border border-neutral-200 bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+            className="pet-bubble pointer-events-auto mb-2 max-w-[280px] break-words rounded-lg rounded-br-sm border border-neutral-200 wb-float bg-white px-3.5 py-2.5 text-left text-sm leading-relaxed text-neutral-800 shadow-lg shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
           >
             {bubble}
           </button>

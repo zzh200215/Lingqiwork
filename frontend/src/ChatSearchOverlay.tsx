@@ -70,7 +70,7 @@ export default function ChatSearchOverlay({
         onClick={() => setSearchOpen(false)}
       >
         <div
-          className="w-full max-w-xl animate-slide-up overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
+          className="w-full max-w-xl animate-slide-up overflow-hidden rounded-lg border border-neutral-200 wb-float bg-white shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center gap-2 border-b border-neutral-100 px-4 py-3 dark:border-neutral-800">

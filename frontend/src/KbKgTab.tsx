@@ -165,7 +165,7 @@ export default function KbKgTab({ active }: Props) {
           <button
             onClick={saveKg}
             disabled={kgBusy !== ''}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+            className="wb-btn-primary px-3 py-1.5 text-sm"
           >
             {kgBusy === 'save' ? '连接中…' : '保存并测试连接'}
           </button>

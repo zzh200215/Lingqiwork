@@ -216,7 +216,7 @@ export default function SettingsAgents({
           )}
           <button
             onClick={saveAgent}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
+            className="wb-btn-primary px-4 py-1.5 text-sm"
           >
             {agentEditId != null ? '保存修改' : '添加'}
           </button>

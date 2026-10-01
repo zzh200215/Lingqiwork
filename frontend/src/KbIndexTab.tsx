@@ -347,7 +347,7 @@ export default function KbIndexTab({ onCounts, onGoTab }: Props) {
               <button
                 onClick={clip}
                 disabled={clipping || !clipUrl.trim()}
-                className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:from-neutral-200 disabled:to-neutral-200 disabled:text-neutral-400 dark:disabled:from-neutral-800 dark:disabled:to-neutral-800"
+                className="wb-btn-primary px-3 py-1.5 text-sm"
               >
                 {clipping ? '剪藏中…' : '剪藏'}
               </button>
@@ -361,7 +361,7 @@ export default function KbIndexTab({ onCounts, onGoTab }: Props) {
               <div className="flex items-center gap-2">
                 <BookmarkletLink
                   origin={window.location.origin}
-                  className="cursor-grab rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1 text-xs font-medium text-white active:cursor-grabbing"
+                  className="wb-btn-primary cursor-grab px-3 py-1 text-xs active:cursor-grabbing"
                 />
                 <button
                   onClick={copyBookmarklet}

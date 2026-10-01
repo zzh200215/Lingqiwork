@@ -185,7 +185,7 @@ export default function SettingsContent({
             <button
               onClick={testImage}
               disabled={imgBusy}
-              className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:brightness-110 disabled:opacity-50"
+              className="wb-btn-primary px-4 py-1.5 text-sm shadow-sm shadow-violet-300"
             >
               {imgBusy ? '生成中…' : prefsSaved ? '✓ 已保存设置' : '保存设置并测试生成'}
             </button>

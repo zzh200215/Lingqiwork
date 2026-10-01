@@ -771,7 +771,7 @@ export default function NotesPage() {
                 Every character here is your own note text, and the blanked front is
                 shown in full below, so a second review step is pure friction. */}
             {cloze && (
-              <div className="absolute left-1/2 top-3 z-10 w-[min(560px,95%)] -translate-x-1/2 rounded-md border border-sky-200 bg-white/95 p-3 shadow-lg backdrop-blur dark:border-sky-500/40 dark:bg-neutral-900/95">
+              <div className="absolute left-1/2 top-3 z-10 w-[min(560px,95%)] -translate-x-1/2 rounded-md border border-sky-200 wb-float bg-white/95 p-3 shadow-lg backdrop-blur dark:border-sky-500/40 dark:bg-neutral-900/95">
                 <div className="mb-1.5 flex items-center gap-2 text-xs text-neutral-500">
                   <span className="rounded bg-sky-100 px-1.5 py-0.5 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300">
                     填空
@@ -804,7 +804,7 @@ export default function NotesPage() {
             )}
 
             {outlineOpen && (
-              <div className="absolute right-4 top-3 z-10 max-h-[70%] w-60 overflow-y-auto rounded-md border border-neutral-200 bg-white/95 p-2 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95">
+              <div className="absolute right-4 top-3 z-10 max-h-[70%] w-60 overflow-y-auto rounded-md border border-neutral-200 wb-float bg-white/95 p-2 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95">
                 <div className="px-2 pb-1 pt-0.5 text-xs font-medium uppercase tracking-wider text-neutral-400">
                   大纲 · {outline.length} 个标题
                 </div>

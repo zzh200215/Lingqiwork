@@ -859,7 +859,7 @@ function ChatView() {
               className="w-full resize-none rounded-lg border border-neutral-300 bg-white px-4 py-3 pr-12 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200 dark:border-neutral-700 dark:bg-neutral-900 dark:focus:border-violet-500 dark:focus:ring-violet-500/20"
             />
             {slashOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+              <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-md border border-neutral-200 wb-float bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
                 <p className="border-b border-neutral-100 px-3 py-1.5 text-xs uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
                   提示词库 · {slashMatches.length} 条匹配（Enter 用第一条）
                 </p>
@@ -881,7 +881,7 @@ function ChatView() {
               </div>
             )}
             {hashOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+              <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-md border border-neutral-200 wb-float bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
                 <p className="border-b border-neutral-100 px-3 py-1.5 text-xs uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
                   引用笔记全文 · {hashMatches.length} 个文件（Enter 用第一条）
                 </p>
@@ -967,7 +967,7 @@ function ChatView() {
             <button
               onClick={send}
               disabled={!input.trim()}
-              className="flex h-[46px] w-[76px] items-center justify-center rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 hover:brightness-110 disabled:from-neutral-200 disabled:to-neutral-200 disabled:text-neutral-400 disabled:shadow-none dark:disabled:from-neutral-800 dark:disabled:to-neutral-800 dark:disabled:text-neutral-600"
+              className="wb-btn-primary h-[46px] w-[76px] text-sm shadow-sm shadow-violet-300 hover:shadow-md hover:shadow-violet-400"
             >
               发送
             </button>

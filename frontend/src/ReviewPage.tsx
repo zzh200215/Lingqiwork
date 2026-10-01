@@ -522,7 +522,7 @@ export default function ReviewPage() {
             </div>
             <div className="mb-4 h-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all"
+                className="wb-accent-fill-r h-full rounded-full transition-all"
                 style={{ width: `${total ? (idx / total) * 100 : 0}%` }}
               />
             </div>
@@ -622,7 +622,7 @@ export default function ReviewPage() {
                 <>
                   <button
                     onClick={() => setPhase('answer')}
-                    className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-5 py-2.5 text-sm font-medium text-white transition-all hover:brightness-110"
+                    className="wb-btn-primary px-5 py-2.5 text-sm"
                   >
                     显示答案 <kbd className="ml-1 text-xs opacity-70">空格</kbd>
                   </button>
@@ -731,7 +731,7 @@ export default function ReviewPage() {
                     onClick={() => void judgeRetell()}
                     disabled={retellBusy || busy || !retell.trim()}
                     title="一次模型调用：判完它自己落同一条复习记录（成本就是这一次）"
-                    className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3.5 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-50"
+                    className="wb-btn-primary px-3.5 py-1.5 text-sm"
                   >
                     {retellBusy ? '判中…' : '判一下'}
                   </button>

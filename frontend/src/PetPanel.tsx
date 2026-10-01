@@ -67,7 +67,7 @@ export default function PetPanel({
   onKeyDown,
 }: Props) {
   return (
-    <div className="pet-bubble pointer-events-auto mb-2 flex h-[380px] max-h-[70vh] w-[calc(100vw-32px)] max-w-[320px] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/20 dark:border-neutral-700 dark:bg-neutral-900">
+    <div className="pet-bubble pointer-events-auto mb-2 flex h-[380px] max-h-[70vh] w-[calc(100vw-32px)] max-w-[320px] flex-col overflow-hidden rounded-lg border border-neutral-200 wb-float bg-white shadow-2xl shadow-neutral-900/20 dark:border-neutral-700 dark:bg-neutral-900">
       {/* 头部一行七样（§#24）：成长链 min-w-0 flex-1 truncate 吃掉弹性、
           尾部按钮 shrink-0 保活——窄面板上被裁的是「正在靠近…」，不再是按钮。 */}
       <div className="flex items-center gap-2 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">

@@ -47,7 +47,7 @@ export default function ReviewOverview(props: {
                       </span>
                       <button
                         onClick={start}
-                        className="ml-auto rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
+                        className="wb-btn-primary ml-auto px-4 py-1.5 text-sm"
                       >
                         开始复习 <kbd className="ml-1 text-xs opacity-80">⏎</kbd>
                       </button>
@@ -78,7 +78,7 @@ export default function ReviewOverview(props: {
                     <div className="flex flex-wrap gap-2">
                       <button
                         onClick={() => setMakerOpen(true)}
-                        className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
+                        className="wb-btn-primary px-3 py-1.5 text-sm"
                       >
                         建第一张卡 <kbd className="ml-1 text-xs opacity-80">N</kbd>
                       </button>

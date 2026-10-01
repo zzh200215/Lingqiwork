@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
 import { api, type CardDraft, type CardKind, type CardSources, type MaterialHit } from './api'
 import { streamCardsGenerate, type CardGenStage } from './stream'
@@ -438,7 +438,7 @@ export default function CardMaker({
           <button
             onClick={() => void generate()}
             disabled={busy}
-            className="ml-auto rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-50"
+            className="wb-btn-primary ml-auto px-3 py-1.5 text-sm"
           >
             {busy ? STAGE_TEXT[stage] || '处理中…' : '🎴 出卡'}
           </button>
@@ -521,7 +521,7 @@ export default function CardMaker({
             <button
               onClick={() => void runSearch()}
               disabled={busy || !question.trim()}
-              className="shrink-0 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-50"
+              className="wb-btn-primary shrink-0 px-3 py-1.5 text-sm"
             >
               {busy ? '检索中…' : '🔍 检索'}
             </button>
@@ -711,7 +711,7 @@ export default function CardMaker({
           <button
             onClick={() => void save()}
             disabled={busy || !picked.size}
-            className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-50"
+            className="wb-btn-primary px-3 py-1.5 text-sm"
           >
             入库勾选的 {picked.size} 张
           </button>

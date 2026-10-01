@@ -117,10 +117,10 @@ function WorkshopCard({
           </div>
           <button
             onClick={() => void run('focus', focusPanel.running ? 'stop' : 'start')}
-            className={`rounded-full px-3.5 py-1.5 text-xs font-medium text-white transition-all disabled:opacity-40 ${
+            className={`rounded-full px-3.5 py-1.5 text-xs transition-all disabled:opacity-40 ${
               focusPanel.running
-                ? 'bg-neutral-700 hover:bg-neutral-600 dark:bg-neutral-600 dark:hover:bg-neutral-500'
-                : 'bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:brightness-110'
+                ? 'bg-neutral-700 font-medium text-white hover:bg-neutral-600 dark:bg-neutral-600 dark:hover:bg-neutral-500'
+                : 'wb-btn-primary'
             }`}
           >
             {focusPanel.running ? '停' : '开始专注'}

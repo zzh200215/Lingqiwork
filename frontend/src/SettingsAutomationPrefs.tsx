@@ -176,7 +176,7 @@ export default function SettingsAutomationPrefs({
           />
           <button
             onClick={savePrefs}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
+            className="wb-btn-primary px-3 py-1.5 text-sm"
           >
             {prefsSaved ? '已保存' : '保存设置'}
           </button>
@@ -201,7 +201,7 @@ export default function SettingsAutomationPrefs({
           <button
             onClick={addFeed}
             disabled={!!feedBusy || !feedUrl.trim()}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+            className="wb-btn-primary px-3 py-1.5 text-sm"
           >
             {feedBusy === 'add' ? '抓取中…' : '添加订阅'}
           </button>
@@ -355,7 +355,7 @@ export default function SettingsAutomationPrefs({
         <div className="mt-3 flex items-center gap-3">
           <button
             onClick={savePrefs}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110"
+            className="wb-btn-primary px-3 py-1.5 text-sm"
           >
             {prefsSaved ? '已保存' : '保存设置'}
           </button>

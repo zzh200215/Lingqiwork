@@ -49,7 +49,7 @@ export default function PromptCategoryManager({
     >
       {/* 模态是**唯一允许有阴影**的地方（契约：shadows only for modals/drawers/dropdowns），
           圆角也单独一档（10px）。头尾用次级表面 + 分隔线，与正文分开。 */}
-      <div className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-[10px] border border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
+      <div className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-[10px] border border-neutral-200 wb-float bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
         <div className="flex items-start justify-between border-b border-neutral-200 bg-neutral-50 px-5 py-4 dark:border-neutral-800 dark:bg-neutral-800/50">
           <div>
             <h2 className="text-base font-semibold text-neutral-800 dark:text-neutral-100">分类管理</h2>

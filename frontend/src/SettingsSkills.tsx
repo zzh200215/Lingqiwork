@@ -135,7 +135,7 @@ export default function SettingsSkills({
                 <button
                   onClick={() => saveSkill(s.name)}
                   disabled={skillBusy}
-                  className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+                  className="wb-btn-primary px-3 py-1 text-sm"
                 >
                   {skillBusy ? '保存中…' : '保存'}
                 </button>
@@ -174,7 +174,7 @@ export default function SettingsSkills({
         <button
           onClick={installSkill}
           disabled={skillBusy || !skillUrl.trim()}
-          className="shrink-0 rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+          className="wb-btn-primary shrink-0 px-4 py-1.5 text-sm"
         >
           {skillBusy ? '安装中…' : '从 URL 安装'}
         </button>

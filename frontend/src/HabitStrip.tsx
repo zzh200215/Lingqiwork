@@ -1,4 +1,4 @@
-﻿import {
+import {
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -237,7 +237,7 @@ export default function HabitStrip({
           <button
             onClick={() => void seed()}
             disabled={busy}
-            className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-50"
+            className="wb-btn-primary px-3 py-1.5 text-sm"
           >
             一键添加 3 个建议习惯
           </button>
@@ -384,7 +384,7 @@ export default function HabitStrip({
             <button
               onClick={() => void submit()}
               disabled={busy}
-              className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1 text-xs font-medium text-white transition-all hover:brightness-110 disabled:opacity-50"
+              className="wb-btn-primary px-3 py-1 text-xs"
             >
               {editing === 'new' ? '添加' : '保存'}
             </button>

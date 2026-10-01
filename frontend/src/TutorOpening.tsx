@@ -172,7 +172,7 @@ export default function TutorOpening({ r }: { r: TutorOpeningRec }) {
               data-tutor-begin
               onClick={() => void begin()}
               disabled={!topic.trim() || busy}
-              className="shrink-0 rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-5 py-2.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+              className="wb-btn-primary shrink-0 px-5 py-2.5 text-sm"
             >
               开始
             </button>

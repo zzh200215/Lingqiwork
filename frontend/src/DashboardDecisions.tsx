@@ -126,7 +126,7 @@ export default function DashboardDecisions() {
           <button
             onClick={() => void addDecision()}
             disabled={!dText.trim() || dBusy}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+            className="wb-btn-primary px-4 py-1.5 text-xs"
           >
             记下
           </button>

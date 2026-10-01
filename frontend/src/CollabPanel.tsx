@@ -49,7 +49,7 @@ export default function CollabPanel({
         👥
       </button>
       {collabOpen && (
-        <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+        <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-md border border-neutral-200 wb-float bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
           <p className="border-b border-neutral-100 px-3 py-1.5 text-xs uppercase tracking-wider text-neutral-400 dark:border-neutral-800">
             智能体协作 · 以输入框内容为目标
           </p>

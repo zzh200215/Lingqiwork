@@ -119,7 +119,7 @@ export function UsageFeaturesCard({
               </div>
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all"
+                  className="wb-accent-fill-r h-full rounded-full transition-all"
                   style={{ width: `${total > 0 ? Math.round((r.spans / total) * 100) : 0}%` }}
                 />
               </div>

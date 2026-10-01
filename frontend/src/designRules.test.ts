@@ -8,6 +8,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { CHROME_VEIL, DEFAULT_CHROME_GLASS } from './theme/surfaces'
+
 const SRC = join(process.cwd(), 'src')
 
 /** 所有产品源码（`.tsx` / `.ts`），排除测试自身。 */
@@ -100,6 +102,48 @@ describe('设计纪律 · 全仓守卫', () => {
       .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
       .flatMap((l) => [...l.matchAll(/\.catch\(\(\) => \{\}\)/g)])
     expect(silent.length, '设置页又有静默 catch 了').toBe(0)
+  })
+
+  it('主题必须在 React 挂载**之前**写进 DOM——晚一步就是「先按出厂配色画一帧」', () => {
+    // 2026-10-01 换肤：皮肤是一串写在 `<html>` 上的内联 CSS 变量，由 `bootTheme()`
+    // 同步执行。放进 `useEffect` 或 `onMounted` 都会先画一帧错的配色再跳回来
+    // ——那一下闪烁在任何截图里都看不出来，只有真的打开才看得见，所以用文本钉住。
+    const s = readFileSync(join(SRC, 'main.tsx'), 'utf8')
+    const boot = s.indexOf('bootTheme()')
+    const render = s.indexOf('.render(')
+    expect(boot, 'main.tsx 里没有 bootTheme()').toBeGreaterThan(-1)
+    expect(render, 'main.tsx 里没有 render()').toBeGreaterThan(-1)
+    expect(boot, 'bootTheme() 必须在 render() 之前调用').toBeLessThan(render)
+  })
+
+  it('强调色实底只有两条路——`wb-btn-primary` / `wb-accent-fill*`，不许再手抄渐变', () => {
+    // 2026-10-01 收口：全仓 37 处手抄的 `bg-gradient-to-* from-violet-600 to-fuchsia-600`
+    // 已经改成 `.wb-btn-primary`（按钮）或 `.wb-accent-fill*`（logo/头像/气泡/占比条）。
+    // 手抄那套的毛病不是「丑」而是**少一档**：它拿不到暗色专属的深色档，
+    // 白字压在 violet-500 上只有 4.35:1（低于 AA 的 4.5），而这一点肉眼看不出来。
+    //
+    // 判据：一个类名串里同时出现 `bg-gradient` 与 `from-violet-`/`to-fuchsia-`、
+    // **且没有 `bg-clip-text`** 就算违规（`bg-clip-text` = 那是渐变**文字**，不是色块）。
+    // **三处例外是刻意的**，理由写在 `docs/ui-design-contract.md` §8.1：
+    //   · `Welcome.tsx` 首页标题：三停渐变文字（violet→fuchsia→violet），
+    //     它要的是「彩色字」不是「色块」——`.wb-accent-fill` 给不了 `bg-clip-text`
+    //   · `dashboardCards.tsx` 的 `toneClasses` 是数据语义的五色标度（同样配 bg-clip-text）
+    //   · `DashboardPage.tsx` 柱状图当天那根要 `to-t`（向上），两个 .wb-accent-fill
+    //     是「向右 / 右下」，方向不同、不该硬套
+    const ALLOW = new Set(['dashboardCards.tsx', 'DashboardPage.tsx'])
+    const bad: string[] = []
+    for (const s of sources()) {
+      if (ALLOW.has(s.name)) continue
+      // className 可能是 `"…"` 也可能是模板串 `` `…` ``；跨行的取不到就算漏，
+      // 这条守卫宁可漏也不误报（误报会被人直接删掉）
+      for (const m of s.text.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\})/g)) {
+        const cls = m[1] ?? m[2] ?? ''
+        if (!cls.includes('bg-gradient')) continue
+        if (cls.includes('bg-clip-text')) continue
+        if (/from-violet-|to-fuchsia-/.test(cls)) bad.push(`${s.name}: ${cls.slice(0, 90)}`)
+      }
+    }
+    expect(bad, '又手抄强调色渐变了——按钮用 `wb-btn-primary`，其余实底用 `wb-accent-fill`').toEqual([])
   })
 
   it('字号不小于 12px——10px/11px 的中文在 1x 屏上认不出来', () => {
@@ -300,6 +344,61 @@ describe('设计纪律 · 全仓守卫', () => {
       .map((s) => ({ name: s.name, n: s.text.replace(/\n$/, '').split('\n').length }))
       .filter((s) => s.n > 1000)
     expect(bad, '工作模块有文件越过 1000 行了——拆一个域出去，别把新东西往里堆').toEqual([])
+  })
+
+  it('壳（侧栏 / 顶栏）只有**一个**透明度来源，且算压暗时用的就是它', () => {
+    // 在这之前侧栏 `bg-white/70`、顶栏 `bg-white/85` 两个数各写在自己的类名里，
+    // 而 `theme/extract.ts` 算背景压暗时还要**再抄一遍**（「文字压在壳上之后
+    // 实际看到什么」）。三处各写一份，改一处忘两处，症状只是「算出来的压暗淡了」
+    // ——肉眼只会读成「这张图有点亮」。
+    //
+    // 现在只有一个来源：`surfaces.chromeGlass`（默认 `DEFAULT_CHROME_GLASS`），
+    // 写成 `--wb-chrome-alpha`，`CHROME_VEIL` 从同一个常数推。
+    const s = readFileSync(join(SRC, 'Layout.tsx'), 'utf8')
+    /** **只要开标签那一段**：整个子树里到处是 `bg-neutral-100` 这类子元素的底色，
+     *  而这条守的是「壳自己有没有另写一层底」。 */
+    const openTag = (text: string, open: string): string => {
+      const a = text.indexOf(open)
+      expect(a, `找不到 ${open}`).toBeGreaterThan(-1)
+      return text.slice(a, text.indexOf('>', a))
+    }
+    const rows: [string, string, string][] = [
+      ['侧栏', openTag(s, '<aside'), 'wb-sidebar'],
+      ['顶栏', openTag(s, '<header'), 'wb-topbar'],
+      // **会话页那个顶栏也是壳**：它与模块页的 TopBar 是同一个位置上的两个实现，
+      // 少了这一处，皮肤在「待得最久的那一页」上只改到一半。
+      ['会话页顶栏', openTag(readFileSync(join(SRC, 'ChatHeader.tsx'), 'utf8'), '<header'), 'wb-topbar'],
+    ]
+    for (const [name, tag, part] of rows) {
+      expect(tag, `${name}没有用 wb-chrome——壳的底色该由皮肤给`).toContain('wb-chrome')
+      // 各自的出口也要在：参考实现（Codex Dream Skin）把 `sidebar` 与 `header`
+      // 当两个可以分别设的部件，少了这个类那份能力就没了
+      // （默认两者仍然是一档，见 `fillSurfaces`）。
+      expect(tag, `${name}少了 ${part}——那一档就没法单独调了`).toContain(part)
+      // 自己再写一层底的话，`.wb-chrome` 与它谁赢取决于源序，而那是没人看得出来的
+      expect(tag, `${name}自己又写了一遍底色`).not.toMatch(/bg-white\/\d|dark:bg-neutral-9\d0\/\d/)
+    }
+    // 那份「投影」必须等于真值，不是另抄的一个数
+    const want = DEFAULT_CHROME_GLASS / 100
+    expect(CHROME_VEIL.light.side).toBe(want)
+    expect(CHROME_VEIL.light.top).toBe(want)
+    expect(CHROME_VEIL.dark.side).toBe(want)
+    expect(CHROME_VEIL.dark.top).toBe(want)
+  })
+
+  it('面板层**只有一个来源**：卡片/壳/浮层都从皮肤变量里取底色', () => {
+    // 「完整皮肤」与「换一张壁纸」的差别就在这一段。守卫钉的是**别再有人手写**：
+    // 手写一层 `bg-white` 到卡片上不算错，但它会让那一个面板不跟皮肤走，
+    // 而症状是「大部分地方变了、某一处还是白的」——极难发现。
+    const css = readFileSync(join(SRC, 'index.css'), 'utf8')
+    for (const cls of ['.wb-card', '.wb-chrome']) {
+      const at = css.indexOf(`\n${cls} {`)
+      expect(at, `${cls} 不见了？`).toBeGreaterThan(-1)
+      const block = css.slice(at, css.indexOf('}', at))
+      expect(block, `${cls} 的底色该来自 --wb-surface / --wb-chrome`).toMatch(/var\(--wb-(surface|chrome)\)/)
+    }
+    // 浮层那条带 `[data-wb-skin]` 前缀（要压过 `bg-white` 覆盖），所以单独找
+    expect(css, '浮层那条规则不见了').toContain('[data-wb-skin] .wb-float')
   })
 
   it('静默 catch 的欠账——**记下来**，别让它悄悄变多', () => {

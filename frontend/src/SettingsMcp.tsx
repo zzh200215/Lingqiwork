@@ -239,7 +239,7 @@ export default function SettingsMcp({ failLoad }: { failLoad: (what: string, e: 
                 取消
               </button>
             )}
-            <button onClick={applyMcpDraft} className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110">
+            <button onClick={applyMcpDraft} className="wb-btn-primary px-4 py-1.5 text-sm">
               {mcpEditIdx != null ? '保存修改' : '添加'}
             </button>
           </div>

@@ -104,14 +104,14 @@ export const MessageRow = React.memo(function MessageRow({
                     if (draft.trim() && draft.trim() !== m.content) onEditUser?.(draft.trim())
                   }}
                   disabled={!draft.trim()}
-                  className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 font-medium text-white disabled:opacity-40"
+                  className="wb-btn-primary px-3 py-1.5"
                 >
                   保存并重新生成
                 </button>
               </div>
             </div>
           ) : (
-            <div className="max-w-[80%] whitespace-pre-wrap rounded-lg rounded-br-md bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2.5 text-[15px] text-white shadow-sm shadow-violet-200 dark:shadow-none">
+            <div className="wb-accent-fill max-w-[80%] whitespace-pre-wrap rounded-lg rounded-br-md px-4 py-2.5 text-[15px] text-white shadow-sm shadow-violet-200 dark:shadow-none">
               {m.content}
             </div>
           )}
@@ -149,7 +149,7 @@ export const MessageRow = React.memo(function MessageRow({
   return (
     <div className="group animate-slide-up">
       <div className="flex gap-3">
-        <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 text-sm shadow-sm shadow-violet-200 dark:shadow-none">
+        <div className="wb-accent-fill mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm shadow-sm shadow-violet-200 dark:shadow-none">
           🧠
         </div>
         <div className="prose prose-neutral min-w-0 max-w-none flex-1 break-words text-[15px] leading-relaxed dark:prose-invert">

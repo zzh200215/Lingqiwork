@@ -266,7 +266,7 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
           <button
             onClick={() => void runArena()}
             disabled={arenaBusy || !arenaPrompt.trim()}
-            className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+            className="wb-btn-primary px-4 py-2 text-sm"
           >
             {arenaBusy ? '各家思考中…' : '开始对比'}
           </button>
@@ -585,7 +585,7 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
           <button
             onClick={addMemory}
             disabled={!memInput.trim()}
-            className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+            className="wb-btn-primary px-4 py-1.5 text-sm"
           >
             添加
           </button>
