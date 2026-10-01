@@ -117,3 +117,9 @@ cd backend && uv run uvicorn app.main:app --port 8000
 - 配置（系统提示词/RAG top_k/MCP servers）：`data/config.json`
 - 笔记目录：`vault/`（放入即自动索引）
 - embedding 模型首次运行自动下载到 HF 缓存（约 100MB）
+
+## 数据边界与许可
+
+- **运行时**：所有个人数据（对话、笔记、配置、API key）都落在本机 `data/` 与 `vault/`，不经过任何第三方服务器（调用的模型 API 除外——请求发往你自己配置的 provider）。侧栏那句「数据不出本机」说的是这一层。
+- **版本库**：`data/`、`vault/`、`backups/` 均在 `.gitignore` 里，从未入库——仓库里只有代码，没有你的数据。
+- **许可**：代码以 [MIT](LICENSE) 发布；你自己的数据当然还是你自己的。
