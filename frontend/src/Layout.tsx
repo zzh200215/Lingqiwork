@@ -64,7 +64,7 @@ function Logo() {
       <div className="wb-accent-fill flex h-8 w-8 items-center justify-center rounded-md text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
         <Brain className="h-[18px] w-[18px]" />
       </div>
-      <span className="text-[15px] font-semibold tracking-tight">AI 工作台</span>
+      <span className="text-[15px] font-semibold tracking-tight max-[900px]:hidden">AI 工作台</span>
     </Link>
   )
 }
@@ -227,13 +227,16 @@ export default function Layout() {
       {/* 侧栏与顶栏共用 `.wb-chrome`：**「壳」是一个区域，不是一个地方**。
           它的底色、透明度、模糊都由皮肤给（见 `index.css` 那一节），
           所以侧栏与顶栏永远一致——两处各写一遍透明度的下场是「侧栏跟着皮肤变了、
-          顶栏没变」，而那种不一致只会被读成渲染 bug。 */}
-      <aside className="wb-chrome wb-sidebar relative z-[1] flex w-60 shrink-0 flex-col border-r border-neutral-200/70 dark:border-neutral-800/70">
-        <div className="flex items-center px-4 pb-2 pt-4">
+          顶栏没变」，而那种不一致只会被读成渲染 bug。
+          窄窗（≤900px，分屏/侧栏贴着的真实场景）：侧栏收成**图标轨**——
+          只藏文字不删 DOM，纯 CSS（`max-[900px]:` 任意变体），jsdom 测试照常过。
+          「任何宽度都能导航」保住了：分组图标仍在，悬停有 title。 */}
+      <aside className="wb-chrome wb-sidebar relative z-[1] flex w-60 shrink-0 flex-col border-r border-neutral-200/70 max-[900px]:w-[52px] dark:border-neutral-800/70">
+        <div className="flex items-center px-4 pb-2 pt-4 max-[900px]:px-2.5">
           <Logo />
         </div>
 
-        <div className="px-3 pb-3 pt-2">
+        <div className="px-3 pb-3 pt-2 max-[900px]:px-2">
           <button
             onClick={() => {
               // on the chat page App already listens for this (tray menu uses it);
@@ -241,16 +244,17 @@ export default function Layout() {
               if (page === 'chat') window.dispatchEvent(new Event('workbench:new-chat'))
               else navigate('/?new=1')
             }}
-            className="wb-btn-primary w-full gap-1.5 px-3 py-2 text-sm shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 dark:shadow-violet-900/60 dark:hover:shadow-violet-700/60"
+            className="wb-btn-primary w-full gap-1.5 px-3 py-2 text-sm shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 max-[900px]:px-0 dark:shadow-violet-900/60 dark:hover:shadow-violet-700/60"
           >
-            <span className="text-base leading-none">＋</span> 新对话
+            <span className="text-base leading-none">＋</span>
+            <span className="max-[900px]:hidden">新对话</span>
           </button>
         </div>
 
         {/* 导航与「最近对话」共用一块滚动区：分组展开之后这一列会变长，
             不给它滚动的话，底部那块（本地用户）会被顶出屏幕。 */}
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <nav className="flex flex-col gap-0.5 px-3">
+          <nav className="flex flex-col gap-0.5 px-3 max-[900px]:px-2">
             {NAV.map((g) => {
               const on = isOpen(g.key)
               const inGroup = g.key === active.group
@@ -270,9 +274,10 @@ export default function Layout() {
                   <div className={`flex items-center rounded-md transition-colors ${groupCls}`}>
                     <Link
                       to={g.href}
+                      title={g.label}
                       data-nav-group={g.key}
                       data-nav-active={inGroup ? '1' : undefined}
-                      className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-sm"
+                      className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-sm max-[900px]:justify-center max-[900px]:px-0"
                     >
                       <span
                         className={`wb-chip h-6 w-6 rounded-lg ${
@@ -281,7 +286,7 @@ export default function Layout() {
                       >
                         <GroupIcon className="h-4 w-4" />
                       </span>
-                      <span className={`truncate ${inGroup ? 'font-medium' : ''}`}>{g.label}</span>
+                      <span className={`truncate max-[900px]:hidden ${inGroup ? 'font-medium' : ''}`}>{g.label}</span>
                     </Link>
                     {g.items.length > 0 ? (
                       <button
@@ -290,7 +295,7 @@ export default function Layout() {
                         aria-expanded={on}
                         aria-label={`${on ? '收起' : '展开'}${g.label}`}
                         title={on ? '收起' : '展开'}
-                        className="mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-200/60 hover:text-neutral-600 dark:hover:bg-neutral-700/60 dark:hover:text-neutral-200"
+                        className="mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-400 transition-colors hover:bg-neutral-200/60 hover:text-neutral-600 max-[900px]:hidden dark:hover:bg-neutral-700/60 dark:hover:text-neutral-200"
                       >
                         <Chevron open={on} />
                       </button>
@@ -298,7 +303,7 @@ export default function Layout() {
                   </div>
 
                   {g.items.length > 0 && on ? (
-                    <div data-nav-items={g.key} className="mt-0.5 flex flex-col gap-0.5 pb-0.5 pl-4">
+                    <div data-nav-items={g.key} className="mt-0.5 flex flex-col gap-0.5 pb-0.5 pl-4 max-[900px]:hidden">
                       {g.items.map((i) => {
                         const ItemIcon = i.icon
                         return (
@@ -332,7 +337,7 @@ export default function Layout() {
           </nav>
 
           {page !== 'chat' && conversations.length > 0 && (
-            <div className="mt-4 border-t border-neutral-200/80 px-3 pt-3 dark:border-neutral-800/80">
+            <div className="mt-4 border-t border-neutral-200/80 px-3 pt-3 max-[900px]:hidden dark:border-neutral-800/80">
               <p className="px-3 pb-1.5 text-xs font-medium uppercase tracking-wider text-neutral-400">
                 最近对话
               </p>
@@ -351,12 +356,12 @@ export default function Layout() {
           )}
         </div>
 
-        <div className="border-t border-neutral-200/80 p-4 dark:border-neutral-800/80">
+        <div className="border-t border-neutral-200/80 p-4 max-[900px]:flex max-[900px]:justify-center max-[900px]:p-2 dark:border-neutral-800/80">
           <div className="flex items-center gap-2.5">
             <div className="wb-accent-fill flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
               ME
             </div>
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 max-[900px]:hidden">
               <p className="truncate text-sm font-medium">本地用户</p>
               <p className="text-xs text-neutral-400">数据不出本机</p>
             </div>
@@ -372,6 +377,18 @@ export default function Layout() {
         {/* 对话页自带页头（会话标题、模型、工具那一排），再顶一条就重复了 */}
         {page === 'chat' ? null : <TopBar page={page} onOpenSearch={() => setPaletteOpen(true)} />}
         <Outlet />
+      </div>
+      {/* ≤480px 的诚实兜底：这个工作台按桌面宽度排版，硬塞进手机宽只会得到
+          「能打开但横向滚动」这个最不该有的中间态。盖住比折叠便宜，也比假装支持诚实。
+          窗口拉回 480 以上这层自然消失——不是弹窗，是宽度本身不够。 */}
+      <div
+        data-narrow-hint=""
+        className="fixed inset-0 z-[60] hidden flex-col items-center justify-center gap-3 bg-neutral-50 px-8 text-center max-[480px]:flex dark:bg-neutral-950"
+      >
+        <p className="text-lg font-semibold">窗口太小了</p>
+        <p className="max-w-xs text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
+          这个工作台按桌面宽度排版，最低支持 480px。把窗口拉宽一点，内容就回来了。
+        </p>
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <PetWidget />
