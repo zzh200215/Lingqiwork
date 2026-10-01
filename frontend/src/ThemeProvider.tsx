@@ -27,11 +27,13 @@ import { api } from './api'
 import {
   DEFAULT_THEME,
   SKINS_CHANGED_EVENT,
+  SKINS_KEY,
   STORE_KEY,
   applyTheme,
   hasOverrides,
   installUserSkins,
   loadTheme,
+  loadUserSkins,
   parseTheme,
   prefersDark,
   removeUserSkin,
@@ -134,6 +136,29 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(SKINS_CHANGED_EVENT, bump)
   }, [])
 
+  // 跨标签页同步:工作台常开着不止一个窗口,在一边换肤/调色,另一边也该跟着变,
+  // 而不是等一次刷新才对齐。`storage` 事件只在**别的**标签页写入时触发——本页自己
+  // `setItem` 不会发给自己,所以这条路和下面的持久化 effect 天然不打架。
+  //
+  // `key === null` 是另一页把存储 clear() 了:主题与皮肤都当「变过」处理,
+  // 各自从 localStorage 重读一遍——重读到的是默认值也没关系,那正是 clear 的含义。
+  const storageApplied = useRef<ThemeConfig | null>(null)
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === STORE_KEY || e.key === null) {
+        const incoming = loadTheme()
+        storageApplied.current = incoming
+        setConfig(incoming)
+      }
+      if (e.key === SKINS_KEY || e.key === null) {
+        loadUserSkins()
+        setSkinsRev((n) => n + 1)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
 
   // `skinsRev` **必须是 `resolved` 的依赖**，不只是用来触发重画的计数器：
   // 皮肤表变了，解析结果本身就可能变——删掉正在用的那个皮肤时，`skinById` 会退回
@@ -182,6 +207,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     if (firstPut.current) {
       // 挂载时的这一次不是「用户改了设置」，不落盘——否则每开一次页面就写一次文件
       firstPut.current = false
+      return
+    }
+    if (storageApplied.current !== null && storageApplied.current === config) {
+      // 这份配置是从别的标签页**同步来的**，localStorage 里已经是它——回写一遍是
+      // 空转，还会在对面那个标签页再点着一次 storage 事件，两页你来我往地乒乓。
+      // 用**对象身份**而不是深比较来认它：真正的用户编辑都走 `{ ...c }` 展开，
+      // 一定是个新对象，不会被这里误吞。
+      storageApplied.current = null
       return
     }
     saveTheme(config)
