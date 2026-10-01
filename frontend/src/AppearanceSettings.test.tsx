@@ -28,7 +28,7 @@ vi.mock('./theme/extract', async (importOriginal) => {
 import { api } from './api'
 import AppearanceSettings from './AppearanceSettings'
 import { ThemeProvider } from './ThemeProvider'
-import { DEFAULT_THEME, installUserSkins, loadTheme, loadUserSkins, userSkinManifests } from './theme'
+import { DEFAULT_THEME, APPEARANCE_VISITED_KEY, installUserSkins, loadTheme, loadUserSkins, userSkinManifests } from './theme'
 import { BUILTIN_SKINS } from './theme/skins'
 import { parseSkin } from './theme/manifest'
 import { skinFromImage } from './theme/extract'
@@ -125,6 +125,12 @@ afterEach(() => {
 })
 
 describe('外观 · 皮肤', () => {
+  it('进过一次外观页就落「来过」的键（顶栏的提示圆点从此消失）', () => {
+    localStorage.removeItem(APPEARANCE_VISITED_KEY)
+    renderPanel()
+    expect(localStorage.getItem(APPEARANCE_VISITED_KEY)).toBe('1')
+  })
+
   it('六个皮肤都摆得出来，默认那个是选中的', () => {
     renderPanel()
     for (const id of Object.keys(SKINS)) {
@@ -334,6 +340,24 @@ describe('外观 · 用一张图现做一套皮肤', () => {
       expect(document.querySelector('[data-skin-photo-report]')).toBeTruthy()
     })
   }
+
+  it('背景图上传完给「顺手做成皮肤」的引导——壁纸 ≠ 皮肤，把最有价值的那条路点亮', async () => {
+    mockPhoto()
+    renderPanel()
+    fireEvent.click(document.querySelector('[data-bg-mode="image"]')!)
+    const input = document.querySelector('input[data-bg-file]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['x'], 'bg.png', { type: 'image/png' })] } })
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-bg-make-skin]'), '选完图的当下就要给引导').toBeTruthy()
+    })
+    fireEvent.click(screen.getByText('用这张图做一款皮肤'))
+    await waitFor(() => {
+      // 走的就是 makeSkin 那条路：装上皮、背景切回「跟随皮肤」
+      expect(userSkinManifests().map((m) => m.id)).toContain('photo-abc')
+      expect(loadTheme().bg.mode).toBe('skin')
+    })
+  })
 
   it('传一张图 → 现做一套皮肤、**当场切过去**，并成为皮肤表里的一张卡', async () => {
     mockPhoto()

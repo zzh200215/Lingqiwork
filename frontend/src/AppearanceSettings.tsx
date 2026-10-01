@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Loader2, Sparkles, Upload } from 'lucide-react'
 
 import { api } from './api'
@@ -7,6 +7,7 @@ import SkinCard from './SkinCard'
 import SkinCenter from './SkinCenter'
 import { useTheme } from './ThemeProvider'
 import {
+  APPEARANCE_VISITED_KEY,
   accentPalette,
   isBuiltinSkin,
   listSkins,
@@ -76,6 +77,16 @@ export default function AppearanceSettings() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const importRef = useRef<HTMLInputElement>(null)
+
+  // 进过一次外观页就落「来过」的键——顶栏调色盘上的那颗提示圆点从此永远消失
+  // （键与圆点见 `theme.ts` 的 APPEARANCE_VISITED_KEY 与 Layout 的 AppearanceLink）。
+  useEffect(() => {
+    try {
+      localStorage.setItem(APPEARANCE_VISITED_KEY, '1')
+    } catch {
+      /* 存不下（隐私模式）就让它下次再亮一次，不值得为它报错 */
+    }
+  }, [])
   const photoRef = useRef<HTMLInputElement>(null)
 
   /** 「用这张图做一套皮肤」。
@@ -496,7 +507,7 @@ export default function AppearanceSettings() {
       ) : null}
 
       {/* ---------- 自定义背景 ---------- */}
-      <AppearanceBackground />
+      <AppearanceBackground onMakeSkin={makeSkin} />
 
       {/* ---------- 导入 / 导出 ---------- */}
       <div className="wb-card p-5">
@@ -511,12 +522,13 @@ export default function AppearanceSettings() {
           </span>
           {userSkinManifests().length > 0 ? (
             <span data-skins-local-only="" className="mt-1 block text-amber-700 dark:text-amber-300">
-              本机现在有 {userSkinManifests().length} 个导入的皮肤——它们<b>只存在这个浏览器里</b>
-              （localStorage），后端不备份。清缓存、换浏览器、换机器都会丢，唯一的退路是导出的那份文件。
+              本机现在有 {userSkinManifests().length} 个导入的皮肤——它们会自动同步一份到后端
+              （data/skins.json），清缓存、换浏览器都能从后端找回来；换台机器时跟着 data/ 目录走。
+              导出 JSON 仍是留底的正路。
             </span>
           ) : (
             <span data-skins-local-only="" className="mt-1 block">
-              自己导入的皮肤<b>只存在这个浏览器里</b>（localStorage），后端不备份——记得导出留底。
+              自己导入的皮肤会自动同步一份到后端（data/skins.json）——清缓存、换浏览器能找回来。
             </span>
           )}
         </p>

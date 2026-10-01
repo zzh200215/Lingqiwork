@@ -50,13 +50,21 @@ function fmtBytes(n: number): string {
   return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
 }
 
-export default function AppearanceBackground() {
+export default function AppearanceBackground({
+  onMakeSkin,
+}: {
+  /** 「用这张图做一款皮肤」的入口（`AppearanceSettings.makeSkin`）。给得出才亮引导——
+   *  本组件自己不管皮肤层，只知道图。 */
+  onMakeSkin?: (file: File) => void
+}) {
   const { config, resolved, patchBg } = useTheme()
   const [library, setLibrary] = useState<ImageItem[]>([])
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  // 刚传的那张原图：「只当背景」与「顺手做皮肤」的分岔在这里接住
+  const [uploaded, setUploaded] = useState<File | null>(null)
   // 清理未引用：null = 还没扫过；扫出来只报数，用户点确认才真的删。
   const [sweep, setSweep] = useState<{ images: ImageItem[]; bytes: number } | null>(null)
   const [sweepBusy, setSweepBusy] = useState(false)
@@ -84,6 +92,7 @@ export default function AppearanceBackground() {
       // 上传完直接设为背景——用户点「上传」的意思是「用它」，不是「存起来」
       patchBg({ mode: 'image', image: item.url })
       setLibrary((cur) => [item, ...cur])
+      setUploaded(file)
     } catch (e) {
       setError(`上传失败：${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -294,6 +303,34 @@ export default function AppearanceBackground() {
               />
               <span className="text-xs text-neutral-400">png / jpg / webp，单张 20MB 以内</span>
             </div>
+
+            {/* **「壁纸 ≠ 皮肤」的分岔**：拿到一张图的人最容易只做前者（背景换上了，
+                工作台还是原来那套配色）。皮肤是这套系统里价值最高的一条路——
+                强调色从图里取、压暗按图算——所以在选完图的当下问这一句，
+                把最有价值的那条路点亮。走了就不用再问，拒绝也不再问。 */}
+            {uploaded && onMakeSkin ? (
+              <div
+                data-bg-make-skin=""
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-200 bg-violet-50/60 px-3 py-2 text-xs text-neutral-600 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-neutral-300"
+              >
+                <span>
+                  这张图现在只是<b>背景</b>。要不要顺手<b>做一款皮肤</b>？强调色从图里取、压暗按图算。
+                </span>
+                <button
+                  data-bg-make-skin-yes=""
+                  onClick={() => onMakeSkin(uploaded)}
+                  className="rounded-md border border-violet-300 bg-white px-2.5 py-1 text-xs font-medium text-violet-700 transition-colors hover:border-violet-400 dark:border-violet-500/40 dark:bg-neutral-900 dark:text-violet-300"
+                >
+                  用这张图做一款皮肤
+                </button>
+                <button
+                  onClick={() => setUploaded(null)}
+                  className="text-xs text-neutral-400 underline hover:text-neutral-600 dark:hover:text-neutral-300"
+                >
+                  不用了
+                </button>
+              </div>
+            ) : null}
 
             <label className="flex flex-col gap-1 text-sm">
               图片地址
