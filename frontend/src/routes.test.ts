@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { NAV, navState, legacyTarget, parseRoute, resolveWorkTab } from './routes'
 
@@ -68,10 +68,10 @@ describe('NAV 这份表本身', () => {
   it('页面里的每一档都在这张表上（子项地址不重复）', () => {
     const hrefs = NAV.flatMap((g) => g.items.map((i) => i.href))
     expect(new Set(hrefs).size).toBe(hrefs.length)
-    // 工作页七档、零柒五档、学三档、设置七档、资产四项
+    // 工作页七档、零柒五档、学三档、设置八档（2026-10-01 加「外观」）、资产四项
     expect(NAV.find((g) => g.key === 'work')!.items).toHaveLength(4)
     expect(NAV.find((g) => g.key === 'companion')!.items).toHaveLength(5)
-    expect(NAV.find((g) => g.key === 'settings')!.items).toHaveLength(7)
+    expect(NAV.find((g) => g.key === 'settings')!.items).toHaveLength(8)
   })
 })
 

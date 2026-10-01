@@ -24,6 +24,7 @@ import {
   MessageSquare,
   NotebookPen,
   Package,
+  Palette,
   PawPrint,
   Plug,
   Podcast,
@@ -136,9 +137,14 @@ export const COMPANION_TABS = [
 export type CompanionTab = (typeof COMPANION_TABS)[number]['key']
 
 /** 设置页的分区。**从 `SettingsPage.tsx` 搬到这里**：侧栏要摆它，页面要按它切，
- *  两处各写一份的那天就会出现「侧栏有七项、页面里是六项」。 */
+ *  两处各写一份的那天就会出现「侧栏有七项、页面里是六项」。
+ *
+ *  2026-10-01 加「外观」：皮肤 / 亮暗 / 强调色 / 自定义背景。它**排在第二位**，
+ *  紧挨着「通用」——换肤是每个人都会碰一次的设置，埋在最后等于没有；
+ *  而它不属于「通用」：那一片是行为开关（提示词、检索、语音），与外观不是一回事。 */
 export const SETTING_SECTIONS = [
   { key: 'general', icon: Settings, label: '通用' },
+  { key: 'appearance', icon: Palette, label: '外观' },
   { key: 'models', icon: Brain, label: '模型' },
   { key: 'agents', icon: Bot, label: '智能体' },
   { key: 'automation', icon: Timer, label: '自动化' },

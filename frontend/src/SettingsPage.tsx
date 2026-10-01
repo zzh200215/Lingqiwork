@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { api, type CostSummary, type ModelProbe, type ProviderConfig } from './api'
 import { inputCls, type WorkbenchPrefs } from './settingsShared'
+import AppearanceSettings from './AppearanceSettings'
 import SettingsTasks from './SettingsTasks'
 import SettingsAgents from './SettingsAgents'
 import SettingsEval from './SettingsEval'
@@ -317,6 +318,12 @@ export default function SettingsPage() {
           </ul>
         </div>
       ) : null}
+      {/* 外观（皮肤 / 亮暗 / 强调色 / 自定义背景）：整体在 AppearanceSettings。
+          **不挂在 `prefs` 上**——它的真值在 `ThemeProvider`（localStorage + 后端
+          `/api/settings/theme`），与这一页那张偏好大表没有关系；挂在上面会让
+          「后端偏好拉不到」连带把换肤一起藏起来。 */}
+      {section === 'appearance' && <AppearanceSettings />}
+
       {/* General preferences */}
       {section === 'general' && !prefs && (
         <p className="py-8 text-sm text-neutral-400">加载中…</p>
@@ -581,7 +588,7 @@ export default function SettingsPage() {
             <div className="flex items-center gap-3">
               <button
                 onClick={savePrefs}
-                className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:brightness-110"
+                className="wb-btn-primary px-4 py-1.5 text-sm"
               >
                 {prefsSaved ? '✓ 已保存（定时任务即时生效）' : '保存通用设置'}
               </button>
@@ -847,7 +854,7 @@ export default function SettingsPage() {
                 取消
               </button>
             )}
-            <button onClick={save} className="rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-1.5 text-sm font-medium text-white transition-all hover:brightness-110">
+            <button onClick={save} className="wb-btn-primary px-4 py-1.5 text-sm">
               {editingId ? '保存修改' : '添加'}
             </button>
           </div>

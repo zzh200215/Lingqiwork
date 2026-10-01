@@ -6,18 +6,25 @@ import {
   FileOutput,
   MessageSquare,
   NotebookPen,
+  Palette,
   Search,
 } from 'lucide-react'
 import { api, type SearchHit } from './api'
 import { NAV } from './routes'
+import { useTheme } from './ThemeProvider'
+import { listSkins, skinById } from './theme'
 
 // 全局命令面板（Ctrl+K）。参考项目 Robot Admin 的顶栏搜索是它「像产品」最直接的
 // 一处——这里抄交互，不抄实现：搜索全部打现有接口（/api/search 是后端本来就有的
 // 会话/教学全文检索），不建索引、不加新真值。
 //
-// 四个来源：页面直达（NAV）、会话与教学内容（/api/search）、笔记（按文件名过滤）、
-// 产出物（按标题过滤）。后两个在打开面板时拉一次、内存里过滤——量级是几百条，
-// 不值得为此建节流请求。
+// 五个来源：页面直达（NAV）、会话与教学内容（/api/search）、笔记（按文件名过滤）、
+// 产出物（按标题过滤）、**换肤**（2026-10-01）。后三个在打开面板时拉一次、
+// 内存里过滤——量级是几百条，不值得为此建节流请求。
+//
+// 「换肤」进面板的理由（Tabler / Mantine 都这么做）：换肤是**一眼看结果**的动作，
+// 打「森林」两个字回车就换了，比「设置 → 外观 → 找那张卡」快一个数量级。
+// 它不是第二条真值：`run` 调的还是 `ThemeProvider` 那一份状态。
 
 interface PaletteItem {
   key: string
@@ -25,6 +32,11 @@ interface PaletteItem {
   sub?: string
   href: string
   icon: typeof Search
+  /** 就地执行（不导航）。有它时点这一项不跳页——换肤这类「立刻看到结果」的动作 */
+  run?: () => void
+  /** 列表左侧那个小色点（换肤项用它显示这套皮肤长什么样）。给了就不画 `icon`——
+   *  两样都画的话，一行里有两个图标，读起来是噪音。 */
+  dot?: string
 }
 
 interface PaletteGroup {
@@ -51,6 +63,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const [notes, setNotes] = useState<{ path: string }[]>([])
   const [outputs, setOutputs] = useState<{ title: string; path: string; date: string }[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+  const { config, resolved, setSkin, setMode } = useTheme()
 
   // 打开时拉一次静态目录；fetch 全部 .catch——面板挂了不能连累页面
   useEffect(() => {
@@ -124,14 +137,52 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       icon: BookOpen,
     }))
 
+    // 换肤：皮肤名与它的说明都能搜（打「深色」「绿」都找得到）。
+    // **只列皮肤本身**，自定义强调色与背景图留在设置页——那两样要看着调，
+    // 在命令面板里调等于蒙着眼睛拧旋钮。
+    const skins: PaletteItem[] = listSkins().map((s) => {
+      const v = resolved.dark ? s.dark : s.light
+      return {
+        key: `skin:${s.id}`,
+        label: `${s.label}皮肤`,
+        sub: config.skin === s.id ? '当前' : '换肤',
+        href: '/settings?section=appearance',
+        icon: Palette,
+        dot: v.accent,
+        run: () => setSkin(s.id),
+      }
+    }).filter((i) => !q || match(i.label) || match(skinById(i.key.slice(5)).hint))
+
+    // 亮暗也是「一眼看结果」的动作，与皮肤同组。**三档，与设置页同一套词**：
+    // 命令面板里少一档「跟随系统」的话，最常被选中的那一档就只能在设置页里找。
+    // `sub` 认的是 `config.mode`（用户选了什么）而不是 `resolved.dark`（现在是什么色）——
+    // 跟随系统时后者的值取决于系统，那样「当前」两个字会标在亮色或暗色上，是错的。
+    const darkItems: PaletteItem[] = (
+      [
+        { mode: 'light', label: '亮色模式' },
+        { mode: 'dark', label: '暗色模式' },
+        { mode: 'system', label: '跟随系统' },
+      ] as const
+    )
+      .map((o) => ({
+        key: `mode:${o.mode}`,
+        label: o.label,
+        sub: config.mode === o.mode ? '当前' : '明暗',
+        href: '/settings?section=appearance',
+        icon: Palette,
+        run: () => setMode(o.mode),
+      }))
+      .filter((i) => !q || match(i.label))
+
     return [
       { key: 'pages', label: '去哪', items: pages },
+      { key: 'appearance', label: '外观', items: [...skins, ...darkItems] },
       { key: 'search', label: '会话与教学', items: searchHits },
       { key: 'convs', label: '最近会话', items: convs },
       { key: 'notes', label: '笔记', items: noteHits },
       { key: 'outputs', label: '产出物', items: outHits },
     ].filter((g) => g.items.length > 0)
-  }, [query, hits, conversations, notes, outputs])
+  }, [query, hits, conversations, notes, outputs, config.skin, config.mode, resolved.dark, setSkin, setMode])
 
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups])
 
@@ -142,8 +193,11 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   if (!open) return null
 
   function pick(item: PaletteItem) {
+    // 有 `run` 的动作**先执行再关**：换肤这类动作关掉面板就该看见结果了；
+    // 反过来（先关后执行）在 React 里要跨一次渲染，用户会看到面板闪一下才变色。
+    item.run?.()
     onClose()
-    navigate(item.href)
+    if (!item.run) navigate(item.href)
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -184,7 +238,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             data-cmd-input=""
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜会话、笔记、产出物，或直接去某页…"
+            placeholder="搜会话、笔记、产出物，或直接去某页、换个皮肤…"
             className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
           />
           <kbd className="rounded-md border border-neutral-200 px-1.5 py-0.5 text-xs text-neutral-400 dark:border-neutral-700">
@@ -219,7 +273,15 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                           : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800/70'
                       }`}
                     >
-                      <item.icon className="h-4 w-4 shrink-0 text-neutral-400" />
+                      {item.dot ? (
+                        <span
+                          aria-hidden="true"
+                          className="h-3.5 w-3.5 shrink-0 rounded-full border border-black/10 dark:border-white/20"
+                          style={{ backgroundColor: item.dot }}
+                        />
+                      ) : (
+                        <item.icon className="h-4 w-4 shrink-0 text-neutral-400" />
+                      )}
                       <span className="min-w-0 flex-1 truncate text-sm">{item.label}</span>
                       {item.sub ? (
                         <span className="max-w-40 shrink-0 truncate text-xs text-neutral-400">{item.sub}</span>
