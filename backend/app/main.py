@@ -108,6 +108,11 @@ async def lifespan(app: FastAPI):
     # 建表 + 迁移走同一个入口（`core/bootstrap.py`）——CLI 与 drill 也走它，
     # 于是「库没初始化过」不会再以一个语焉不详的 SQLite 错出现在别处。
     await _migrate()
+    # dist 新鲜度（只提示不拦截）：dist 构建于哪个 commit、落后了喊一声。
+    # 「对着旧包调试半天」这条弯路，启动日志里就该看见提醒。
+    from app.core import dist_stamp
+
+    dist_stamp.check_and_warn(BASE_DIR, STATIC_DIR)
     # One-time, idempotent: seal any secret still sitting in plaintext (config.json
     # and provider api_key rows) so existing installs inherit the encryption.
     from app.core import secrets as secretbox
