@@ -12,11 +12,30 @@ import { CHROME_VEIL, DEFAULT_CHROME_GLASS } from './theme/surfaces'
 
 const SRC = join(process.cwd(), 'src')
 
-/** 所有产品源码（`.tsx` / `.ts`），排除测试自身。 */
-function sources(): { name: string; text: string }[] {
+/** 所有产品源码（`.tsx` / `.ts`），排除测试自身。 */function sources(): { name: string; text: string }[] {
   return readdirSync(SRC)
     .filter((f) => (f.endsWith('.tsx') || f.endsWith('.ts')) && !f.includes('.test.'))
     .map((f) => ({ name: f, text: readFileSync(join(SRC, f), 'utf8') }))
+}
+
+/** 递归版：子目录（`theme/`、`api/`…）也算数。
+ *
+ *  上一版 `readdirSync(SRC)` **只扫顶层**——「新文件不在清单里 = 默认放行」的洞
+ *  开在子目录这一侧：`theme/registry.ts` 的镜像 catch 就是第一个从洞里进来的
+ *  （2026-10-01 补上）。凡有静默 catch 的文件，无论在哪一层，都必须在账本上
+ *  显式占一行；没有静默的文件不必登记。 */
+function sourcesDeep(dir: string = SRC, rel: string = ''): { name: string; text: string }[] {
+  const out: { name: string; text: string }[] = []
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const name = rel ? `${rel}/${e.name}` : e.name
+    if (e.isDirectory()) out.push(...sourcesDeep(join(dir, e.name), name))
+    else if (
+      (e.name.endsWith('.tsx') || e.name.endsWith('.ts')) &&
+      !e.name.includes('.test.')
+    )
+      out.push({ name, text: readFileSync(join(dir, e.name), 'utf8') })
+  }
+  return out
 }
 
 /** 《工作模块优化方案》管的那些文件。
@@ -417,7 +436,7 @@ describe('设计纪律 · 全仓守卫', () => {
     // 是 `TutorPage` 9（症状最像「你还没学过」）、`CompanionPage` 5、`App`/`AssetsPage`/`DashboardPage`/`ReviewPage` 各 4。
     // 清哪一处都要单独判是哪种静默，所以这条清单是**按文件计数**，不是一句「全仓禁止」。
     const counts: Record<string, number> = {}
-    for (const s of sources()) {
+    for (const s of sourcesDeep()) {
       const n = s.text
         .split('\n')
         // 跳过注释行——注释里正当地提到这个写法（说明为什么改掉了它 / 为什么留着它）
@@ -463,6 +482,9 @@ describe('设计纪律 · 全仓守卫', () => {
       'useAttachments.ts': 2,
       // 2026-09-30：App.tsx 的 tts_auto 那笔静默 catch 随 useVoicePlayback 搬来
       'useVoicePlayback.ts': 1,
+      // 2026-10-01：扫描升级为递归后第一笔从子目录进账——registry 镜像皮肤的
+      // 那条「副本失败不挡正本」（理由与行为见 theme/registry.sync.test.ts）
+      'theme/registry.ts': 1,
     })
   })
 
