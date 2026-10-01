@@ -472,7 +472,9 @@ describe('设计纪律 · 全仓守卫', () => {
       // 2026-09-29：概念轨/概览/历史三面板从 TutorPage 拆出（TutorRecordsPanels），
       // openConceptRow 那条「邻居拉不到就不摆」的 catch 跟着走
       'TutorRecordsPanels.tsx': 1,
-      'TutorPage.tsx': 8,
+      // 2026-10-01：TutorPage 的 8 笔全数清偿出账——侧栏六条、面试题库、开场建议
+      // 都改成报自己的名字（railErr/bankErr/startersErr，SettingsPage 那条纪律的轻量版）。
+      // 「症状最像你还没学过」的那一页，现在拉不到会说话了。
       // 2026-09-26：EnginePulse 从 WorkPage 搬出（那两条「读不到就不摆」的 catch 跟着走）
       'WorkPage.tsx': 1,
       'EnginePulse.tsx': 2,

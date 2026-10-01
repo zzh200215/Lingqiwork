@@ -69,10 +69,18 @@ export default function TutorPage() {
   const [judgeMsg, setJudgeMsg] = useState('')
   // 面试陪练的题库（只读）：选中那个模式时才拉一次
   const [bank, setBank] = useState<InterviewBank | null>(null)
+  // 取数失败不再退回静默（designRules 账本 2026-10-01 清偿最重的一笔）：拉不到的
+  // 侧栏摆空区，症状是「看起来你还没学过」。学本身不依赖这一栏——失败只报一句
+  // 小字、不挡任何动作，哪条失败报哪条的名字（SettingsPage 那条纪律的轻量版）。
+  const [railErr, setRailErr] = useState('')
+  const [bankErr, setBankErr] = useState('')
+  const [startersErr, setStartersErr] = useState('')
 
   useEffect(() => {
     if (mode !== 'interview' || bank) return
-    void api.interviewBank().then(setBank).catch(() => {})
+    void api.interviewBank().then(setBank).catch(() =>
+      setBankErr('题库没拉出来——过一会儿再切一次面试模式'),
+    )
   }, [mode, bank])
   // 展开中的概念（看它历次自评与卡点的演进）；一次只展开一个，右栏窄
   const [openConcept, setOpenConcept] = useState<string | null>(null)
@@ -162,15 +170,25 @@ export default function TutorPage() {
   const abortRef = useRef<AbortController | null>(null)
 
   const refreshRail = useCallback(() => {
-    // best-effort: the rail is context, never a precondition for teaching
-    api.tutorSessions().then((r) => setRows(r.sessions)).catch(() => {})
-    api.tutorStats().then(setStats).catch(() => {})
-    api.tutorMap().then(setLearnMap).catch(() => {})
-    api.tutorMastery().then(setMastery).catch(() => {})
-    api.tutorStuck().then((r) => setStuckRows(r.stuck)).catch(() => {})
+    // best-effort: the rail is context, never a precondition for teaching——
+    // 但「拉不到」要报出名字，不能摆成一个空侧栏让人以为你还没学过。
+    setRailErr('')
+    const failed: string[] = []
+    const track = (name: string, p: Promise<unknown>) =>
+      p.catch(() => {
+        if (!failed.includes(name)) {
+          failed.push(name)
+          setRailErr(`侧栏这几样没刷新出来：${failed.join('、')}（后端在跑吗？）`)
+        }
+      })
+    track('会话', api.tutorSessions().then((r) => setRows(r.sessions)))
+    track('统计', api.tutorStats().then(setStats))
+    track('图谱', api.tutorMap().then(setLearnMap))
+    track('掌握度', api.tutorMastery().then(setMastery))
+    track('卡点', api.tutorStuck().then((r) => setStuckRows(r.stuck)))
     // 「我老卡的地方」：**与零柒那句「又卡住了」同一批**（同一个后端判据）。
     // 不在这儿另算一遍——界面上的标记与它嘴里的话必须是同一批，否则「它凭什么这么说」查不到。
-    api.tutorRecurring().then((r) => setRecurring(r.recurring)).catch(() => {})
+    track('老卡的地方', api.tutorRecurring().then((r) => setRecurring(r.recurring)))
   }, [])
 
   // 卡点的手动出口：标已解 / 标回待解。右栏是上下文，失败静默。
@@ -438,7 +456,9 @@ export default function TutorPage() {
 
   // 开场建议只在开场屏有意义：挂载时拉一次，点一个就开会话，不轮询不催
   useEffect(() => {
-    api.tutorStarters().then((r) => setStarters(r.starters)).catch(() => {})
+    api.tutorStarters().then((r) => setStarters(r.starters)).catch(() =>
+      setStartersErr('开场建议没拉出来——直接在框里输入也一样'),
+    )
   }, [])
 
   useEffect(() => {
@@ -725,7 +745,19 @@ export default function TutorPage() {
   }
   const historyList = <TutorHistoryList r={rec} />
   const conceptsPanel = <TutorConceptsPanel r={rec} />
-  const railPanel = <TutorRailPanel r={rec} />
+  const railPanel = (
+    <>
+      <TutorRailPanel r={rec} />
+      {railErr ? (
+        <p
+          data-tutor-rail-err=""
+          className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+        >
+          {railErr}
+        </p>
+      ) : null}
+    </>
+  )
   const hasCards = !!(
     rs || rsDraft || rsBusy || rsMsg ||
     dc || dcFrame || dcDraft || dcBusy || dcMsg ||
@@ -735,6 +767,7 @@ export default function TutorPage() {
 
   const openingRec: TutorOpeningRec = {
     bank,
+    bankErr,
     begin,
     beginWith,
     busy,
@@ -778,6 +811,7 @@ export default function TutorPage() {
     setToolTopic,
     setTopic,
     starters,
+    startersErr,
     stats,
     stuckRows,
     tab,

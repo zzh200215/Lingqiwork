@@ -20,6 +20,9 @@ import { RepeatChip } from './tutorShared'
 
 export interface TutorOpeningRec {
   bank: InterviewBank | null
+  /** 题库没拉出来时的一句人话（空 = 拉到了或还没拉）。**不静默**：摆空区
+   *  看起来像「题库是空的」，其实可能是后端没起。 */
+  bankErr: string
   begin: () => void
   beginWith: (topicText: string, repo?: string, m?: 'socratic' | 'feynman' | 'future' | 'interview', originPointId?: number, prereqCardId?: number) => Promise<void>
   busy: boolean
@@ -63,6 +66,9 @@ export interface TutorOpeningRec {
   setToolTopic: Dispatch<SetStateAction<string>>
   setTopic: Dispatch<SetStateAction<string>>
   starters: TutorStarter[]
+  /** 开场建议没拉出来时的一句人话（空 = 拉到了）。**不静默**：空着看起来像
+   *  「你还没有任何学习记录」，其实可能是后端没起。 */
+  startersErr: string
   stats: TutorStats | null
   stuckRows: TutorStuckRow[]
   tab: TutorTab
@@ -72,7 +78,7 @@ export interface TutorOpeningRec {
 }
 
 export default function TutorOpening({ r }: { r: TutorOpeningRec }) {
-  const { bank, begin, beginWith, busy, cfBusy, conceptsPanel, dcBusy, dgOpen, err, hasCards, historyList, learnMap, mapCount, markQuiz, mastery, mode, open, qz, qzBusy, qzMode, qzMsg, qzQuery, qzSource, qzSources, qzText, repeatMap, reportCards, resolveStuck, rows, rsBusy, runQuiz, runTool, setDgOpen, setMode, setQz, setQzMode, setQzQuery, setQzSource, setQzText, setTab, setToolOpen, setToolTopic, setTopic, starters, stats, stuckRows, tab, toolOpen, toolTopic, topic } = r
+  const { bank, bankErr, begin, beginWith, busy, cfBusy, conceptsPanel, dcBusy, dgOpen, err, hasCards, historyList, learnMap, mapCount, markQuiz, mastery, mode, open, qz, qzBusy, qzMode, qzMsg, qzQuery, qzSource, qzSources, qzText, repeatMap, reportCards, resolveStuck, rows, rsBusy, runQuiz, runTool, setDgOpen, setMode, setQz, setQzMode, setQzQuery, setQzSource, setQzText, setTab, setToolOpen, setToolTopic, setTopic, starters, startersErr, stats, stuckRows, tab, toolOpen, toolTopic, topic } = r
   return (
       <div className="wb-page flex-1 overflow-y-auto px-6 py-6">
         {/* 开场屏 = 一屏式主页：学 / 练 / 记录 三个标签，一屏只做一类事。
@@ -152,6 +158,14 @@ export default function TutorOpening({ r }: { r: TutorOpeningRec }) {
                 : '看一眼题库…'}
             </p>
           ) : null}
+          {mode === 'interview' && bankErr ? (
+            <p
+              data-interview-bank-err=""
+              className="pb-2 text-xs text-amber-700 dark:text-amber-300"
+            >
+              {bankErr}
+            </p>
+          ) : null}
           <div className="flex gap-2">
             <input
               value={topic}
@@ -178,6 +192,14 @@ export default function TutorOpening({ r }: { r: TutorOpeningRec }) {
             </button>
           </div>
           {err ? <p className="pt-3 text-sm text-rose-600 dark:text-rose-400">{err}</p> : null}
+          {startersErr ? (
+            <p
+              data-tutor-starters-err=""
+              className="pt-3 text-xs text-amber-700 dark:text-amber-300"
+            >
+              {startersErr}
+            </p>
+          ) : null}
           {/* 开场建议：你自己的记录放在手边（DeepTutor 参考项）。点了才开会话，
               不是队列——没有计数、没有到期，想不理就不理。 */}
           {starters.length > 0 ? (
