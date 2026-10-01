@@ -10,6 +10,7 @@ import {
   accentPalette,
   applyTheme,
   bootTheme,
+  effectiveBg,
   loadTheme,
   normalizeHex,
   parseTheme,
@@ -20,6 +21,8 @@ import {
   saveDefaultTheme,
   saveTheme,
   scrimFor,
+  type ThemeBg,
+  type ThemeConfig,
 } from './theme'
 import { BUILTIN_SKIN_IDS, BUILTIN_SKINS, type Skin } from './theme/skins'
 import { PANEL_FLOOR } from './theme/surfaces'
@@ -367,5 +370,47 @@ describe('applyTheme / bootTheme', () => {
       expect(root.style.getPropertyValue(`--wb-violet-${step}`)).not.toBe('')
     }
     expect(root.style.getPropertyValue('--wb-chart-5')).not.toBe('')
+  })
+})
+
+describe('壁纸轮换池：时间桶，不是定时器', () => {
+  const variant = SKINS.default.light
+  const T0 = 1_800_000_000_000 // 任意锚点：间隔 10 分钟，桶号 3000
+  const cfgWith = (bg: Partial<ThemeBg>): ThemeConfig => ({
+    ...DEFAULT_THEME,
+    bg: { ...DEFAULT_BG, mode: 'image', image: '/api/images/manual.png', ...bg },
+  })
+
+  it('同一桶内永远是同一张——不管刷新几次、几个标签页', () => {
+    const cfg = cfgWith({ pool: ['/api/images/a.png', '/api/images/b.png'], rotateMin: 10 })
+    expect(effectiveBg(cfg, variant, T0).image).toBe(
+      effectiveBg(cfg, variant, T0 + 5 * 60_000).image,
+    )
+  })
+
+  it('桶换了就换下一张，到尾循环回头', () => {
+    const cfg = cfgWith({ pool: ['/api/images/a.png', '/api/images/b.png'], rotateMin: 10 })
+    const shots = [0, 1, 2, 3].map((k) => effectiveBg(cfg, variant, T0 + k * 10 * 60_000).image)
+    expect(shots).toEqual([
+      '/api/images/a.png',
+      '/api/images/b.png',
+      '/api/images/a.png',
+      '/api/images/b.png',
+    ])
+  })
+
+  it('池子空 / 间隔关：原样返回**同一个对象**——引用稳定性是上游 useMemo 的口粮', () => {
+    const cfg = cfgWith({ pool: [], rotateMin: 10 })
+    expect(effectiveBg(cfg, variant, T0)).toBe(cfg.bg)
+    const off = cfgWith({ pool: ['/api/images/a.png'], rotateMin: 0 })
+    expect(effectiveBg(off, variant, T0)).toBe(off.bg)
+  })
+
+  it('parseTheme：池子只收合法地址、去重；rotateMin 夹进取值域', () => {
+    const cfg = parseTheme({
+      bg: { pool: ['/api/images/a.png', 'javascript:alert(1)', '/api/images/a.png', 'not a url'], rotateMin: 99999 },
+    })
+    expect(cfg.bg.pool).toEqual(['/api/images/a.png'])
+    expect(cfg.bg.rotateMin).toBe(1440)
   })
 })

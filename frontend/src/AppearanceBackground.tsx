@@ -14,6 +14,8 @@ import { api, type ImageItem } from './api'
 import { useTheme } from './ThemeProvider'
 import {
   GRADIENT_PRESETS,
+  MAX_BG_POOL,
+  ROTATE_CHOICES,
   SOLID_PRESETS,
   safeImageUrl,
   type BgMode,
@@ -147,6 +149,18 @@ export default function AppearanceBackground({
     } finally {
       setSweepBusy(false)
     }
+  }
+
+  /** 把当前图收进轮换池。**收进去就默认开轮换**（60 分钟档）：把图加入池子
+   *  这个动作的意思就是「我想轮着看」，存着不开等于没做。 */
+  function addToPool() {
+    const u = safeImageUrl(config.bg.image)
+    if (!u || config.bg.pool.includes(u) || config.bg.pool.length >= MAX_BG_POOL) return
+    patchBg({ pool: [...config.bg.pool, u], rotateMin: config.bg.rotateMin || 60 })
+  }
+
+  function removeFromPool(u: string) {
+    patchBg({ pool: config.bg.pool.filter((x) => x !== u) })
   }
 
   return (
@@ -436,6 +450,59 @@ export default function AppearanceBackground({
                 )}
               </div>
             ) : null}
+
+            {/* **轮换池**：几张图按时间桶轮着当壁纸。按墙钟切块而不是定时器——
+                不写盘、刷新与另一个标签页看到的是同一张。池子里的图与「当前图」
+                是两份：轮换开着时当前显示池子里的那张，关掉就回到你自己选的那张。 */}
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm">轮换</span>
+              <select
+                data-bg-rotate=""
+                value={config.bg.rotateMin}
+                onChange={(e) => patchBg({ rotateMin: Number(e.target.value) })}
+                className="rounded-md border border-neutral-200 bg-transparent px-2 py-1.5 text-sm dark:border-neutral-700"
+              >
+                <option value={0}>关</option>
+                {ROTATE_CHOICES.map((m) => (
+                  <option key={m} value={m}>
+                    {m >= 1440 ? '每天换' : `每 ${m} 分钟`}
+                  </option>
+                ))}
+              </select>
+              <button
+                data-bg-rotate-add=""
+                onClick={addToPool}
+                disabled={!safeImageUrl(config.bg.image) || config.bg.pool.length >= MAX_BG_POOL}
+                className="wb-btn-ghost px-2.5 py-1.5 text-xs disabled:opacity-40"
+              >
+                把当前图加入轮换
+              </button>
+              {config.bg.pool.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5" data-bg-pool="">
+                  {config.bg.pool.map((u) => (
+                    <span key={u} className="relative">
+                      {isVideoName(u) ? (
+                        <video src={u} muted preload="metadata" className="h-9 w-14 rounded object-cover" />
+                      ) : (
+                        <img src={u} alt={u} className="h-9 w-14 rounded object-cover" />
+                      )}
+                      <button
+                        data-bg-pool-remove={u}
+                        onClick={() => removeFromPool(u)}
+                        title="从轮换池移除"
+                        className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-neutral-300 bg-white text-[10px] leading-none text-neutral-500 hover:text-neutral-800 dark:border-neutral-600 dark:bg-neutral-900 dark:hover:text-neutral-200"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-xs text-neutral-400">
+                  挑几张轮着看——按墙钟整点换，不写盘，两个窗口看到的是同一张
+                </span>
+              )}
+            </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <Slider

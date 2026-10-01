@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 
 import { useTheme } from './ThemeProvider'
-import { isVideoUrl } from './theme/background'
+import { isVideoUrl, rotatedImage, safeImageUrl } from './theme/background'
 
 /** 这张图还在不在。
  *
@@ -80,12 +80,32 @@ function useVideoAlive(url: string): boolean {
  *
  *  三个子层的分工写在 `index.css` 那一段注释里（定位 / 图+模糊 / 压暗）。 */
 export default function ThemeBackdrop() {
-  const { resolved } = useTheme()
-  const url = resolved.bg.mode === 'image' ? resolved.image : ''
+  const { config, resolved } = useTheme()
+  // 轮换开着的这一刻该是哪张：**按墙钟现算**，不读 resolved.image——
+  // 那是「上次 resolve 那一刻」的答案，时间桶换了它不会自己跟着换。
+  const rotating =
+    config.bg.mode === 'image' && config.bg.pool.length > 0 && config.bg.rotateMin > 0
+  const [, tick] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    if (!rotating) return
+    // 闹钟对齐到**下一个时间桶的边界**：10 分钟一换就在整 10 分钟换，而不是
+    // 「从你打开页面起算 10 分钟」——两次刷新、两个标签页，看到的是同一张。
+    // +1s 让自己落在新桶里一点点，别跟边界抢跑。
+    const period = config.bg.rotateMin * 60_000
+    const wait = period - (Date.now() % period) + 1_000
+    const t = window.setTimeout(tick, wait)
+    return () => window.clearTimeout(t)
+  }, [rotating, config.bg.rotateMin, tick])
+
+  const url = rotating
+    ? safeImageUrl(rotatedImage(config.bg, Date.now()))
+    : resolved.bg.mode === 'image'
+      ? resolved.image
+      : ''
   const video = isVideoUrl(url)
   const alive = useVideoAlive(video ? url : '')
   const imgAlive = useImageAlive(video ? '' : url)
-  if (resolved.bg.mode !== 'image' || !resolved.image || !(video ? alive : imgAlive)) return null
+  if (!(rotating || resolved.bg.mode === 'image') || !url || !(video ? alive : imgAlive)) return null
 
   const repeat = resolved.bg.fit === 'repeat'
   // reduced-motion 下不自动播：视频停在首帧（preload 拉得着），画面在、动不在。
@@ -98,9 +118,9 @@ export default function ThemeBackdrop() {
       {video ? (
         <video
           className="wb-backdrop-img wb-backdrop-video"
-          data-wb-backdrop-img={resolved.image}
+          data-wb-backdrop-img={url}
           data-wb-fit={resolved.bg.fit}
-          src={resolved.image}
+          src={url}
           muted
           loop
           playsInline
@@ -110,10 +130,10 @@ export default function ThemeBackdrop() {
       ) : (
         <div
           className="wb-backdrop-img"
-          data-wb-backdrop-img={resolved.image}
+          data-wb-backdrop-img={url}
           data-wb-fit={resolved.bg.fit}
           style={{
-            backgroundImage: `url("${resolved.image}")`,
+            backgroundImage: `url("${url}")`,
             // 平铺时 `cover` 会把一个格子拉伸成整屏，那不是平铺。格子自己多大就是多大
             // （图本身带尺寸），所以这一项交给 CSS 的 `auto`。
             backgroundSize: repeat ? undefined : resolved.bg.fit,

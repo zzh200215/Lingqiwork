@@ -31,6 +31,8 @@ import {
   DEFAULT_BG,
   FOCUS_MAX,
   FOCUS_MIN,
+  MAX_BG_POOL,
+  ROTATE_CHOICES,
   VEIL_FACTORS,
   ZOOM_MAX,
   ZOOM_MIN,
@@ -39,6 +41,7 @@ import {
   isSafeImageUrl,
   isScrimDir,
   isVideoUrl,
+  rotatedImage,
   safeImageUrl,
   type BgFit,
   type BgMode,
@@ -86,7 +89,9 @@ import {
 
 export {
   DEFAULT_BG,
+  MAX_BG_POOL,
   MIN_SKIN_SCRIM,
+  ROTATE_CHOICES,
   SKIN_FORMAT,
   PARTICLE_KINDS,
   SKINS_CHANGED_EVENT,
@@ -112,6 +117,7 @@ export {
   parseSkin,
   removeUserSkin,
   renameUserSkin,
+  rotatedImage,
   skinById,
   skinToManifest,
   userSkinManifests,
@@ -262,12 +268,24 @@ export function resolveSkin(name: string): Skin {
 }
 
 /** **背景这一件事唯一的分派点**：用户自己设了就以用户的为准，用户没设
- *  （`mode === 'skin'`）才轮到皮肤自带的那一张。
+ * （`mode === 'skin'`）才轮到皮肤自带的那一张。
  *
- *  只有这一条规则，别处不许再分叉——两处分派的下场是「设置面板说跟着皮肤、
- *  画面却是用户那张图」这类谁也说不清的状态。 */
-export function effectiveBg(cfg: ThemeConfig, variant: SkinVariant): ThemeBg {
-  if (cfg.bg.mode !== 'skin') return cfg.bg
+ * 只有这一条规则，别处不许再分叉——两处分派的下场是「设置面板说跟着皮肤、
+ * 画面却是用户那张图」这类谁也说不清的状态。
+ *
+ * **轮换池也在这一个分派点里**：mode 为 image、池子非空且间隔开着时，
+ * 「这一刻的图」由 `rotatedImage` 按时间桶决定（`now` 是**注入**的参数——
+ * 默认当前时间，测试传定值；这函数仍然是纯的，纯度的证据在测试里）。 */
+export function effectiveBg(cfg: ThemeConfig, variant: SkinVariant, now: number = Date.now()): ThemeBg {
+  if (cfg.bg.mode !== 'skin') {
+    if (cfg.bg.mode === 'image') {
+      const rotated = rotatedImage(cfg.bg, now)
+      // 轮换没生效（池子空 / 间隔关）时原样返回，**对象身份不动**——
+      // 上游的 useMemo 靠引用稳定性少干活
+      if (rotated !== cfg.bg.image) return { ...cfg.bg, image: rotated }
+    }
+    return cfg.bg
+  }
   const s = variant.bg
   if (!s) return cfg.bg
   // **从 `DEFAULT_BG` 起，不是从 `cfg.bg` 起**：`mode === 'skin'` 时用户并没有对
@@ -553,11 +571,27 @@ export function parseTheme(raw: unknown): ThemeConfig {
       zoom: clamp(bg.zoom, ZOOM_MIN, ZOOM_MAX, DEFAULT_BG.zoom),
       opacity: clamp(bg.opacity, 0, 100, DEFAULT_BG.opacity),
       tint: parseTint(bg.tint),
+      // 轮换池：**只收合法地址**（与 image 同一道闸）、去重、封顶——它是
+      // 「壁纸收藏夹」，不是垃圾场；手改坏的那几条丢掉，好的照收
+      pool: parsePool(bg.pool),
+      rotateMin: clamp(bg.rotateMin, 0, 1440, DEFAULT_BG.rotateMin),
     },
     // 面板层的覆盖：一张表，认不出来的项**丢掉那一项**而不是丢掉整份
     //（与上面「逐字段兜底」同一条纪律）。旧版本的两个标量也在这里折叠进来。
     surfaces: parseSurfaces(o),
   }
+}
+
+/** 轮换池的读法。非法地址丢掉、重复的只留一个、超过上限截断。 */
+function parsePool(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    const u = safeImageUrl(typeof item === 'string' ? item : '')
+    if (u && !out.includes(u)) out.push(u)
+    if (out.length >= MAX_BG_POOL) break
+  }
+  return out
 }
 
 /** 面板层覆盖的读法。**两张来源都要认**：

@@ -65,6 +65,11 @@ export interface ThemeBg {
   opacity: number
   /** 图上的色调薄纱。见 `Tint`。 */
   tint: Tint
+  /** **轮换池**：几张图按间隔轮着当壁纸（`rotateMin > 0` 且 `mode === 'image'`
+   *  时生效）。只在 mode 为 image 时有意义——「跟着皮肤」与轮换是两回事。 */
+  pool: string[]
+  /** 轮换间隔（分钟），0 = 不轮换。档位见 `ROTATE_CHOICES`。 */
+  rotateMin: number
 }
 
 export type BgFit = 'cover' | 'contain' | 'repeat'
@@ -113,6 +118,8 @@ export const DEFAULT_BG: ThemeBg = {
   zoom: 100,
   opacity: 100,
   tint: { ...DEFAULT_TINT },
+  pool: [],
+  rotateMin: 0,
 }
 
 /** 焦点 / 缩放 / 不透明度的取值域。**导出给解析层用**：三处（用户设置、皮肤数据、
@@ -179,4 +186,31 @@ export function safeImageUrl(url: string): string {
  *  没有给皮肤格式加第二个真相。 */
 export function isVideoUrl(url: string): boolean {
   return /\.(mp4|webm)(?:[?#]|$)/i.test((url || '').trim())
+}
+
+// ---------- 轮换池 ----------
+
+/** 轮换间隔的档位（分钟）。0 = 关。**档位收在这一个数组里**：界面与解析
+ *  各写一份的话，「每天」哪天换就会变成一件说不清的事。 */
+export const ROTATE_CHOICES = [10, 30, 60, 1440] as const
+
+/** 池子上限。壁纸不是仓库——想囤图有 vault，这里只放「轮着看的这几张」。 */
+export const MAX_BG_POOL = 12
+
+/** 轮换池在「这一刻」该用哪张。
+ *
+ *  **时间桶，不是定时器**：按间隔把时间轴切块（`floor(now / 间隔)`），同一块内
+ *  永远是同一张。于是换图不需要写盘、不需要 setInterval 撑着——刷新、重开、
+ *  第二个标签页，大家看的是同一块钟，自然同一张图。这是本地优先工具该有的
+ *  轮换：状态在时间里，不在任何一份存档里。
+ *
+ *  池子空 / 间隔为 0 → 返回 `image` 本身（轮换不生效）。 */
+export function rotatedImage(
+  bg: Pick<ThemeBg, 'pool' | 'rotateMin' | 'image'>,
+  now: number,
+): string {
+  const pool = bg.pool.filter(Boolean)
+  if (!pool.length || bg.rotateMin <= 0) return bg.image
+  const bucket = Math.floor(now / (bg.rotateMin * 60_000))
+  return pool[bucket % pool.length] ?? bg.image
 }

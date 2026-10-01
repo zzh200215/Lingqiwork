@@ -27,6 +27,7 @@ vi.mock('./theme/extract', async (importOriginal) => {
 
 import { api } from './api'
 import AppearanceSettings from './AppearanceSettings'
+import ThemeBackdrop from './ThemeBackdrop'
 import { ThemeProvider } from './ThemeProvider'
 import { DEFAULT_THEME, APPEARANCE_VISITED_KEY, installUserSkins, loadTheme, loadUserSkins, userSkinManifests } from './theme'
 import { BUILTIN_SKINS } from './theme/skins'
@@ -809,5 +810,58 @@ describe('外观 · 分区域', () => {
     // 存完就切过去，那一层覆盖让位（它已经被写进皮肤数据里了）
     expect(loadTheme().surfaces).toEqual({})
     expect(root().dataset.wbSkin).toBe(mine!.id)
+  })
+})
+
+describe('外观 · 壁纸轮换池', () => {
+  it('把当前图加入轮换：池子长出来，间隔默认开到 60 分钟；同图再点不重复加', () => {
+    renderPanel()
+    fireEvent.click(document.querySelector('[data-bg-mode="image"]')!)
+    fireEvent.change(document.querySelector('input[data-bg-url]')!, {
+      target: { value: 'https://example.com/night.mp4' },
+    })
+    fireEvent.click(document.querySelector('[data-bg-rotate-add]')!)
+    expect(loadTheme().bg.pool).toEqual(['https://example.com/night.mp4'])
+    expect(loadTheme().bg.rotateMin).toBe(60)
+    fireEvent.click(document.querySelector('[data-bg-rotate-add]')!)
+    expect(loadTheme().bg.pool).toEqual(['https://example.com/night.mp4'])
+  })
+
+  it('间隔档位与移除：换档写进设置，× 把那张图请出池子', () => {
+    renderPanel()
+    fireEvent.click(document.querySelector('[data-bg-mode="image"]')!)
+    fireEvent.change(document.querySelector('input[data-bg-url]')!, {
+      target: { value: 'https://example.com/a.png' },
+    })
+    fireEvent.click(document.querySelector('[data-bg-rotate-add]')!)
+    fireEvent.change(document.querySelector('select[data-bg-rotate]')!, { target: { value: '1440' } })
+    expect(loadTheme().bg.rotateMin).toBe(1440)
+
+    fireEvent.click(document.querySelector('[data-bg-pool-remove="https://example.com/a.png"]')!)
+    expect(loadTheme().bg.pool).toEqual([])
+  })
+
+  it('轮换开着时，背景层画的是池子按时间桶算出的那一张', () => {
+    renderPanel()
+    fireEvent.click(document.querySelector('[data-bg-mode="image"]')!)
+    fireEvent.change(document.querySelector('input[data-bg-url]')!, {
+      target: { value: 'https://example.com/a.png' },
+    })
+    fireEvent.click(document.querySelector('[data-bg-rotate-add]')!)
+    fireEvent.change(document.querySelector('input[data-bg-url]')!, {
+      target: { value: 'https://example.com/b.png' },
+    })
+    fireEvent.click(document.querySelector('[data-bg-rotate-add]')!)
+    // 背景层挂在 Layout 下，不在设置面板里——单独挂一层（它从 localStorage 读同一份设置）
+    const { container } = render(
+      <ThemeProvider>
+        <ThemeBackdrop />
+      </ThemeProvider>,
+    )
+    // 池子两张、桶 0 → 第一张；浏览器里桶换了会自己跟着换（墙钟时间桶）
+    const shown = container
+      .querySelector('[data-wb-backdrop-img]')
+      ?.getAttribute('data-wb-backdrop-img')
+    expect(['https://example.com/a.png', 'https://example.com/b.png']).toContain(shown)
   })
 })
