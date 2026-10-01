@@ -76,12 +76,15 @@ import {
 } from './theme/registry'
 import {
   MIN_SKIN_SCRIM,
+  PARTICLE_KINDS,
   SKIN_FORMAT,
   channelsToHex,
+  isParticleKind,
   manifestToSkin,
   parseSkin,
   skinToManifest,
   type Parsed,
+  type ParticleKind,
   type SkinBg,
   type SkinManifest,
   type VariantManifest,
