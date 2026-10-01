@@ -26,8 +26,8 @@ import { BUILTIN_SKINS } from './theme/skins'
 const withBg = (skin: string, dark = false) => resolveTheme({ ...DEFAULT_THEME, skin, mode: dark ? 'dark' : 'light' })
 
 describe('图片式背景皮肤 · 分派规则', () => {
-  it('六张纯色皮肤没有底图，`mode: skin` 就是纯色底', () => {
-    for (const id of ['default', 'night', 'ink', 'forest', 'ocean', 'warm']) {
+  it('七张纯色皮肤没有底图，`mode: skin` 就是纯色底', () => {
+    for (const id of ['default', 'night', 'ink', 'forest', 'ocean', 'warm', 'firefly']) {
       const r = withBg(id)
       expect(r.bgFromSkin, id).toBe(false)
       expect(r.image, id).toBe('')
