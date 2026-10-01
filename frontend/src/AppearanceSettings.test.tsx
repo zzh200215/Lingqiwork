@@ -256,7 +256,25 @@ describe('外观 · 自定义背景', () => {
     expect(root().style.getPropertyValue('--wb-bg-blur')).toBe('12px')
   })
 
-  it('清理未引用：皮肤引用到的图作为 keep 传给后端，删除要过一遍确认', async () => {
+  it('强调色旁边摆着对比度实时读数，够不够 AA 说得出', () => {
+    renderPanel()
+    fireEvent.click(document.querySelector('[data-bg-mode="solid"]')!)
+    const line = document.querySelector('[data-accent-contrast]')
+    expect(line, '强调色一节应该有对比度读数').toBeTruthy()
+    // 默认强调色（出厂皮肤带的）也照量——两个数都摆出来，AA 够不够由数字自己说
+    expect(line!.textContent).toMatch(/白字压这色 \d+\.\d:1/)
+    expect(line!.textContent).toMatch(/彩字压底色 \d+\.\d:1/)
+
+    // 换一个肯定够不上 AA 的灰：读数要跟着变，并把「低于 AA」说出口
+    fireEvent.change(document.querySelector('[data-appearance-accent]')!, {
+      target: { value: '#aaaaaa' },
+    })
+    expect(document.querySelector('[data-accent-contrast]')!.textContent).toContain('低于 AA')
+  })
+})
+
+describe('外观 · 清理未引用', () => {
+  it('皮肤引用到的图作为 keep 传给后端，删除要过一遍确认', async () => {
     // 用户皮肤只存在 localStorage（wb:skins），后端的引用扫描看不见——
     // 皮肤底图的引用必须由前端算成 keep 传上去，否则清理会删掉皮肤在用的图。
     localStorage.setItem(

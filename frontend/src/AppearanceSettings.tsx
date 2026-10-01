@@ -15,6 +15,7 @@ import {
   userSkinManifests,
 } from './theme'
 import { skinFromImage, type ImageSkinReport } from './theme/extract'
+import { contrastRatio, contrastWithWhite, hexToRgb } from './theme/color'
 import {
   MAX_EXPORT_BYTES,
   buildExport,
@@ -195,6 +196,16 @@ export default function AppearanceSettings() {
   }
 
   const customAccent = normalizeHex(config.accent)
+  // 对比度实时读数：`theme/color.ts` 的工具早就存在，接到界面上比写在文档里有用。
+  // 强调色只有两种真实用法——按钮是**白字压强调色**，链接/选中态是**强调色字压页面底色**；
+  // 两个数都对着 WCAG AA 的 4.5:1 说实话。皮肤自带的强调色也照量——够不够是用户的事，
+  // 但「够不够」得看得见，而不是等哪天觉得按钮字发虚才想起这里。
+  const accentHex = customAccent ?? normalizeHex(resolved.accent)
+  const pageBgHex = normalizeHex(resolved.skin[resolved.dark ? 'dark' : 'light'].pageBg)
+  const accentRgb = accentHex ? hexToRgb(accentHex) : null
+  const pageBgRgb = pageBgHex ? hexToRgb(pageBgHex) : null
+  const whiteOnAccent = accentRgb ? contrastWithWhite(accentRgb) : null
+  const accentOnBg = accentRgb && pageBgRgb ? contrastRatio(accentRgb, pageBgRgb) : null
   // `listSkins()` 读的是注册表里那份模块级索引，React 看不见它什么时候变，
   // 所以这里把 `skinsRev`（装上 / 删掉皮肤时加一）显式写成依赖——
   // 少了它，导入成功的那一刻界面还是旧的皮肤表。
@@ -428,6 +439,18 @@ export default function AppearanceSettings() {
           ) : null}
         </div>
 
+        {whiteOnAccent !== null && accentOnBg !== null ? (
+          <p data-accent-contrast="" className="mt-2 text-xs text-neutral-400">
+            白字压这色 <span className="tabular-nums">{whiteOnAccent.toFixed(1)}:1</span>
+            {whiteOnAccent >= 4.5 ? ' ✓' : '（低于 AA）'} · 彩字压底色{' '}
+            <span className="tabular-nums">{accentOnBg.toFixed(1)}:1</span>
+            {accentOnBg >= 4.5 ? ' ✓' : '（低于 AA）'}
+            <span className="text-neutral-300 dark:text-neutral-600">
+              （AA 线 4.5:1——按钮是白字压强调色，链接/选中态是强调字压底色）
+            </span>
+          </p>
+        ) : null}
+
         {customAccent ? (
           <div className="mt-3">
             <p className="pb-1.5 text-xs text-neutral-400">推导出的色阶</p>
@@ -486,6 +509,16 @@ export default function AppearanceSettings() {
             只写 <code>{"{ \"id\": \"sakura\", \"label\": \"樱\", \"accent\": \"#d9558a\" }"}</code>{' '}
             就是一个能用的皮肤——亮暗两套、十一条色阶、页面底色都由这一个色号推出来。
           </span>
+          {userSkinManifests().length > 0 ? (
+            <span data-skins-local-only="" className="mt-1 block text-amber-700 dark:text-amber-300">
+              本机现在有 {userSkinManifests().length} 个导入的皮肤——它们<b>只存在这个浏览器里</b>
+              （localStorage），后端不备份。清缓存、换浏览器、换机器都会丢，唯一的退路是导出的那份文件。
+            </span>
+          ) : (
+            <span data-skins-local-only="" className="mt-1 block">
+              自己导入的皮肤<b>只存在这个浏览器里</b>（localStorage），后端不备份——记得导出留底。
+            </span>
+          )}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <button
