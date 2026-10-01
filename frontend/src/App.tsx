@@ -814,8 +814,10 @@ function ChatView() {
         {/* data-pet-clear：右下角的零柒按这个属性给自己让位——
             这个输入行在窄屏上正好压在它底下（见 PetWidget 的 dodge）。 */}
         <div data-pet-clear className="relative mx-auto flex max-w-3xl items-end gap-2">
-          {/* min-w-0：输入框自己的固有宽度（textarea 按字符数算）不肯缩，
-              右边的按钮又都是固定宽。窄窗格（分栏侧栏最窄 260）里这一行会顶出去。 */}
+          {/* min-w-0：输入框自己的固有宽度（textarea 按字符数算）不肯缩。
+              右边的按钮原本全是固定宽，窄窗格（分栏侧栏最窄 260）里这一行会顶出去——
+              现在 560px 以下按钮让出 6px（46→40、76→64），行宽跟着窗格走，
+              不再有「至少要 238px」的硬下限；再窄就是布局决策（见 docs）。 */}
           <div className="relative min-w-0 flex-1">
             <input
               ref={fileInputRef}
@@ -929,7 +931,7 @@ function ChatView() {
           <button
             onClick={() => void captureScreen()}
             title="截取屏幕/窗口进行问答（截图会附加为图片）"
-            className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border border-neutral-300 bg-white text-lg text-neutral-400 transition-all hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50"
+            className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border border-neutral-300 bg-white text-lg text-neutral-400 transition-all hover:border-violet-300 hover:text-violet-600 max-[560px]:w-10 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50"
           >
             📷
           </button>
@@ -937,7 +939,7 @@ function ChatView() {
             onClick={voice.toggle}
             disabled={transcribing}
             title={recording ? '停止录音并转写' : transcribing ? '转写中…' : '语音输入（再次点击结束）'}
-            className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border text-lg transition-all disabled:opacity-40 ${
+            className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border text-lg transition-all disabled:opacity-40 max-[560px]:w-10 ${
               recording
                 ? 'border-red-400 bg-red-50 text-red-500 dark:border-red-500/50 dark:bg-red-500/10'
                 : 'border-neutral-300 bg-white text-neutral-400 hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50'
@@ -949,7 +951,7 @@ function ChatView() {
             <>
               <button
                 onClick={stop}
-                className="flex h-[46px] w-[64px] items-center justify-center gap-1.5 rounded-lg border border-neutral-300 bg-white text-sm font-medium text-neutral-600 transition-colors hover:border-red-300 hover:text-red-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-red-500/50"
+                className="flex h-[46px] w-[64px] items-center justify-center gap-1.5 rounded-lg border border-neutral-300 bg-white text-sm font-medium text-neutral-600 transition-colors hover:border-red-300 hover:text-red-500 max-[560px]:w-14 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-red-500/50"
               >
                 <span className="h-2.5 w-2.5 animate-pulse-dot rounded-full bg-red-500" />
                 停止
@@ -958,7 +960,7 @@ function ChatView() {
                 onClick={send}
                 disabled={!input.trim()}
                 title="加入队列，回答完成后自动发送"
-                className="flex h-[46px] w-[52px] items-center justify-center rounded-lg border border-violet-300 bg-violet-50 text-lg text-violet-600 transition-all hover:border-violet-500 hover:bg-violet-100 disabled:opacity-40 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
+                className="flex h-[46px] w-[52px] items-center justify-center rounded-lg border border-violet-300 bg-violet-50 text-lg text-violet-600 transition-all hover:border-violet-500 hover:bg-violet-100 disabled:opacity-40 max-[560px]:w-12 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
               >
                 ⏭
               </button>
@@ -967,7 +969,7 @@ function ChatView() {
             <button
               onClick={send}
               disabled={!input.trim()}
-              className="wb-btn-primary h-[46px] w-[76px] text-sm shadow-sm shadow-violet-300 hover:shadow-md hover:shadow-violet-400"
+              className="wb-btn-primary h-[46px] w-[76px] text-sm shadow-sm shadow-violet-300 hover:shadow-md hover:shadow-violet-400 max-[560px]:w-16"
             >
               发送
             </button>

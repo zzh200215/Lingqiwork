@@ -40,7 +40,7 @@ export default function CollabPanel({
       <button
         onClick={() => setCollabOpen((v) => !v)}
         title="智能体协作：选 2-4 个智能体按流水线或评审回路协作完成输入框里的目标"
-        className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border text-lg transition-all ${
+        className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-lg border text-lg transition-all max-[560px]:w-10 ${
           collabOpen
             ? 'border-violet-400 bg-violet-50 text-violet-600 dark:border-violet-500/50 dark:bg-violet-500/10'
             : 'border-neutral-300 bg-white text-neutral-400 hover:border-violet-300 hover:text-violet-600 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-violet-500/50'
