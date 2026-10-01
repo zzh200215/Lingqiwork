@@ -490,7 +490,7 @@ export default function AppearanceBackground({
                         data-bg-pool-remove={u}
                         onClick={() => removeFromPool(u)}
                         title="从轮换池移除"
-                        className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-neutral-300 bg-white text-[10px] leading-none text-neutral-500 hover:text-neutral-800 dark:border-neutral-600 dark:bg-neutral-900 dark:hover:text-neutral-200"
+                        className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-neutral-300 bg-white text-xs leading-none text-neutral-500 hover:text-neutral-800 dark:border-neutral-600 dark:bg-neutral-900 dark:hover:text-neutral-200"
                       >
                         ×
                       </button>
