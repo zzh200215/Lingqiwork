@@ -62,25 +62,40 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const [conversations, setConversations] = useState<{ id: number; title: string }[]>([])
   const [notes, setNotes] = useState<{ path: string }[]>([])
   const [outputs, setOutputs] = useState<{ title: string; path: string; date: string }[]>([])
+  // 目录 / 搜索哪一环没读出来。**不静默**：面板挂了不能连累页面是真的，
+  // 但「搜不到」要说出口——不摆这句，后端没起会被读成「我什么都没有」。
+  const [indexErr, setIndexErr] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const { config, resolved, setSkin, setMode } = useTheme()
 
-  // 打开时拉一次静态目录；fetch 全部 .catch——面板挂了不能连累页面
+  // 打开时拉一次静态目录；fetch 全部兜底——面板挂了不能连累页面，
+  // 但失败要报自己的名字（哪样没读出来，搜索就缺哪样的结果）。
   useEffect(() => {
     if (!open) return
     setQuery('')
     setIndex(0)
     setHits([])
+    setIndexErr('')
     inputRef.current?.focus()
-    api.listConversations().then(setConversations).catch(() => {})
-    api
-      .listNotes()
-      .then((r) => setNotes(r.files.map((f) => ({ path: f.path }))))
-      .catch(() => {})
-    api
-      .workOutputs(200)
-      .then((r) => setOutputs(r.outputs.map((o) => ({ title: o.title, path: o.path, date: o.date }))))
-      .catch(() => {})
+    const failed: string[] = []
+    const track = (name: string, p: Promise<unknown>) =>
+      p.catch(() => {
+        if (!failed.includes(name)) {
+          failed.push(name)
+          setIndexErr(`目录没读出来：${failed.join('、')}——搜索结果会缺这几样（后端在跑吗？）`)
+        }
+      })
+    track('会话', api.listConversations().then(setConversations))
+    track(
+      '笔记',
+      api.listNotes().then((r) => setNotes(r.files.map((f) => ({ path: f.path })))),
+    )
+    track(
+      '产出',
+      api
+        .workOutputs(200)
+        .then((r) => setOutputs(r.outputs.map((o) => ({ title: o.title, path: o.path, date: o.date })))),
+    )
   }, [open])
 
   // 正文搜索：两个字符起搜，180ms 去抖（输入法组合期间 value 也会跳，量小无所谓）
@@ -247,6 +262,14 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
         </div>
 
         <div className="max-h-96 overflow-y-auto p-2" data-cmd-list="">
+          {indexErr ? (
+            <p
+              data-cmd-err=""
+              className="mb-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+            >
+              {indexErr}
+            </p>
+          ) : null}
           {flat.length === 0 ? (
             <p data-cmd-empty="" className="px-3 py-8 text-center text-sm text-neutral-400">
               没有匹配的结果

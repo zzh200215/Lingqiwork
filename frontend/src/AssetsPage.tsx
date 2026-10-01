@@ -74,35 +74,36 @@ export default function AssetsPage() {
   const [notes, setNotes] = useState<NoteFile[] | null>(null)
   const [skills, setSkills] = useState<SkillItem[] | null>(null)
   const [prompts, setPrompts] = useState<PromptEvalBoard | null>(null)
+  // 哪几块没读出来（designRules 账本 2026-10-01 清偿）：摆空区看起来像「你什么都没产出」，
+  // 其实可能是后端没起。一块坏了只影响那一块（§4-9 增强不挡路），但要说出口。
+  const [loadErr, setLoadErr] = useState('')
 
   useEffect(() => {
-    // 每一块**各自** catch：一块坏了只让那一块不出现，页面其余照常（§4-9 增强不挡路）
-    api
-      .workOutputs()
-      .then((r) => setOutputs(r.outputs))
-      .catch(() => setOutputs([]))
-    api
-      .dashboard()
-      .then((d) =>
+    // 每一块**各自** catch：一块坏了只让那一块不出现，页面其余照常（§4-9 增强不挡路）；
+    // 「不出现」要报自己的名字，不能让人把失败读成「空空如也」。
+    setLoadErr('')
+    const failed: string[] = []
+    const track = (name: string, p: Promise<unknown>) =>
+      p.catch(() => {
+        if (!failed.includes(name)) {
+          failed.push(name)
+          setLoadErr(`这几样没读出来：${failed.join('、')}（后端在跑吗？）`)
+        }
+      })
+    track('产出', api.workOutputs().then((r) => setOutputs(r.outputs)))
+    track(
+      '小屋',
+      api.dashboard().then((d) =>
         setHouse({
           vault_files: d.vault_files ?? null,
           memories: d.memories ?? null,
           open_days_7d: d.open_days_7d ?? null,
-        })
-      )
-      .catch(() => {})
-    api
-      .listNotes()
-      .then((r) => setNotes(r.files))
-      .catch(() => {})
-    api
-      .listSkills()
-      .then((r) => setSkills(r.skills))
-      .catch(() => {})
-    api
-      .promptEvalBoard()
-      .then(setPrompts)
-      .catch(() => {})
+        }),
+      ),
+    )
+    track('笔记', api.listNotes().then((r) => setNotes(r.files)))
+    track('技能', api.listSkills().then((r) => setSkills(r.skills)))
+    track('提示词评测', api.promptEvalBoard().then(setPrompts))
   }, [])
 
   const recent = (outputs ?? []).slice(0, 10)
@@ -124,6 +125,14 @@ export default function AssetsPage() {
       title="资产"
       description="你攒下的东西：跑出来的成品、写下的笔记、练成的技能——各有多少，一眼看完。"
     >
+      {loadErr ? (
+        <p
+          data-assets-load-err=""
+          className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+        >
+          {loadErr}
+        </p>
+      ) : null}
       {hasHouse ? (
         <section className="mb-8" data-assets-house>
           <h2 className="pb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">家底</h2>

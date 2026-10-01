@@ -449,15 +449,18 @@ describe('设计纪律 · 全仓守卫', () => {
       // 移动不是消灭，照实记到新文件名下
       // 2026-09-30：tts_auto 偏好那笔随语音播报子系统搬到 useVoicePlayback.ts
       'App.tsx': 1,
-      'AssetsPage.tsx': 4,
+      // 2026-10-01：AssetsPage 五笔清偿出账——五块取数失败合并成一句「没读出来」
+      // 的小字（data-assets-load-err），失败不再冒充「你什么都没产出」。
       'CardList.tsx': 1,
-      'CommandPalette.tsx': 3,
+      // 2026-10-01：CommandPalette 三笔清偿出账——目录三样没读出来时报名字
+      // （data-cmd-err，「搜索结果会缺这几样」），全文搜索失败也不再摆成「没有匹配」。
       // 2026-09-30：petState/tutorStuck 两笔随教学面板搬到 TeachPane.tsx
       'CompanionPage.tsx': 3,
       'TeachPane.tsx': 2,
       // 2026-09-29：决策日志节从 DashboardPage 拆出（DashboardDecisions），那条「读不到就不摆」跟着走
       'DashboardDecisions.tsx': 1,
-      'DashboardPage.tsx': 3,
+      // 2026-10-01：DashboardPage 三笔清偿出账——journal/tutor/beliefs 转成本页
+      // 其余块的同款约定（失败置 null、块不摆），主数据的失败本来就走 setError。
       'Layout.tsx': 2,
       // 2026-09-30：notesBriefing 那笔静默 catch 随文件列表侧栏搬到 NoteSidebar.tsx
       'NoteSidebar.tsx': 1,

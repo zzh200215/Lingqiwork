@@ -196,14 +196,17 @@ export default function DashboardPage() {
   const { recording, transcribing } = voice
 
   const refreshJournal = useCallback(() => {
-    api.journalRecent().then(setJournalView).catch(() => {})
+    // 与本页其他读数同一约定：挂了就置 null（那一块不摆），**不静默也不喧哗**——
+    // 主数据的失败走 setError，次级面板的失败由「块不出现」自己表达。
+    api.journalRecent().then(setJournalView).catch(() => setJournalView(null))
   }, [])
 
   useEffect(() => {
     api.dashboard().then(setStats).catch((e) => setError(String(e)))
-    // swallowed on purpose: the dashboard must never blank out over one endpoint
-    api.tutorStats().then(setTutor).catch(() => {})
-    api.beliefThreads().then((r) => setBeliefs(r.threads)).catch(() => {})
+    // swallowed on purpose: the dashboard must never blank out over one endpoint——
+    // 三条次级读数与本页其余块同一形状：失败置 null（块不摆），失败原因不再无声吞掉
+    api.tutorStats().then(setTutor).catch(() => setTutor(null))
+    api.beliefThreads().then((r) => setBeliefs(r.threads)).catch(() => setBeliefs(null))
     api.northStar().then(setNorth).catch(() => setNorth(null))
     api.usageFeatures()
       .then((r) => {
