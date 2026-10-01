@@ -128,6 +128,7 @@ import { settingsApi } from './api/settings'
 import { skillsApi } from './api/skills'
 import { sourcesApi } from './api/sources'
 import { tasksApi } from './api/tasks'
+import { themeApi } from './api/theme'
 import { threadsApi } from './api/threads'
 import { tutorApi } from './api/tutor'
 import { usageApi } from './api/usage'
@@ -156,6 +157,7 @@ export const api = {
   ...skillsApi,
   ...sourcesApi,
   ...tasksApi,
+  ...themeApi,
   ...threadsApi,
   ...tutorApi,
   ...usageApi,

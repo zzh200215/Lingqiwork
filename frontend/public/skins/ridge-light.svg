@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <!-- 远山（亮）：四道山脊 + 两条雾带，整体对比度压得很低。
+       两条刻意的取舍：
+       1. **越近的山脊越接近天色**（不是越深）。这是空气透视——远处的东西反而更实，
+          近处被雾洗掉。于是屏幕下半部分几乎是平的，写作区那一片安静。
+       2. 没有太阳、没有鸟、没有星。图上任何"有意思的东西"都会在长时间使用里
+          变成干扰；背景的职责是提供层次，不是提供内容。 -->
+  <defs>
+    <linearGradient id="sky-light" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f7fa"/>
+      <stop offset="0.62" stop-color="#eff4f8"/>
+      <stop offset="1" stop-color="#edf2f7"/>
+    </linearGradient>
+    <linearGradient id="mist-light" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.55"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#sky-light)"/>
+
+  <!-- 最远的一道：对比最强，是整张图的"地平线" -->
+  <path d="M0 452 L188 396 L322 430 L470 350 L610 404 L760 336 L902 392 L1058 344 L1214 402 L1372 356 L1600 420 L1600 900 L0 900 Z"
+        fill="#dde6ef"/>
+  <!-- 山脚那条雾：把远山的底边洗掉，山才有"远"的感觉 -->
+  <rect x="0" y="404" width="1600" height="120" fill="url(#mist-light)"/>
+
+  <path d="M0 548 L142 494 L286 540 L438 470 L596 528 L742 466 L890 522 L1044 474 L1206 536 L1358 486 L1600 552 L1600 900 L0 900 Z"
+        fill="#e4ebf3"/>
+  <rect x="0" y="516" width="1600" height="104" fill="url(#mist-light)"/>
+
+  <path d="M0 648 L168 604 L330 646 L488 592 L648 640 L812 588 L978 638 L1140 596 L1310 644 L1462 608 L1600 650 L1600 900 L0 900 Z"
+        fill="#eaeff6"/>
+  <rect x="0" y="628" width="1600" height="86" fill="url(#mist-light)"/>
+
+  <!-- 最近的一道：几乎就是页面底色本身，只靠一道极浅的边把层次留住 -->
+  <path d="M0 752 L176 718 L344 752 L512 712 L680 750 L852 714 L1024 752 L1196 716 L1368 754 L1520 724 L1600 748 L1600 900 L0 900 Z"
+        fill="#f0f4f8"/>
+</svg>

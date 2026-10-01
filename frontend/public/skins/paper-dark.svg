@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <!-- 素纸（暗）：与亮色同一套结构，两层都抬高一档不透明度——
+       暗底上同样强度的噪声看起来更弱（低亮度区的感知对比本来就低），
+       所以这一档不是"随便加一点"，是照着"看起来一样明显"调的。 -->
+  <filter id="paper-mottle-dark" x="0" y="0" width="640" height="640" filterUnits="userSpaceOnUse">
+    <feTurbulence type="fractalNoise" baseFrequency="0.006" numOctaves="3" stitchTiles="stitch"/>
+    <feColorMatrix type="saturate" values="0"/>
+  </filter>
+  <filter id="paper-grain-dark" x="0" y="0" width="640" height="640" filterUnits="userSpaceOnUse">
+    <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="4" stitchTiles="stitch" result="grain"/>
+    <feColorMatrix in="grain" type="saturate" values="0" result="grey"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.012 0.5" numOctaves="3" stitchTiles="stitch" result="fiber"/>
+    <feColorMatrix in="fiber" type="saturate" values="0" result="fiberGrey"/>
+    <feMerge>
+      <feMergeNode in="grey"/>
+      <feMergeNode in="fiberGrey"/>
+    </feMerge>
+  </filter>
+  <rect width="640" height="640" filter="url(#paper-mottle-dark)" opacity="0.1"/>
+  <rect width="640" height="640" filter="url(#paper-grain-dark)" opacity="0.07"/>
+</svg>

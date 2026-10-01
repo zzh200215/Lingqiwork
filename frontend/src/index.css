@@ -9,14 +9,28 @@ body,
 }
 
 body {
-  @apply bg-white text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100;
+  /* 底色走皮肤变量（`theme.ts` 写在 `<html>` 上的 `--wb-page-bg`）。
+     不用 `@apply bg-white dark:bg-neutral-950`：那两条是编译期固定值，
+     换肤换不动它们，症状是「换了个深色皮肤，页面四周还是白的」。 */
+  background-color: var(--wb-page-bg);
+  @apply text-neutral-900 antialiased dark:text-neutral-100;
   font-feature-settings: 'cv02', 'cv03', 'cv04';
 }
 
-/* ---------- brand tokens ---------- */
+/* ---------- brand tokens ----------
+ *
+ * 这两个名字留着是因为 `:focus-visible` 那条规则用它们；**值跟着强调色阶走**——
+ * 焦点环是「当前主题的品牌色」最典型的一处，换肤时它必须一起变。 */
 :root {
-  --brand: #7c5cff;
-  --brand-soft: #a78bfa;
+  --brand: rgb(var(--wb-violet-500));
+  --brand-soft: rgb(var(--wb-violet-400));
+  /* 实底主按钮的渐变两端由**皮肤**给（`theme.ts` 从强调色阶的 600/700 推），
+     这里只放一份「没有任何 JS 时」的兜底。为什么要按皮肤给而不是写死：
+     白字压在按钮上，而「浅色强调色」（暖调的琥珀、深海的青）在亮色模式下
+     只有 3.2–3.7:1 —— 按钮两端必须是能压住白字的深色，与页面底色上的
+     强调文字（那一档可以浅）不是同一个要求。 */
+  --wb-btn-from: rgb(var(--wb-violet-600));
+  --wb-btn-to: rgb(var(--wb-violet-700));
 }
 
 /* ---------- 交互微细节（2026-09-27 前端美化轮）----------
@@ -39,10 +53,34 @@ body {
 }
 
 .wb-btn-primary {
-  @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-gradient-to-b from-violet-500 to-violet-600 font-medium text-white transition-[filter] hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100;
+  /* `disabled:bg-none` 是给**少数需要中性禁用底**的按钮的出口（App.tsx 那个录音键）：
+     `bg-none` 把 background-image 清掉，剩下的交给 `disabled:bg-neutral-200`。
+     它必须在这里写清楚——`bg-none` 是工具类、定义在 utilities 层（在本文之后），
+     所以它能压过上面的 background-image；换成 `disabled:bg-none` 之外的写法都不稳。 */
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md font-medium text-white transition-[filter] hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100 disabled:bg-none disabled:bg-neutral-200 disabled:text-neutral-400 disabled:shadow-none dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600;
+  /* 渐变两端走变量：`bg-gradient-to-b from-violet-500 to-violet-600` 是编译期固定值，
+     暗色下压不住白字（4.35:1，低于 AA 的 4.5）。用变量接上之后，
+     同一个类名在两种模式下各自取一档深色（由皮肤给，见 `theme.ts`）。 */
+  background-image: linear-gradient(to bottom, var(--wb-btn-from), var(--wb-btn-to));
   /* 顶部一道极细的高光给按钮「体积感」——inset 高光不在「常驻阴影」禁令范围内
      （禁的是卡片/面板的投影分层），且视觉上是玻璃压边不是投影。 */
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+/* **不是按钮、但也用强调色实底**的元素：logo 方块、用户头像、自己发的那条消息气泡。
+ *
+ *  它们原来是 `bg-gradient-to-br from-violet-500 to-fuchsia-500` 手写在组件里的
+ *  （2026-09-13 版）。换成同一个变量之后，换皮肤时它们跟着走，
+ *  而且与主按钮用**同一对**色值——「按钮比头像亮一档」这种不一致不会再出现。
+ *
+ *  为什么不直接套 `.wb-btn-primary`：那个类带着 `inline-flex` / `hover:brightness`
+ *  / `disabled:` 一整套按钮语义，套在一个 `<div>` 上是错的（§4-7 一事一处，
+ *  这里要的是「强调色实底」这一件事，不是「按钮」）。 */
+.wb-accent-fill {
+  background-image: linear-gradient(to bottom right, var(--wb-btn-from), var(--wb-btn-to));
+}
+.wb-accent-fill-r {
+  background-image: linear-gradient(to right, var(--wb-btn-from), var(--wb-btn-to));
 }
 
 @keyframes wb-shimmer {
@@ -111,10 +149,7 @@ body {
  * 分层靠边框，阴影留给真正浮在上面的东西（模态/下拉）。
  */
 :root {
-  --page-bg: #ffffff;
-}
-.dark {
-  --page-bg: #0a0a0a;
+  --page-bg: var(--wb-page-bg);
 }
 
 /* 页面底：非会话页的 `main`（会话页自己管滚动与底色，不套这个） */
@@ -122,9 +157,91 @@ body {
   background-color: var(--page-bg);
 }
 
-/* 卡片：白底 + 一圈边。**没有常驻阴影。** */
+/* ---------- 自定义背景层（2026-10-01 外观 / 换肤）----------
+ *
+ *  **一层放在内容下面的固定画布**，铺在应用根容器里（`Layout.tsx` 的第一个子节点）。
+ *  为什么不直接把图挂到根容器的 `background-image` 上：侧栏与顶栏是半透明的
+ *  （`bg-white/70` + `backdrop-blur`），图必须真的在它们**下面**才能透出来，
+ *  挂在同一个元素上就只是被它们盖住。
+ *
+ *  三个子层各管一件事，谁都不抢别人的活：
+ *    · `.wb-backdrop`      定位与裁剪（`overflow: hidden` 让模糊不溢出边缘）
+ *    · `.wb-backdrop-img`  图本身 + 模糊。**模糊必须和压暗层分两层**——
+ *      同层的话 `filter` 会把压暗层一起糊掉，边缘还会渗出半透明的脏边。
+ *    · `.wb-backdrop-scrim` 压暗层。这是「自定义背景图之后正文还读得清」的唯一机制：
+ *      不把卡片做成半透明（那会变成玻璃拟态，内容一长就花），而是让图自己退到后面去。
+ *      颜色由 `--wb-scrim` 给（亮色压白、暗色压黑），随设置面板那根滑块变。
+ */
+.wb-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* 这一层是一整窗的位图，它自己重绘不该让聊天树跟着失效，反过来也一样。
+     `contain: strict` 把布局与绘制都圈在这一层里——参考实现
+     （dsh-deep-whale 的 maid-atelier 背景台）给同一个东西加的也是这一条，
+     理由是「装饰层的重绘不该波及内容」。 */
+  contain: strict;
+}
+.wb-backdrop-img {
+  position: absolute;
+  /* **四周溢出两个模糊半径**：模糊会把边缘糊成半透明，贴边的话四周会亮出一圈
+     「图没铺满」的边。给它多出来的料，糊完仍然是满的。 */
+  inset: calc(-2 * var(--wb-bg-blur, 0px));
+  background-repeat: no-repeat;
+  background-position: var(--wb-bg-focus, center);
+  /* 取景的第二个自由度：整体缩放。用 `transform` 而不是 `background-size`——
+     后者在 `cover` / `contain` 下是关键字，乘不了一个倍数。 */
+  transform: scale(var(--wb-bg-zoom, 1));
+  /* 图自身的不透明度：把图**淡出**到页面底色上（与「往图上盖一层」的压暗不同） */
+  opacity: var(--wb-bg-opacity, 1);
+  filter: blur(var(--wb-bg-blur, 0px));
+}
+/* 平铺（纹理、格纸）：`background-size` 由组件按格子给，这里只把重复打开。
+   焦点与缩放在平铺上没有意义（格子自己多大就是多大），所以一并交还给默认。 */
+.wb-backdrop-img[data-wb-fit='repeat'] {
+  background-repeat: repeat;
+  background-position: top left;
+  transform: none;
+}
+/* **色调薄纱**：图与压暗层之间的那一层。
+ *
+ *  为什么单独一层而不是并进压暗层：两者的职责不同，顺序也不能反。
+ *  压暗层是**可读性**机制（颜色由明暗模式定死、强度按图算出来），
+ *  色调是**风格**机制（颜色由皮肤给）。色调必须在压暗层**下面**——
+ *  反过来的话，皮肤随手改一个色调就会把「字读不读得清」这件事一起改掉，
+ *  而那正是这一整套里唯一不能被风格牵着走的东西。 */
+.wb-backdrop-tint {
+  position: absolute;
+  inset: 0;
+  background-color: var(--wb-bg-tint, transparent);
+}
+.wb-backdrop-scrim {
+  position: absolute;
+  inset: 0;
+  /* 两层，各管一件事：
+     · `background-color` 是全页的底子（均匀那一档）
+     · `background-image` 是**边缘加重**那两个梯度（`--wb-scrim-veil`，默认 `none`）
+     压暗是「图很美、字也看得清」唯一同时成立的办法：不去把卡片做成半透明
+     （那会变成玻璃拟态，内容一长就花），而是让图在该退的地方退下去。 */
+  background-color: var(--wb-scrim, transparent);
+  background-image: var(--wb-scrim-veil, none);
+}
+/* 没有自定义背景时整层不画——省一次合成，也让 `data-wb-bg` 成为可断言的真相 */
+[data-wb-bg='skin'] .wb-backdrop,
+[data-wb-bg='solid'] .wb-backdrop,
+[data-wb-bg='gradient'] .wb-backdrop {
+  display: none;
+}
+
+/* 卡片：面板底 + 一圈边。**没有常驻阴影。**
+ *  底色与边色都走皮肤变量（见上面那一节）——`.wb-card` 是全仓 145 处卡片的
+ *  唯一入口，所以「整站的面板跟着皮肤走」这件事是在这一行完成的。 */
 .wb-card {
-  @apply rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900/70;
+  @apply rounded-lg border;
+  border-color: rgb(var(--wb-border) / var(--wb-border-alpha, 1));
+  background-color: rgb(var(--wb-surface) / var(--wb-surface-alpha, 1));
 }
 
 /* 可点的卡片：hover **强化边框、不抬升、不加阴影**
@@ -134,6 +251,93 @@ body {
 }
 .wb-card-hover:hover {
   @apply border-neutral-300 dark:border-neutral-700;
+}
+
+/* ---------- 分区域的面：**完整皮肤**的地基（2026-10-03）----------
+ *
+ *  在这之前，卡片、侧栏、顶栏、输入框、下拉的底色都是**写死的**
+ *  （`bg-white` 169 处、`dark:bg-neutral-900` 之类的 325 处）。皮肤改不动它们，
+ *  于是「换了一套皮肤」在观感上仍然只是「换了一张壁纸 + 换了按钮颜色」。
+ *
+ *  这一节把那些面接到皮肤变量上，**业务组件一个都不用改**：
+ *
+ *  | 层 | 谁消费 | 变量 |
+ *  |---|---|---|
+ *  | 卡片 / 面板 | `.wb-card`（145 处）、`bg-white` 的面板覆盖（169 处） | `--wb-surface*` |
+ *  | 壳（侧栏 / 顶栏） | `.wb-chrome`（2 处） | `--wb-chrome*` |
+ *  | 浮层（模态 / 下拉） | `.wb-float`（11 处） | `--wb-surface` + `--wb-float-alpha` |
+ *  | 输入框 | 同上，靠 `--wb-field-alpha` 的下限兜着 | |
+ *
+ *  **只改 `background-color`，不碰 `color` 与 `border-color`**：`text-white`
+ *  （57 处）是**压在实底上的字**，`border-white/15`（13 处）是**压在深色面上的
+ *  浅色叠层**——它们与「面板底」共用 `white` 这个名字，但语义完全不同。
+ *  整条 remap `white` 会把那 70 处一起改掉，其中大半没有 `dark:` 配对，
+ *  在暗色下会变成「深色字压在深色按钮上」。所以这里是**按属性**覆盖的。
+ *
+ *  这一段用的选择器都比工具类高一档（`[data-wb-skin] .bg-white` 是 0-2-0，
+ *  `.bg-white` 是 0-1-0），所以不需要 `!important` 也压得住。 */
+
+/* 卡片 / 面板：`wb-card` 定义在 `@tailwind utilities` 之后，同权重压得过工具类 */
+.wb-card {
+  border-color: rgb(var(--wb-border) / var(--wb-border-alpha, 1));
+  background-color: rgb(var(--wb-surface) / var(--wb-surface-alpha, 1));
+}
+
+/* 壳：侧栏与顶栏。**一个类，一处定义**——两个地方各写一遍透明度的下场是
+ *  「侧栏跟着皮肤变了、顶栏没变」，而那种不一致只会被读成渲染 bug。
+ *
+ *  两档各自的出口（`--wb-sidebar-alpha` / `--wb-topbar-alpha`）默认落在
+ *  `--wb-chrome-alpha` 上，所以「壳是一个区域」仍然是默认；想分开的皮肤
+ *  写 `sidebarGlass` / `topbarGlass` 就行（参考实现 Codex Dream Skin 正是
+ *  把 `sidebar` 与 `header` 当两个可分别设的部件）。 */
+.wb-chrome {
+  background-color: rgb(var(--wb-chrome) / var(--wb-chrome-alpha, 1));
+  backdrop-filter: blur(var(--wb-chrome-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--wb-chrome-blur, 0px));
+}
+.wb-chrome.wb-sidebar {
+  background-color: rgb(var(--wb-chrome) / var(--wb-sidebar-alpha, var(--wb-chrome-alpha, 1)));
+}
+.wb-chrome.wb-topbar {
+  background-color: rgb(var(--wb-chrome) / var(--wb-topbar-alpha, var(--wb-chrome-alpha, 1)));
+}
+
+/* 浮层：模态、下拉、气泡、tooltip。**透明度有下限**（`FLOAT_FLOOR`），
+ *  因为浮层盖在内容上——透了就是两层字叠在一起，谁也读不了。
+ *
+ *  选择器带 `[data-wb-skin]` 是为了压过下面那组 `bg-white` 覆盖：
+ *  那些浮层的类名里本来就写着 `bg-white`（还有一串 `dark:bg-neutral-*`），
+ *  与它们同权重、靠**源序在后**取胜——所以这一条必须写在它们后面。
+ *  组件那边只需要多一个 `wb-float`，`bg-white` 留着不用删（它成了兜底）。 */
+[data-wb-skin] .wb-float {
+  background-color: rgb(var(--wb-surface) / var(--wb-float-alpha, 1));
+  backdrop-filter: blur(var(--wb-surface-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--wb-surface-blur, 0px));
+}
+
+/* **`bg-white` 的面板覆盖**：不透明度 ≥ 50% 的才是「面板底」，
+ *  低于 50% 的是压在深色面上的浅色叠层（`bg-white/5`、`bg-white/10`），
+ *  那些必须留在纯白——它们跟的不是皮肤，是它们底下那一层深色。
+ *
+ *  取值列到 100 是因为 Tailwind 的默认透明度刻度就这些，而**多列一档比漏一档便宜**：
+ *  漏掉的那一档会安静地不跟皮肤走，症状是「某个地方的输入框还是白的」。 */
+[data-wb-skin] .bg-white { background-color: rgb(var(--wb-surface) / var(--wb-surface-alpha, 1)); }
+[data-wb-skin] .bg-white\/50 { background-color: rgb(var(--wb-surface) / 0.5); }
+[data-wb-skin] .bg-white\/60 { background-color: rgb(var(--wb-surface) / 0.6); }
+[data-wb-skin] .bg-white\/70 { background-color: rgb(var(--wb-surface) / 0.7); }
+[data-wb-skin] .bg-white\/75 { background-color: rgb(var(--wb-surface) / 0.75); }
+[data-wb-skin] .bg-white\/80 { background-color: rgb(var(--wb-surface) / 0.8); }
+[data-wb-skin] .bg-white\/85 { background-color: rgb(var(--wb-surface) / 0.85); }
+[data-wb-skin] .bg-white\/90 { background-color: rgb(var(--wb-surface) / 0.9); }
+[data-wb-skin] .bg-white\/95 { background-color: rgb(var(--wb-surface) / 0.95); }
+
+/* 输入框 / 内嵌小面：`<input>` / `<textarea>` / `<select>` 上的白底。
+ *  **它们的透明度单独一档且有下限**（`FIELD_FLOOR`）：字打在框里，
+ *  框透了就是字压在图上面。这条不靠类名，靠元素——输入框的类名在仓里有十几种写法。 */
+[data-wb-skin] input.bg-white,
+[data-wb-skin] textarea.bg-white,
+[data-wb-skin] select.bg-white {
+  background-color: rgb(var(--wb-surface) / var(--wb-field-alpha, 1));
 }
 
 /* ---------- scrollbars ---------- */
@@ -163,7 +367,7 @@ body {
   @apply border border-violet-200/60 bg-gradient-to-r from-violet-50 via-white to-fuchsia-50 dark:border-violet-500/20 dark:from-violet-950/40 dark:via-neutral-900/70 dark:to-fuchsia-950/30;
 }
 :root {
-  --wb-chart-0: #7c5cff;
+  --wb-chart-0: rgb(var(--wb-violet-500));
   --wb-chart-1: #e879f9;
   --wb-chart-2: #38bdf8;
   --wb-chart-3: #34d399;
@@ -172,16 +376,9 @@ body {
   --wb-chart-grid: rgba(16, 24, 40, 0.08);
   --wb-chart-label: #6b7280;
 }
-.dark {
-  --wb-chart-0: #a78bfa;
-  --wb-chart-1: #f0abfc;
-  --wb-chart-2: #7dd3fc;
-  --wb-chart-3: #6ee7b7;
-  --wb-chart-4: #fcd34d;
-  --wb-chart-5: #fda4af;
-  --wb-chart-grid: rgba(255, 255, 255, 0.1);
-  --wb-chart-label: #9ca3af;
-}
+/* 暗色那一套（`--wb-chart-1..5`）不在这里再写一遍：它们由皮肤给
+   （`skins.ts` 每个变体各带一条 chart 色阶），`theme.ts` 在换肤时写成内联变量。
+   这里只留「没有任何 JS 时」的兜底——那种情况下沿用亮色图表色即可。 */
 
 /* 调度台 pipeline 节点：running 的那颗呼吸（脉的是外圈光晕，不是节点本身，
    避免跟 wb-card-hover 那种位移动画打架） */

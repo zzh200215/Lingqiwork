@@ -1,40 +1,67 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Brain, ChevronDown, Moon, Search, Sun } from 'lucide-react'
+import { Brain, ChevronDown, Moon, Palette, Search, Sun } from 'lucide-react'
 
 import CommandPalette from './CommandPalette'
 import PetWidget from './PetWidget'
+import ThemeBackdrop from './ThemeBackdrop'
+import { useTheme } from './ThemeProvider'
 import { api } from './api'
 import { NAV, navCrumbs, navState, useModule } from './routes'
 
-// Theme + shared sidebar layout for all pages
+// 外壳：侧栏 + 顶栏 + 内容区。外观（皮肤 / 亮暗 / 自定义背景）是**全局状态**，
+// 真相在 `ThemeProvider`（见那个文件顶部的分工说明），这里只消费。
 
-function useTheme() {
-  const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark')
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', dark)
-    localStorage.setItem('theme', dark ? 'dark' : 'light')
-  }, [dark])
-  return { dark, toggle: () => setDark((d) => !d) }
-}
-
+/** 亮暗切换：改的是**全局主题**里的明暗档位，不是本地一份 state。
+ *
+ *  以前它自带一个 `useState` + 一个 `localStorage['theme']`——于是「顶栏那个按钮」
+ *  与「设置里的外观」会是两份互不相干的真值（点了一个，另一个不动）。
+ *  现在两条路都走 `useTheme()`，键也统一成 `wb:theme`（旧键 `theme` 的迁移在
+ *  `theme.ts` 的 `loadTheme` 里做）。
+ *
+ *  图标与提示语看的是 **`resolved.dark`（现在实际是什么色）**，而不是 `config.mode`：
+ *  后者可能是 `'system'`，那时按钮上写「切到亮色」还是「切到暗色」得看系统当前是什么。
+ *  点一下的语义也因此是明确的——**离开跟随、改成另一种明确档位**，这正是用户按这个
+ *  按钮时的意思。 */
 function ThemeToggle() {
-  const { dark, toggle } = useTheme()
+  const { resolved, setDark } = useTheme()
   return (
     <button
-      onClick={toggle}
+      onClick={() => setDark(!resolved.dark)}
+      data-theme-toggle=""
       className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-      title={dark ? '切到亮色' : '切到暗色'}
+      title={resolved.dark ? '切到亮色' : '切到暗色'}
     >
-      {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+      {resolved.dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </button>
+  )
+}
+
+/** 换肤入口（顶栏）：**不是**「再放一个主题按钮」，而是「去设置里的外观那一页」。
+ *
+ *  皮肤、强调色、自定义背景、图片库是同一件事的四个面，挤在一个下拉里会变成
+ *  一堆没有预览的小色块；而它们本来就有家——设置页。这里只负责**让人找得到那个家**：
+ *  顶栏紧挨着亮暗按钮，一眼能看见。
+ *
+ *  入口是链接不是弹层：地址是 `/settings?section=appearance`，可以收藏、可以深链，
+ *  与全站「侧栏是唯一入口、地址是唯一真相」的约定一致。 */
+function AppearanceLink() {
+  return (
+    <Link
+      to="/settings?section=appearance"
+      data-topbar-appearance=""
+      title="外观：皮肤与背景"
+      className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+    >
+      <Palette className="h-4 w-4" />
+    </Link>
   )
 }
 
 function Logo() {
   return (
     <Link to="/" title="回对话" className="flex items-center gap-2">
-      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
+      <div className="wb-accent-fill flex h-8 w-8 items-center justify-center rounded-md text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
         <Brain className="h-[18px] w-[18px]" />
       </div>
       <span className="text-[15px] font-semibold tracking-tight">AI 工作台</span>
@@ -92,7 +119,7 @@ function TopBar({ page, onOpenSearch }: { page: string; onOpenSearch: () => void
   const { pathname, search } = useLocation()
   const crumbs = navCrumbs(pathname, search)
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-neutral-200/70 bg-white/85 px-6 backdrop-blur-md dark:border-neutral-800/70 dark:bg-neutral-900/70">
+    <header className="wb-chrome wb-topbar sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-neutral-200/70 px-6 dark:border-neutral-800/70">
       <nav aria-label="面包屑" className="flex min-w-0 items-center gap-2 text-sm">
         {crumbs.href ? (
           <Link
@@ -136,6 +163,7 @@ function TopBar({ page, onOpenSearch }: { page: string; onOpenSearch: () => void
       >
         数据不出本机
       </span>
+      <AppearanceLink />
       <ThemeToggle />
     </header>
   )
@@ -193,8 +221,14 @@ export default function Layout() {
   }, [page])
 
   return (
-    <div className="flex h-full bg-[color:var(--page-bg)]">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-neutral-200/70 bg-white/70 dark:border-neutral-800/70 dark:bg-neutral-900/50">
+    <div className="relative flex h-full bg-[color:var(--page-bg)]">
+      {/* 自定义背景层：铺在下面，侧栏与顶栏的半透明才透得出它 */}
+      <ThemeBackdrop />
+      {/* 侧栏与顶栏共用 `.wb-chrome`：**「壳」是一个区域，不是一个地方**。
+          它的底色、透明度、模糊都由皮肤给（见 `index.css` 那一节），
+          所以侧栏与顶栏永远一致——两处各写一遍透明度的下场是「侧栏跟着皮肤变了、
+          顶栏没变」，而那种不一致只会被读成渲染 bug。 */}
+      <aside className="wb-chrome wb-sidebar relative z-[1] flex w-60 shrink-0 flex-col border-r border-neutral-200/70 dark:border-neutral-800/70">
         <div className="flex items-center px-4 pb-2 pt-4">
           <Logo />
         </div>
@@ -207,7 +241,7 @@ export default function Layout() {
               if (page === 'chat') window.dispatchEvent(new Event('workbench:new-chat'))
               else navigate('/?new=1')
             }}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-2 text-sm font-medium text-white shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 hover:brightness-110 dark:shadow-violet-900/60 dark:hover:shadow-violet-700/60"
+            className="wb-btn-primary w-full gap-1.5 px-3 py-2 text-sm shadow-sm shadow-violet-300 transition-all hover:shadow-md hover:shadow-violet-400 dark:shadow-violet-900/60 dark:hover:shadow-violet-700/60"
           >
             <span className="text-base leading-none">＋</span> 新对话
           </button>
@@ -319,7 +353,7 @@ export default function Layout() {
 
         <div className="border-t border-neutral-200/80 p-4 dark:border-neutral-800/80">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-semibold text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
+            <div className="wb-accent-fill flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white shadow-sm shadow-violet-300 dark:shadow-violet-900/50">
               ME
             </div>
             <div className="min-w-0 flex-1">
@@ -334,7 +368,7 @@ export default function Layout() {
           （routes.tsx）里，这里只把页面放回来。
           2026-09-18 版面改版：外面多了一层「顶栏 + 内容」的竖排——顶栏是全局的
           （面包屑 + 主题），内容区照旧由 RouteShell 管滚动。 */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative z-[1] flex min-w-0 flex-1 flex-col">
         {/* 对话页自带页头（会话标题、模型、工具那一排），再顶一条就重复了 */}
         {page === 'chat' ? null : <TopBar page={page} onOpenSearch={() => setPaletteOpen(true)} />}
         <Outlet />

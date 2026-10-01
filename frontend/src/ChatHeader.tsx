@@ -46,7 +46,12 @@ export default function ChatHeader({
       {/* flex-wrap：这一行放的是模型下拉 + RAG 开关 + 各种 icon 按钮，宽度由内容
           说了算（select 不会缩到自己文字以下）。不换行的话窄窗格/窄窗口里这一行会
           顶出横向滚动条——分屏侧栏只有三百来像素，一定会撞上。 */}
-      <header className="flex flex-wrap items-center gap-3 border-b border-neutral-200/80 bg-white/80 px-4 py-2.5 backdrop-blur dark:border-neutral-800/80 dark:bg-neutral-950/80">
+      {/* 会话页的顶栏**就是壳的顶栏**——它与模块页那个 `Layout.TopBar` 是同一个
+          位置上的两个实现（这一页要摆模型选择器，模块页要摆面包屑），
+          所以两者用同一组类：`wb-chrome wb-topbar`。
+          自己写一层 `bg-white/80` 的话，皮肤在会话页上只改到一半——
+          而会话页正是这个应用待得最久的一页。 */}
+      <header className="wb-chrome wb-topbar flex flex-wrap items-center gap-3 border-b border-neutral-200/80 px-4 py-2.5 dark:border-neutral-800/80">
         <select
           value={currentModel}
           onChange={async (e) => {

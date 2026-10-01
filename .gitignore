@@ -37,3 +37,10 @@ Thumbs.db
 
 # 一次性探针残留（_p1.txt / _p2.txt …）
 _p*.txt
+
+# 皮肤预览（`frontend/scripts/preview-themes.mjs` 生成，随时可再生成一遍）
+theme-preview.html
+# Windows 文件权限修复留下的备份与回滚脚本（诊断工具写的，不属于仓库）
+.acl-recovery/
+# 受限沙箱下跑前端测试的备用配置（工具，不是产品代码；用法见文件开头）
+frontend/vitest.sandbox.config.mjs

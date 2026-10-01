@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" preserveAspectRatio="xMidYMid slice">
+  <!-- 极光（亮色）：天光偏冷的清晨，几条极光带自左上斜下。
+       带子用大半径高斯模糊——极光是**大气里的光**，没有边缘；
+       画成有边界的色块就成了彩带，而不是极光。
+       整张图刻意压得很淡：它是亮色皮肤的背景，字是深色的。 -->
+  <defs>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="46" />
+    </filter>
+    <linearGradient id="sky" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#eaf4f2" />
+      <stop offset="0.55" stop-color="#e7eef6" />
+      <stop offset="1" stop-color="#dfe7f2" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#sky)" />
+
+  <g filter="url(#soft)" opacity="0.5">
+    <path d="M -100 250 C 300 90, 700 300, 1150 120 C 1350 50, 1500 130, 1700 80 L 1700 -80 L -100 -80 Z" fill="#7fd8c8" />
+    <path d="M -100 380 C 320 240, 760 430, 1180 260 C 1400 175, 1560 250, 1700 210 L 1700 60 L -100 130 Z" fill="#9ad9e8" opacity="0.8" />
+    <path d="M 200 520 C 560 400, 900 560, 1320 420 C 1500 360, 1620 410, 1720 380 L 1720 250 L 200 320 Z" fill="#b6a8f0" opacity="0.55" />
+  </g>
+
+  <!-- 地平线：一条很淡的暖调，给画面一个「上下」 -->
+  <rect y="760" width="1600" height="140" fill="#dfe3e6" opacity="0.55" />
+</svg>

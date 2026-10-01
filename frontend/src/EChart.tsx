@@ -74,12 +74,26 @@ export default function EChart({ option, height = 180, ariaLabel, className }: E
   const [dark, setDark] = useState(() =>
     typeof document === 'undefined' ? false : document.documentElement.classList.contains('dark')
   )
+  /** 主题版本号：换一次皮肤 +1，用来**触发重画**。
+   *
+   *  为什么不只留 `dark` 那个布尔：换肤（2026-10-01）改的是 `<html>` 上那一层
+   *  **内联 CSS 变量**，`class` 一个字节都没变。只盯 class 的话，换个皮肤图表会
+   *  保持旧配色，直到有人切一次亮暗才跟着变——而 `readTheme()` 明明每次都读得到新值。
+   *  这类「数据是对的、只是没人通知它」的 bug 在界面上表现为「图表颜色不对，刷新一下就好了」。 */
+  const [themeRev, setThemeRev] = useState(0)
 
-  // 暗色切换改的是 <html> 的 class，观察它——图表不用等整页重渲染
+  // 主题写的是 <html> 的 class（亮暗）+ style（皮肤变量）：两个都观察。
+  // `data-wb-skin` 也一并盯着——它是主题变化的显式信号，比逐个比 style 更直白。
   useEffect(() => {
     const root = document.documentElement
-    const mo = new MutationObserver(() => setDark(root.classList.contains('dark')))
-    mo.observe(root, { attributes: true, attributeFilter: ['class'] })
+    const mo = new MutationObserver(() => {
+      setDark(root.classList.contains('dark'))
+      setThemeRev((n) => n + 1)
+    })
+    mo.observe(root, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-wb-skin'],
+    })
     return () => mo.disconnect()
   }, [])
 
@@ -103,7 +117,7 @@ export default function EChart({ option, height = 180, ariaLabel, className }: E
 
   useEffect(() => {
     chartRef.current?.setOption(applyTheme(option), { notMerge: true })
-  }, [option, dark])
+  }, [option, dark, themeRev])
 
   return (
     <div

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <!-- 素纸（亮）：只有纹理，没有图案。两层各管一件事——
+       1. **云斑**（低频）：手工纸的厚薄不匀，是"看得出来但说不出是什么"的那一层。
+          格子取 640 而不是 260：低频特征按定义就是大块的，格子小了会在屏幕上
+          每隔一小段重复一次，那就不像纸，像一张贴歪的壁纸。
+       2. **纤维**（高频）：细颗粒 + 横向帘纹，凑近了才看得见。
+       300 那一版两个频率都压在 5% 上下，结果整片看上去就是一块平的浅色
+       （对比截图之后改的）——"安静"不等于"看不见"。
+       `stitchTiles="stitch"` 是平铺的关键，没有它每一格的接缝会显出一条线。 -->
+  <filter id="paper-mottle-light" x="0" y="0" width="640" height="640" filterUnits="userSpaceOnUse">
+    <feTurbulence type="fractalNoise" baseFrequency="0.006" numOctaves="3" stitchTiles="stitch"/>
+    <feColorMatrix type="saturate" values="0"/>
+  </filter>
+  <filter id="paper-grain-light" x="0" y="0" width="640" height="640" filterUnits="userSpaceOnUse">
+    <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="4" stitchTiles="stitch" result="grain"/>
+    <feColorMatrix in="grain" type="saturate" values="0" result="grey"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.012 0.5" numOctaves="3" stitchTiles="stitch" result="fiber"/>
+    <feColorMatrix in="fiber" type="saturate" values="0" result="fiberGrey"/>
+    <feMerge>
+      <feMergeNode in="grey"/>
+      <feMergeNode in="fiberGrey"/>
+    </feMerge>
+  </filter>
+  <rect width="640" height="640" filter="url(#paper-mottle-light)" opacity="0.075"/>
+  <rect width="640" height="640" filter="url(#paper-grain-light)" opacity="0.05"/>
+</svg>

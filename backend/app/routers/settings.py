@@ -210,6 +210,40 @@ async def update_prefs(body: PrefsIn):
     return result
 
 
+# ---------- theme (appearance / skins) ----------
+
+# 外观设置的**后端副本**。真值在前端的 localStorage（首屏要同步读到，不能等一次
+# 网络往返）；这里存一份是为了「浏览器数据被清掉 / 换台机器打开」时外观还在。
+#
+# 为什么不塞进上面那张 PrefsIn 大表：那张表是**行为开关**（提示词、检索、语音、
+# 备份），逐字段声明、逐字段校验，改一个字段要动三处（`_DEFAULTS` / `PrefsIn` /
+# 前端 `WorkbenchPrefs`）。主题是前端自己的形状（皮肤 id / 亮暗 / 强调色 / 背景图
+# 与它的模糊压暗参数），将来加一个背景参数就要再动那三处——所以它独立成两个端点，
+# **整体存取、不拆字段**：形状的真相在前端 `src/theme.ts`，后端只负责原样保管。
+#
+# 存的就是 config.json 的 `theme` 键（与其余偏好同一份人可读的文件）。
+
+
+class ThemeIn(BaseModel):
+    theme: dict | None = None
+
+
+@router.get("/theme")
+async def get_theme():
+    return {"theme": load_config().get("theme")}
+
+
+@router.put("/theme")
+async def put_theme(body: ThemeIn):
+    """存一份外观设置。`null` = 清掉（恢复默认），与前端「恢复默认」按钮同义。
+
+    「必须是一个对象」由 `ThemeIn` 的注解管（`dict | None`）：传字符串进来是
+    **422 而不是 400**——那是 FastAPI 的请求校验，不是这一层的业务判断，
+    在这里再抄一遍 `isinstance` 只会多一条永远走不到的代码。"""
+    saved = save_config({"theme": body.theme})
+    return {"theme": saved.get("theme")}
+
+
 # ---------- persistent memory ----------
 
 @router.get("/memories")

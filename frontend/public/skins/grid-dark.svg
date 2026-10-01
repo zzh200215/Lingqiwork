@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <!-- 格纸（暗）：线与亮色同一套节奏，颜色换成冷白、不透明度略抬一档
+       （暗底上的浅线看起来比亮底上的深线更弱）。 -->
+  <g stroke="#cfdae6" stroke-width="1" fill="none">
+    <path d="M40.5 0 V200 M80.5 0 V200 M120.5 0 V200 M160.5 0 V200" stroke-opacity="0.05"/>
+    <path d="M0 40.5 H200 M0 80.5 H200 M0 120.5 H200 M0 160.5 H200" stroke-opacity="0.05"/>
+    <path d="M0.5 0 V200 M0 0.5 H200" stroke-opacity="0.09"/>
+  </g>
+</svg>
