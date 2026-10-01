@@ -141,3 +141,27 @@ def test_save_is_atomic_no_tmp_residue_and_valid_json():
     p = settings.config_path
     assert json.loads(p.read_text(encoding="utf-8"))["rag_top_k"] == 7
     assert not p.with_name(p.name + ".tmp").exists()
+
+
+def test_put_rejects_unknown_theme_version(client):
+    """版本闸（只拒绝、不解析）：theme 带不认识的 `version` 就拒。
+
+    后端对 theme 是「原样保管」——形状的真相在前端。前端升上去、后端还旧着的时候，
+    存进来的东西两边都解释不了；宁可让这次 PUT 400，把「前后端差了一代」摆到明面上，
+    而不是等哪天回读炸出来才发现。没有 version 的老数据照收（向后兼容）。
+    """
+    # 先清到出厂，避免依赖模块里前面测试留下的状态
+    assert client.put("/api/settings/theme", json={"theme": None}, headers=_headers()).status_code == 200
+    newer = {**THEME, "version": 99}
+    r = client.put("/api/settings/theme", json={"theme": newer}, headers=_headers())
+    assert r.status_code == 400
+    # 拒了就没落盘：theme 还是清掉之后的样子
+    assert client.get("/api/settings/theme", headers=_headers()).json() == {"theme": None}
+
+
+def test_put_accepts_known_and_missing_version(client):
+    r = client.put("/api/settings/theme", json={"theme": THEME}, headers=_headers())  # version: 1
+    assert r.status_code == 200
+    legacy = {k: v for k, v in THEME.items() if k != "version"}
+    r = client.put("/api/settings/theme", json={"theme": legacy}, headers=_headers())
+    assert r.status_code == 200

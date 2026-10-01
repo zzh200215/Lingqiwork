@@ -228,6 +228,11 @@ class ThemeIn(BaseModel):
     theme: dict | None = None
 
 
+# 版本闸（见 put_theme）：只认这几代。前端升 version 的那天，这里必须同步加——
+# 「后端不认识就不存」是故意的，那是发现前后端差代的唯一哨兵。
+KNOWN_THEME_VERSIONS = {1}
+
+
 @router.get("/theme")
 async def get_theme():
     return {"theme": load_config().get("theme")}
@@ -239,7 +244,18 @@ async def put_theme(body: ThemeIn):
 
     「必须是一个对象」由 `ThemeIn` 的注解管（`dict | None`）：传字符串进来是
     **422 而不是 400**——那是 FastAPI 的请求校验，不是这一层的业务判断，
-    在这里再抄一遍 `isinstance` 只会多一条永远走不到的代码。"""
+    在这里再抄一遍 `isinstance` 只会多一条永远走不到的代码。
+
+    **版本闸（只拒绝、不解析）**：theme 自带 `version` 而这个后端不认识时拒绝。
+    「原样保管」的前提是形状的真相在前端——前端升上去、后端还旧着的时候，存进来
+    的东西两边都解释不了，等哪天回读炸出来才发现就晚了。宁可让这次 PUT 失败，
+    把「前后端差了一代」摆到明面上。没有 `version` 的老数据照收（向后兼容）。"""
+    if body.theme is not None:
+        v = body.theme.get("version")
+        if v is not None and v not in KNOWN_THEME_VERSIONS:
+            raise HTTPException(
+                400, f"不认识的 theme.version: {v}——前端比后端新，先升级后端再保存"
+            )
     saved = save_config({"theme": body.theme})
     return {"theme": saved.get("theme")}
 
