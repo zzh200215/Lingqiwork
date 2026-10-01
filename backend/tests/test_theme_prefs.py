@@ -126,3 +126,18 @@ def test_other_prefs_untouched(client):
 def test_requires_token(client):
     assert client.get("/api/settings/theme").status_code == 401
     assert client.put("/api/settings/theme", json={"theme": THEME}).status_code == 401
+
+
+def test_save_is_atomic_no_tmp_residue_and_valid_json():
+    """原子写入（临时文件 + rename）：写完不留 .tmp，盘上永远是合法 JSON。
+
+    直接 write_text 的崩法是「写到一半进程没了」——config.json 从此读不出来，
+    load_config 静默退回出厂值，症状是「外观/设置全回默认」。这条钉住「写坏之前」
+    的那一层；.tmp 残留也一并钉住（残留本身无害，但留着会让人误以为出了事）。
+    """
+    from app.core.prefs import save_config
+
+    save_config({"rag_top_k": 7})
+    p = settings.config_path
+    assert json.loads(p.read_text(encoding="utf-8"))["rag_top_k"] == 7
+    assert not p.with_name(p.name + ".tmp").exists()

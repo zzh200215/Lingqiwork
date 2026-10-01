@@ -159,5 +159,10 @@ def save_config(update: dict[str, Any]) -> dict[str, Any]:
         k: (seal(v) if k in SECRET_KEYS and isinstance(v, str) else v) for k, v in current.items()
     }
     with _lock:
-        _path().write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 原子替换（与 auth.py 落 token 同款：临时文件 + rename）。直接 write_text 的
+        # 崩法是「写到一半进程没了」——config.json 从此不是合法 JSON，load_config
+        # 静默退回出厂值，症状是「外观/设置全回了默认」，很难联想到是偏好文件写坏了。
+        tmp = _path().with_name(_path().name + ".tmp")
+        tmp.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(_path())
     return current
