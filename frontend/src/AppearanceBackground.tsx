@@ -26,6 +26,30 @@ function variantOf(r: ResolvedTheme): SkinVariant {
   return r.dark ? r.skin.dark : r.skin.light
 }
 
+/** 本机看得到、后端看不到的图片引用：用户皮肤存在 `wb:skins`，当前主题缓存在
+ *  `wb:theme`——后端的引用扫描只覆盖 config.json / 数据库 / vault，皮肤底图
+ *  的引用必须由这里算好传上去（`keep`），否则清理会把皮肤正在用的图删掉。 */
+function localImageRefs(): string[] {
+  const refs = new Set<string>()
+  for (const key of ['wb:skins', 'wb:theme'] as const) {
+    let raw: string | null
+    try {
+      raw = localStorage.getItem(key)
+    } catch {
+      throw new Error(`读不到本机皮肤数据（${key}）——为不误删皮肤底图，这次先不扫`)
+    }
+    if (!raw) continue
+    for (const m of raw.match(/img-\d{8}-\d{6}-[0-9a-f]{6}\.(?:png|jpeg|jpg|webp)/g) ?? []) {
+      refs.add(m)
+    }
+  }
+  return [...refs]
+}
+
+function fmtBytes(n: number): string {
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
+}
+
 export default function AppearanceBackground() {
   const { config, resolved, patchBg } = useTheme()
   const [library, setLibrary] = useState<ImageItem[]>([])
@@ -33,6 +57,10 @@ export default function AppearanceBackground() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  // 清理未引用：null = 还没扫过；扫出来只报数，用户点确认才真的删。
+  const [sweep, setSweep] = useState<{ images: ImageItem[]; bytes: number } | null>(null)
+  const [sweepBusy, setSweepBusy] = useState(false)
+  const [sweepMsg, setSweepMsg] = useState('')
 
   // 图片库：只在打开「从图库选」时才拉——绝大多数人不会用到，不该占首屏的取数。
   // 拉不到就摆一句「读不到」，不冒充「你还没有图」（本页的纪律，见 SettingsPage 顶注）。
@@ -60,6 +88,49 @@ export default function AppearanceBackground() {
       setError(`上传失败：${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function scanUnreferenced() {
+    setError('')
+    setSweepMsg('')
+    let keep: string[]
+    try {
+      keep = localImageRefs()
+    } catch (e) {
+      // 读不到本机皮肤就不扫——少报一个 keep 的方向是「多删」，宁可不扫也不冒这个险
+      setError(e instanceof Error ? e.message : String(e))
+      return
+    }
+    setSweepBusy(true)
+    try {
+      const r = await api.unreferencedImages(keep)
+      setSweep({ images: r.images, bytes: r.bytes })
+    } catch (e) {
+      setError(`扫不动：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSweepBusy(false)
+    }
+  }
+
+  async function deleteUnreferenced() {
+    if (!sweep) return
+    setSweepBusy(true)
+    try {
+      // 删之前把 keep 重算一遍——扫与确认之间用户可能刚导入一张用图的皮肤
+      const r = await api.cleanupImages(localImageRefs())
+      const gone = new Set(r.deleted)
+      setLibrary((cur) => cur.filter((i) => !gone.has(i.name)))
+      setSweep(null)
+      setSweepMsg(
+        r.count
+          ? `已删除 ${r.count} 张，释放 ${fmtBytes(r.bytes)}。`
+          : '没有要删的——刚才扫出的图这会儿又被引用上了。',
+      )
+    } catch (e) {
+      setError(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSweepBusy(false)
     }
   }
 
@@ -243,9 +314,56 @@ export default function AppearanceBackground() {
 
             {libraryOpen ? (
               <div className="rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
-                <p className="pb-2 text-xs font-medium text-neutral-500">
-                  图片库（{library.length} 张）
-                </p>
+                <div className="flex items-center justify-between pb-2">
+                  <p className="text-xs font-medium text-neutral-500">图片库（{library.length} 张）</p>
+                  <button
+                    onClick={() => void scanUnreferenced()}
+                    disabled={sweepBusy}
+                    data-bg-cleanup=""
+                    title="找出没被聊天附件、笔记、背景或皮肤引用的图，确认后删掉"
+                    className="text-xs text-neutral-500 underline hover:text-neutral-800 disabled:opacity-40 dark:hover:text-neutral-200"
+                  >
+                    清理未引用
+                  </button>
+                </div>
+                {sweep ? (
+                  sweep.images.length === 0 ? (
+                    <p data-bg-cleanup-result="" className="pb-2 text-xs text-neutral-400">
+                      没有未引用的图片——聊天附件、笔记和皮肤用到的都在。
+                    </p>
+                  ) : (
+                    <div
+                      data-bg-cleanup-result=""
+                      className="mb-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs leading-relaxed dark:border-amber-500/30 dark:bg-amber-500/10"
+                    >
+                      <p className="text-amber-800 dark:text-amber-200">
+                        扫出 {sweep.images.length} 张没被任何地方引用的图（约 {fmtBytes(sweep.bytes)}）。
+                        聊天附件、笔记和皮肤底图引用到的不会动。
+                      </p>
+                      <div className="mt-1.5 flex gap-3">
+                        <button
+                          data-bg-cleanup-confirm=""
+                          onClick={() => void deleteUnreferenced()}
+                          disabled={sweepBusy}
+                          className="font-medium text-amber-900 underline disabled:opacity-40 dark:text-amber-100"
+                        >
+                          {sweepBusy ? '删除中…' : `删除这 ${sweep.images.length} 张`}
+                        </button>
+                        <button
+                          onClick={() => setSweep(null)}
+                          className="text-amber-700 underline dark:text-amber-300"
+                        >
+                          先不删
+                        </button>
+                      </div>
+                    </div>
+                  )
+                ) : null}
+                {sweepMsg ? (
+                  <p data-bg-cleanup-msg="" className="pb-2 text-xs text-neutral-400">
+                    {sweepMsg}
+                  </p>
+                ) : null}
                 {library.length === 0 ? (
                   <p className="py-2 text-xs text-neutral-400">图库里还没有图——上面传一张。</p>
                 ) : (

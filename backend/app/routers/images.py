@@ -28,6 +28,34 @@ class OcrIn(BaseModel):
     name: str
 
 
+class CleanupIn(BaseModel):
+    """`keep`：前端补进来的引用名——用户皮肤存在 localStorage，后端看不见，
+    皮肤底图的引用只能由前端算好传上来（见 `core/images.referenced_names`）。"""
+
+    keep: list[str] = []
+
+
+@router.post("/unreferenced")
+async def unreferenced(body: CleanupIn):
+    """列出没被任何已知引用（配置/数据库/vault/前端皮肤）指着的图。只报数，不删。"""
+    rows = await asyncio.to_thread(images.unreferenced_images, body.keep)
+    return {"images": rows, "count": len(rows), "bytes": sum(r["bytes"] for r in rows)}
+
+
+@router.post("/cleanup")
+async def cleanup(body: CleanupIn):
+    """删掉未引用的图。**同一次请求里先扫后删**——两步之间不留时间窗，
+    不存在「按上一秒的扫描结果删这一秒的新图」。"""
+    rows = await asyncio.to_thread(images.unreferenced_images, body.keep)
+    deleted = [r["name"] for r in rows if images.delete_image(r["name"])]
+    gone = set(deleted)
+    return {
+        "deleted": deleted,
+        "count": len(deleted),
+        "bytes": sum(r["bytes"] for r in rows if r["name"] in gone),
+    }
+
+
 @router.get("")
 async def list_images():
     return {"config": images.config(), "images": images.list_images()}

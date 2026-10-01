@@ -11,6 +11,18 @@ export const imagesApi = {
     }),
   deleteImage: (name: string) =>
     request<{ ok: boolean }>(`/api/images/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  /** 没被任何已知引用（配置/数据库/vault + 前端传来的皮肤底图）指着的图。只扫不删。 */
+  unreferencedImages: (keep: string[]) =>
+    request<{ images: ImageItem[]; count: number; bytes: number }>('/api/images/unreferenced', {
+      method: 'POST',
+      body: JSON.stringify({ keep }),
+    }),
+  /** 删掉未引用的图。后端在同一次请求里重新扫一遍再删，两步之间没有时间窗。 */
+  cleanupImages: (keep: string[]) =>
+    request<{ deleted: string[]; count: number; bytes: number }>('/api/images/cleanup', {
+      method: 'POST',
+      body: JSON.stringify({ keep }),
+    }),
   uploadImage: async (file: File): Promise<ImageItem> => {
     const fd = new FormData()
     fd.append('file', file)

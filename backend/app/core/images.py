@@ -14,6 +14,7 @@ written into a chat message or a note keeps working forever.
 """
 import base64
 import binascii
+import hashlib
 import logging
 import re
 import secrets
@@ -24,7 +25,7 @@ from pathlib import Path
 import httpx
 from sqlalchemy import select
 
-from app.config import DATA_DIR
+from app.config import DATA_DIR, VAULT_DIR, settings
 from app.core.prefs import load_config
 from app.db import SessionLocal
 from app.models import ProviderConfig
@@ -42,8 +43,15 @@ _MAX_BYTES = 20_000_000
 # ---------- local store ----------
 
 
-def _new_name(ext: str = "png") -> str:
-    return f"img-{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(3)}.{ext}"
+def _new_name(ext: str, data: bytes | None = None) -> str:
+    """`img-日期-时间-后缀.ext`。给了内容就把后缀取自内容 hash 前 6 位——
+    文件名仍然满足 NAME_RE，但同内容上传会得到同样的后缀，一眼能认出双胞胎。"""
+    suffix = hashlib.sha256(data).hexdigest()[:6] if data else secrets.token_hex(3)
+    name = f"img-{datetime.now():%Y%m%d-%H%M%S}-{suffix}.{ext}"
+    # 后缀只取 24 bit：同秒 + 同前缀 + 不同内容（2^-24）撞上就退回随机，宁可名字不像也不覆盖
+    if (IMAGE_DIR / name).exists():
+        name = f"img-{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(3)}.{ext}"
+    return name
 
 
 def resolve_name(name: str) -> Path:
@@ -80,9 +88,80 @@ def delete_image(name: str) -> bool:
     return True
 
 
+# ---------- 引用扫描（清理入口的后半件事）----------
+
+
+# 引用长什么样：聊天附件、笔记、背景图里嵌的都是 /api/images/{name} 这个 URL，
+# name 的形状由 NAME_RE 钉死，所以对字节流正则一遍就能把引用找全。
+_IMG_REF_BYTES_RE = re.compile(rb"img-\d{8}-\d{6}-[0-9a-f]{6}\.(?:png|jpe?g|webp)")
+# 单文件扫描上限：兜的是被异常喂进来的巨物，正常 vault/数据库远够不着。
+_REF_SCAN_CAP = 1 << 30
+
+
+def referenced_names(extra: list[str] | None = None) -> set[str]:
+    """所有「后端看得到的地方」引用着的图片名。
+
+    扫三处：config.json（背景图存在 theme 里）、workbench.db（聊天 markdown 里的
+    附件，连同 -wal——提交可能还躺在里面没合入）、vault/（笔记原文）。`extra` 是
+    前端补进来的引用（**用户皮肤存在 localStorage，后端永远看不见**，皮肤底图
+    只能由前端算好传上来）。
+
+    方向性：宁可多算引用（那张图这次删不掉），不可漏算（把还被引用的图删了）。
+    对原始字节正则而不是逐表逐列查，就是为了「新加一张会嵌图的表也不用记得来这里登记」。
+    """
+    refs = {n for n in (extra or []) if NAME_RE.match(n)}
+    candidates = [
+        settings.config_path,
+        settings.db_path,
+        settings.db_path.with_name(settings.db_path.name + "-wal"),
+        *VAULT_DIR.rglob("*"),
+    ]
+    for f in candidates:
+        try:
+            if not f.is_file() or f.stat().st_size > _REF_SCAN_CAP:
+                continue
+            data = f.read_bytes()
+        except OSError:
+            continue
+        refs.update(m.group(0).decode() for m in _IMG_REF_BYTES_RE.finditer(data))
+    return refs
+
+
+def unreferenced_images(extra: list[str] | None = None) -> list[dict]:
+    refs = referenced_names(extra)
+    return [row for row in list_images() if row["name"] not in refs]
+
+
+def _find_same_content(data: bytes) -> Path | None:
+    """库里已经有同一份字节的文件？返回它。
+
+    只对**同大小**的文件做读回比对（同内容必同大小）——正常情况下候选是 0 个，
+    全库都是验收截图双胞胎的最坏情形也只有几十次读，不值得为它养一份 hash 索引。
+    """
+    if not IMAGE_DIR.exists():
+        return None
+    for p in IMAGE_DIR.iterdir():
+        if not p.is_file() or not NAME_RE.match(p.name):
+            continue
+        try:
+            if p.stat().st_size != len(data):
+                continue
+            if p.read_bytes() == data:
+                return p
+        except OSError:
+            continue
+    return None
+
+
 def _save(data: bytes, ext: str) -> dict:
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-    name = _new_name(ext)
+    # 内容去重：同一份字节只存一个文件。起因是验收截图——同一张图被传了近 20 次，
+    # 文件名各不相同、字节完全相同，本地优先应用的磁盘只涨不跌，这个欠账越滚越大。
+    same = _find_same_content(data)
+    if same is not None:
+        log.info("image store: 同内容文件已存在，复用 %s（本次不落盘）", same.name)
+        return {"name": same.name, "url": f"/api/images/{same.name}", "bytes": len(data)}
+    name = _new_name(ext, data)
     (IMAGE_DIR / name).write_bytes(data)
     return {"name": name, "url": f"/api/images/{name}", "bytes": len(data)}
 

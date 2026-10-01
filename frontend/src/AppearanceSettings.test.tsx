@@ -10,6 +10,8 @@ vi.mock('./api', () => ({
   api: {
     listImages: vi.fn(),
     uploadImage: vi.fn(),
+    unreferencedImages: vi.fn(),
+    cleanupImages: vi.fn(),
     getTheme: vi.fn(),
     putTheme: vi.fn(),
   },
@@ -252,6 +254,55 @@ describe('外观 · 自定义背景', () => {
     expect(loadTheme().bg).toMatchObject({ scrim: 20, blur: 12 })
     expect(root().style.getPropertyValue('--wb-scrim')).toBe('rgba(255, 255, 255, 0.2)')
     expect(root().style.getPropertyValue('--wb-bg-blur')).toBe('12px')
+  })
+
+  it('清理未引用：皮肤引用到的图作为 keep 传给后端，删除要过一遍确认', async () => {
+    // 用户皮肤只存在 localStorage（wb:skins），后端的引用扫描看不见——
+    // 皮肤底图的引用必须由前端算成 keep 传上去，否则清理会删掉皮肤在用的图。
+    localStorage.setItem(
+      'wb:skins',
+      JSON.stringify({
+        version: 1,
+        skins: [
+          {
+            format: 1,
+            id: 'photo-a',
+            label: 'A',
+            hint: '',
+            accent: '#888888',
+            light: { bg: { image: '/api/images/img-20261001-120000-aaa111.png' } },
+            dark: {},
+          },
+        ],
+      }),
+    )
+    const aaa = {
+      name: 'img-20261001-120000-aaa111.png',
+      url: '/api/images/img-20261001-120000-aaa111.png',
+      bytes: 1024,
+    }
+    const bbb = {
+      name: 'img-20261001-120001-bbb222.png',
+      url: '/api/images/img-20261001-120001-bbb222.png',
+      bytes: 2048,
+    }
+    vi.mocked(api.listImages).mockResolvedValue({ config: {} as never, images: [aaa, bbb] })
+    vi.mocked(api.unreferencedImages).mockResolvedValue({ images: [bbb], count: 1, bytes: 2048 })
+    vi.mocked(api.cleanupImages).mockResolvedValue({ deleted: [bbb.name], count: 1, bytes: 2048 })
+
+    renderPanel()
+    fireEvent.click(document.querySelector('[data-bg-mode="image"]')!)
+    fireEvent.click(screen.getByText('从图库选'))
+    await screen.findByText(/图片库（2 张）/)
+
+    fireEvent.click(screen.getByText('清理未引用'))
+    await screen.findByText(/扫出 1 张/)
+    expect(api.unreferencedImages).toHaveBeenCalledWith([aaa.name])
+
+    // 删除必须显式确认——「扫出来」和「删掉」之间用户得点一下
+    fireEvent.click(screen.getByText(/删除这 1 张/))
+    await screen.findByText(/已删除 1 张/)
+    expect(api.cleanupImages).toHaveBeenCalledWith([aaa.name])
   })
 })
 
