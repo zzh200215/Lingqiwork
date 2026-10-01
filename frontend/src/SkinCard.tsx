@@ -69,7 +69,7 @@ export default function SkinCard({
     <div className="relative">
       {draft !== null ? (
         <div className={frame(active)}>
-          <SkinPreview skin={skin} dark={dark} className="h-16 w-full" />
+          <SkinPreview skin={skin} dark={dark} className="h-20 w-full" />
           <input
             ref={inputRef}
             data-skin-label-input={skin.id}
@@ -93,7 +93,7 @@ export default function SkinCard({
         </div>
       ) : (
         <button onClick={onPick} data-skin={skin.id} aria-pressed={active} title={skin.hint} className={frame(active)}>
-          <SkinPreview skin={skin} dark={dark} className="h-16 w-full" />
+          <SkinPreview skin={skin} dark={dark} className="h-20 w-full" />
           <span className="flex items-center gap-1 text-sm font-medium">
             {skin.label}
             {active ? <Check className="h-3.5 w-3.5 text-violet-500" /> : null}

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Loader2, Sparkles, Upload } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ChevronDown, Download, Loader2, Sparkles, Upload } from 'lucide-react'
 
 import { api } from './api'
 import AppearanceBackground from './AppearanceBackground'
@@ -9,6 +9,7 @@ import { useTheme } from './ThemeProvider'
 import {
   APPEARANCE_VISITED_KEY,
   accentPalette,
+  hasOverrides,
   isBuiltinSkin,
   listSkins,
   normalizeHex,
@@ -222,15 +223,32 @@ export default function AppearanceSettings() {
   // 少了它，导入成功的那一刻界面还是旧的皮肤表。
   const skins = useMemo(() => listSkins(), [skinsRev])
 
-  return (
-    <section className="mb-6 flex flex-col gap-6" data-appearance="">
-      {/* ---------- 当前皮肤（皮肤中心的上半） ---------- */}
-      <SkinCenter />
+  /** 壁纸折叠行右侧的摘要：现在是什么模式，轮换开着带几张。 */
+  const wallpaperMeta =
+    config.bg.mode === 'image'
+      ? `图片${config.bg.pool.length > 0 && config.bg.rotateMin > 0 ? ` · 轮换 ${config.bg.pool.length} 张` : ''}`
+      : config.bg.mode === 'solid'
+        ? '纯色'
+        : config.bg.mode === 'gradient'
+          ? '渐变'
+          : '跟随皮肤'
 
-      {/* ---------- 皮肤库 ---------- */}
+  return (
+    <section className="mb-6 flex flex-col gap-4" data-appearance="">
+      {/* ---------- 皮肤库：这一页的主角 ---------- */}
+      {/*
+        ## 信息顺序为什么是这样的（2026-10-01 重排）
+
+        这页九成的用途是「挑一套好看的样子」，所以**画廊在开门第一眼**；
+        「微调」与「壁纸」是剩下那一成的人偶尔做的事，收进折叠区——收起来的是
+        「不吵」，不是「不在」（`<details>` 的内容常在 DOM 里，行为与测试都不变）。
+        早先的顺序（当前皮肤 + 8 根滑块压在画廊前面）把微调摆在了选择前面，
+        那是「平铺感」的来源。 */}
       <div className="wb-card p-5">
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">皮肤库</h2>
+          <h2 className="font-semibold">
+            皮肤库 <span className="text-xs font-normal text-neutral-400">{skins.length} 套</span>
+          </h2>
           <div className="flex flex-wrap items-center gap-2">
             {/* 入口摆在**皮肤表这一格**里，不摆到下面「自定义背景」那儿：
                 用户在这里看到的是「有哪些皮肤」，那么「再加一款」也该在这里。
@@ -263,10 +281,8 @@ export default function AppearanceSettings() {
             />
           </div>
         </div>
-        <p className="mb-4 text-xs leading-relaxed text-neutral-500">
-          皮肤决定强调色、页面底色、面板与侧栏的通透度。每个皮肤都有亮色和暗色两套值，
-          顶栏那个月亮按钮切的是亮暗，不是换皮肤——所以换皮肤不会把你切到亮色去。
-          传一张自己的图可以<b>现做一款</b>：强调色从图里取，压暗按这张图的明暗算。
+        <p className="mb-4 text-xs text-neutral-500">
+          点一下就换上——底色、强调色、面板通透一起走。传一张自己的图可以<b>现做一款</b>。
         </p>
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
@@ -415,9 +431,8 @@ export default function AppearanceSettings() {
       {/* ---------- 强调色 ---------- */}
       <div className="wb-card p-5">
         <h2 className="mb-1 font-semibold">强调色</h2>
-        <p className="mb-4 text-xs leading-relaxed text-neutral-500">
-          按钮、选中态、链接、焦点环、图表首色都用它。留空即跟随皮肤——
-          填了之后整条色阶（浅底 chip 到深色实底）由这一个颜色推导，不用逐档配。
+        <p className="mb-4 text-xs text-neutral-500">
+          按钮、选中态、链接、图表首色都跟它。留空即跟随皮肤——填了之后整条色阶由它推导。
         </p>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -506,11 +521,41 @@ export default function AppearanceSettings() {
         </p>
       ) : null}
 
-      {/* ---------- 自定义背景 ---------- */}
-      <AppearanceBackground onMakeSkin={makeSkin} />
+      {/* ---------- 微调面板层（折叠：默认收起） ---------- */}
+      <Fold
+        id="tuning"
+        title="微调面板层"
+        meta="通透 · 模糊 · 边框 · 存成新皮肤"
+        badge={
+          hasOverrides(config.surfaces) ? (
+            <span
+              data-appearance-tuned=""
+              className="rounded-full bg-violet-100 px-1.5 py-0.5 text-xs text-violet-700 dark:bg-violet-500/15 dark:text-violet-300"
+            >
+              已自定义
+            </span>
+          ) : null
+        }
+      >
+        <SkinCenter />
+      </Fold>
 
-      {/* ---------- 导入 / 导出 ---------- */}
-      <div className="wb-card p-5">
+      {/* ---------- 自定义壁纸与轮换（折叠） ---------- */}
+      <Fold id="wallpaper" title="自定义壁纸" meta={wallpaperMeta}>
+        <AppearanceBackground onMakeSkin={makeSkin} />
+      </Fold>
+
+      {/* ---------- 导入 / 导出（折叠） ---------- */}
+      <Fold
+        id="transfer"
+        title="导入 / 导出"
+        meta={
+          userSkinManifests().length
+            ? `${userSkinManifests().length} 个导入的皮肤`
+            : '备份 · 迁移'
+        }
+      >
+        <div className="wb-card p-5">
         <h2 className="mb-1 font-semibold">导入 / 导出</h2>
         <p className="mb-4 text-xs leading-relaxed text-neutral-500">
           把这一页的设置（皮肤、明暗、强调色、背景）连自己导入的皮肤一起存成一份文件，
@@ -576,7 +621,8 @@ export default function AppearanceSettings() {
             {notice}
           </p>
         ) : null}
-      </div>
+        </div>
+      </Fold>
 
       <p className="text-xs text-neutral-400">
         改动即时生效并自动保存（本机 + 后端各一份，换浏览器打开也还在）。顶栏那个调色板图标随时回到这一页。
@@ -599,4 +645,34 @@ function describePlan(p: ImportPlan, label: string): string {
     bits.push('这份设置用的皮肤文件里没有、本机也没装，暂时按默认皮肤显示')
   }
   return bits.join('；')
+}
+
+/** 折叠区。**用 `<details>` 而不是 state + 卸载**：收起来的是「不吵」，不是「不在」
+ *  ——内容常在 DOM 里，行为、测试与窄屏的规矩都不为它让路（与 §9 那条
+ *  「藏字不藏节点」是同一条纪律的另一头）。徽标（badge）把「这里有你改过的东西」
+ *  摆在收起的那一行上——「已自定义」不该被藏起来才被发现。 */
+function Fold({
+  id,
+  title,
+  meta,
+  badge,
+  children,
+}: {
+  id: string
+  title: string
+  meta: string
+  badge?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <details data-appearance-fold={id} className="group">
+      <summary className="flex cursor-pointer select-none list-none items-center gap-2 rounded-lg border border-neutral-200 px-4 py-3 text-sm transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900/60 [&::-webkit-details-marker]:hidden">
+        <ChevronDown className="h-4 w-4 shrink-0 text-neutral-400 transition-transform group-open:rotate-180" />
+        <span className="font-medium">{title}</span>
+        {badge}
+        <span className="ml-auto text-xs text-neutral-400">{meta}</span>
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
+  )
 }

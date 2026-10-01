@@ -865,3 +865,46 @@ describe('外观 · 壁纸轮换池', () => {
     expect(['https://example.com/a.png', 'https://example.com/b.png']).toContain(shown)
   })
 })
+
+describe('外观 · 折叠区', () => {
+  it('三个折叠区默认收起,但内容常在 DOM 里——藏的是「不吵」,不是「不在」', () => {
+    renderPanel()
+    for (const id of ['tuning', 'wallpaper', 'transfer']) {
+      const d = document.querySelector(`details[data-appearance-fold="${id}"]`)
+      expect(d).toBeTruthy()
+      expect(d?.hasAttribute('open')).toBe(false)
+    }
+    // 收着的抽屉里东西都在:微调的滑块、存成新皮肤、壁纸的模式按钮
+    expect(document.querySelector('[data-surf-slider]')).toBeTruthy()
+    expect(document.querySelector('[data-skin-save]')).toBeTruthy()
+    expect(document.querySelector('[data-bg-mode="image"]')).toBeTruthy()
+  })
+
+  it('「已自定义」徽标:拨过面板层就摆到收起的那一行上,恢复原始界面后消失', () => {
+    renderPanel()
+    expect(document.querySelector('[data-appearance-tuned]')).toBeNull()
+
+    fireEvent.change(document.querySelector('input[data-surf-slider="sidebarGlass"]')!, {
+      target: { value: '30' },
+    })
+    expect(document.querySelector('[data-appearance-tuned]')).toBeTruthy()
+
+    fireEvent.click(document.querySelector('[data-appearance-reset]')!)
+    expect(document.querySelector('[data-appearance-tuned]')).toBeNull()
+  })
+
+  it('壁纸行的摘要跟着背景模式走,轮换开着带张数', () => {
+    renderPanel()
+    const meta = () =>
+      document.querySelector('details[data-appearance-fold="wallpaper"] summary')?.textContent ?? ''
+    expect(meta()).toContain('跟随皮肤')
+    fireEvent.click(document.querySelector('[data-bg-mode="solid"]')!)
+    expect(meta()).toContain('纯色')
+    fireEvent.click(document.querySelector('[data-bg-mode="image"]')!)
+    fireEvent.change(document.querySelector('input[data-bg-url]')!, {
+      target: { value: 'https://example.com/a.png' },
+    })
+    fireEvent.click(document.querySelector('[data-bg-rotate-add]')!)
+    expect(meta()).toContain('轮换 1 张')
+  })
+})
