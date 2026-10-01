@@ -115,6 +115,7 @@ cd backend && uv run uvicorn app.main:app --port 8000
 - 数据库：`data/workbench.db`
 - 向量库：`data/chroma/`
 - 配置（系统提示词/RAG top_k/MCP servers）：`data/config.json`
+- 皮肤副本（导入皮肤的镜像，正本在浏览器）：`data/skins.json`
 - 笔记目录：`vault/`（放入即自动索引）
 - embedding 模型首次运行自动下载到 HF 缓存（约 100MB）
 

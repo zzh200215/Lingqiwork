@@ -57,6 +57,7 @@ import {
 } from './theme/surfaces'
 import type { Skin, SkinVariant } from './theme/skins'
 import {
+  SKINS_CHANGED_EVENT,
   SKINS_KEY,
   hasSkin,
   installUserSkins,
@@ -86,6 +87,7 @@ export {
   DEFAULT_BG,
   MIN_SKIN_SCRIM,
   SKIN_FORMAT,
+  SKINS_CHANGED_EVENT,
   SKINS_KEY,
   SURF_KEYS,
   SURF_RANGE,
@@ -133,6 +135,11 @@ export type {
  *  **v2 真的变过一次**：`dark: boolean` → `mode: 'light' | 'dark' | 'system'`。
  *  下面 `parseMode()` 里那一段就是版本号当初存在的理由。 */
 export const STORE_KEY = 'wb:theme'
+
+/** 「进过外观页」的一次性标记。顶栏调色盘上的小圆点只在没进过时亮——
+ *  换肤入口有三个（侧栏设置第二项、顶栏、命令面板），但对第一次打开的人
+ *  来说等于没有；这个功能的价值一半在「被发现」。进了外观页就落键，圆点永远消失。 */
+export const APPEARANCE_VISITED_KEY = 'wb:appearance-visited'
 export const STORE_VERSION = 2
 
 /** 明暗的三种取法。`system` = 跟随操作系统（`prefers-color-scheme`）。

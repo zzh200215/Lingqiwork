@@ -26,6 +26,7 @@ import {
 import { api } from './api'
 import {
   DEFAULT_THEME,
+  SKINS_CHANGED_EVENT,
   STORE_KEY,
   applyTheme,
   hasOverrides,
@@ -123,6 +124,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
    *  这就是那个东西。少了它，导入成功的那一刻界面还是旧的皮肤表，
    *  要等下一次无关的重渲染才会出现新皮肤。 */
   const [skinsRev, setSkinsRev] = useState(0)
+
+  // 注册表的**异步**变化走事件：本地为空的那一次首装，`registry.restoreIfEmpty()`
+  // 会从后端把副本找回来——那发生在模块加载后的某个网络往返之后，React 看不见。
+  // （装上/删掉这类**同步**变化不走这里，各自的回调里已经抖过 rev 了。）
+  useEffect(() => {
+    const bump = () => setSkinsRev((n) => n + 1)
+    window.addEventListener(SKINS_CHANGED_EVENT, bump)
+    return () => window.removeEventListener(SKINS_CHANGED_EVENT, bump)
+  }, [])
+
 
   // `skinsRev` **必须是 `resolved` 的依赖**，不只是用来触发重画的计数器：
   // 皮肤表变了，解析结果本身就可能变——删掉正在用的那个皮肤时，`skinById` 会退回

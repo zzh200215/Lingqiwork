@@ -10,6 +10,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import skins_store
 from app.core.mcp import mcp_manager, server_name_problem
 from app.core.prefs import load_config, save_config
 from app.core.secrets import SECRET_KEYS
@@ -258,6 +259,31 @@ async def put_theme(body: ThemeIn):
             )
     saved = save_config({"theme": body.theme})
     return {"theme": saved.get("theme")}
+
+
+# ---------- skins (导入皮肤的后端副本) ----------
+
+
+class SkinsIn(BaseModel):
+    """与前端 `wb:skins` **同一个形状**（`{version, skins}`）：正本在 localStorage，
+    这里是镜像。形状的真相在前端 `theme/manifest.ts`，后端原样保管、只把版本闸。"""
+
+    version: int
+    skins: list[dict]
+
+
+@router.get("/skins")
+async def get_skins():
+    """本地为空（新浏览器 / 清过缓存）时前端来这里恢复；从没同步过返回 null。"""
+    return {"skins": skins_store.load()}
+
+
+@router.put("/skins")
+async def put_skins(body: SkinsIn):
+    try:
+        return {"skins": skins_store.save(body.model_dump())}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 # ---------- persistent memory ----------

@@ -23,12 +23,22 @@
  *  （运行时那份里有 11 档色阶，存下来既大又没必要——它本来就能从数据推出来）。
  *  这样「导出的 JSON」与「存在本机的 JSON」是同一个形状，两者之间不需要转译。 */
 import { manifestToSkin, parseSkin, type Parsed, type SkinManifest } from './manifest'
+import { request } from '../api/request'
 import { BUILTIN_SKINS, type Skin } from './skins'
 
 /** 用户导入的皮肤存在这里。与 `wb:theme` 分开：皮肤是「装了什么东西」，
  *  不是「一项设置」——把几 KB 的色阶表塞进每次 `PUT /api/settings/theme` 里没必要。 */
 export const SKINS_KEY = 'wb:skins'
 const SKINS_VERSION = 1
+
+/** 皮肤清单在后端有副本（`data/skins.json`）。本地为空（新浏览器 / 清过缓存）时
+ *  从那里恢复；恢复完成的那一刻发这个事件——注册表是模块级的活状态，React 看不见
+ *  它变，`ThemeProvider` 听到才抖一下 `skinsRev`，界面才会重新解析皮肤。 */
+export const SKINS_CHANGED_EVENT = 'wb:skins-changed'
+
+/** 首装恢复只发一次：模块加载的那次 `loadUserSkins` 才会去后端找副本。
+ *  测试里反复 `loadUserSkins()` 复位注册表，不该每次都甩一个请求出去。 */
+let bootstrapped = false
 
 const builtinIds = new Set(BUILTIN_SKINS.map((s) => s.id))
 const builtinById = new Map<string, Skin>(BUILTIN_SKINS.map((s) => [s.id, s]))
@@ -148,10 +158,53 @@ function persist(): void {
     /* 存不下（隐私模式 / 配额满）就只在这一次会话里有效——
        为此挡住「导入一个皮肤」不值得 */
   }
+  mirrorToBackend()
+}
+
+/** 把正本镜像到后端（`PUT /api/settings/skins`）。**发起后不管结果**：
+ *  后端没起 / 请求失败，本地照常用——本地优先的默认行为不该被一份副本拖住。
+ *  失败的代价是「这次改动没进副本」，下次任何改动都会再镜像一遍，自然补上。 */
+function mirrorToBackend(): void {
+  const payload = { version: SKINS_VERSION, skins: manifests }
+  request('/api/settings/skins', { method: 'PUT', body: JSON.stringify(payload) }).catch(() => {})
+}
+
+/** 本地为空（连 `wb:skins` 这个键都没有 = 新浏览器 / 清过缓存）时从后端恢复。
+ *  有键就 never 恢复——哪怕键里是空清单：那是「用户删光了」的决定，不是丢失。
+ *  返回是否真的恢复出了皮肤（测试与启动日志用）。 */
+export async function restoreIfEmpty(): Promise<boolean> {
+  if (manifests.length || localStorage.getItem(SKINS_KEY)) return false
+  try {
+    const r = await request<{
+      skins: { version: number; skins: SkinManifest[] } | null
+    }>('/api/settings/skins')
+    const list = r.skins?.skins
+    if (!Array.isArray(list)) return false
+    // 与 `loadUserSkins` 同一条校验线：解析得了、不与内置重名。一份坏条目
+    // 不该让恢复整段失败，剩下的照常装。
+    const kept: SkinManifest[] = []
+    const seen = new Set<string>()
+    for (const item of list) {
+      const got = parseSkin(item)
+      if (!got.ok || builtinIds.has(got.value.id) || seen.has(got.value.id)) continue
+      seen.add(got.value.id)
+      kept.push(got.value)
+    }
+    if (!kept.length) return false
+    manifests = kept
+    rebuild()
+    persist()
+    window.dispatchEvent(new Event(SKINS_CHANGED_EVENT))
+    return true
+  } catch {
+    return false // 后端够不着（没起 / 网络坏）就当没有副本，正本照旧
+  }
 }
 
 /** 从 localStorage 装回来。**模块加载时自己跑一次**（见文件末尾），
- *  因为 `resolveTheme` 在 React 之前就要能按 id 找到皮肤。 */
+ *  因为 `resolveTheme` 在 React 之前就要能按 id 找到皮肤。
+ *  本地什么都没有的那一次，顺手去后端找回副本（只在首装那次发，之后手动清空
+ *  不再触发——见 `restoreIfEmpty`）。 */
 export function loadUserSkins(): void {
   let raw: string | null = null
   try {
@@ -162,6 +215,8 @@ export function loadUserSkins(): void {
   if (!raw) {
     manifests = []
     rebuild()
+    if (!bootstrapped) void restoreIfEmpty()
+    bootstrapped = true
     return
   }
 
