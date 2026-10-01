@@ -12,7 +12,6 @@ answer is handed over via `vault/tasks/handoff/<from>-to-<to>.md` and the
 downstream task runs with it injected as its main input.
 """
 import asyncio
-import fnmatch
 import json
 import logging
 import re

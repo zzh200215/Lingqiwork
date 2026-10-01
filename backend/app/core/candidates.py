@@ -25,7 +25,6 @@
    Q2 的技能卡同一条纪律：**没有基线的东西不许当成能力展示。**
 """
 import logging
-from pathlib import Path
 
 from pydantic import BaseModel, field_validator
 

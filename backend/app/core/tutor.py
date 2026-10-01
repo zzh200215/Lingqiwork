@@ -2160,7 +2160,7 @@ async def verdict_calibration(days: int = CALIB_DAYS) -> dict:
             "窗口里的判分行来自不止一版判分器——「让它判的」那一边不是一把尺子量的。"
         )
     if not out["decidable"] and (out["self"]["n"] or out["judged"]["n"]):
-        out["rules"]["sample"] = f"这个窗口下不了结论（说通率的 95% 区间还重叠着），如实摆着。"
+        out["rules"]["sample"] = "这个窗口下不了结论（说通率的 95% 区间还重叠着），如实摆着。"
     return out
 
 

@@ -45,3 +45,7 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test
+      - name: Build
+        # 构建期才暴露的问题（Tailwind 配置写错、动态 import 路径写错）typecheck
+        # 抓不到——没有这一步，CI 对「测试全过但打不出包」的仓库是瞎的。
+        run: npm run build

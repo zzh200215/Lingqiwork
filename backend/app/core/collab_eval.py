@@ -44,7 +44,11 @@ from pathlib import Path
 # 比 marker 的判据（**抹掉标点与空白再比**）只有一份，在 `turn_eval` 里——A2 的协作臂与
 # A4 的 `agent_eval` 都要用它，各写一份的那天两份就会漂。这里只 re-export，
 # 好让本模块的读者一眼看见「协作这一臂拿的就是同一把尺子」。
+# `__all__` 是给 pyflakes 的：这两个名字是有意的 re-export（test_agent_eval 钉着
+# `collab_eval.normalize is turn_eval.normalize`），不是手滑多写的 import。
 from app.core.turn_eval import has_marker, normalize
+
+__all__ = ["has_marker", "normalize"]
 
 log = logging.getLogger(__name__)
 
