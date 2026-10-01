@@ -166,6 +166,10 @@ export interface SkinManifest {
   hint?: string
   /** 谁做的。内置皮肤没有；导入的皮肤会带着原始作者一起走 */
   author?: string
+  /** 氛围粒子的款式（`sakura` / `firefly` / `none`）。**可以不写**：缺省
+   *  `'sakura'`，也就是这个字段出现之前的行为。认不出的值退回缺省、
+   *  不整条拒绝——它不是安全问题，只是参数（与 `fit` / `scrimDir` 同一条先例）。 */
+  particles?: ParticleKind
   /** 整套皮肤的那个「品牌色」。**只写它也能成一套皮肤**（见上面那段）。 */
   accent?: string
   light?: VariantManifest
@@ -241,6 +245,21 @@ const MAX_HINT = 80
 const MAX_AUTHOR = 40
 /** 十六进制颜色。`normalizeHex` 连 `#abc` 那种三位的也认，这里只用来判「像不像颜色」。 */
 const HEX_RE = /^#[0-9a-f]{3}([0-9a-f]{3})?$/i
+
+// ---------- 氛围粒子（装饰是数据，不是代码） ----------
+
+/** 皮肤自带的那层氛围粒子。**这是口味，不是能力**——画哪种、画不画，
+ *  都是一份配置字段，皮肤包里没有任何一行代码。
+ *
+ *  缺省是 `'sakura'`：那是这个字段出现**之前**的行为（对话页一直有樱花，
+ *  🌸 开关管它），字段化不许悄悄改掉它。`'firefly'` 是萤火虫（缓慢上浮、
+ *  呼吸明灭），`'none'` 是这张卡不要任何粒子。 */
+export type ParticleKind = 'sakura' | 'firefly' | 'none'
+export const PARTICLE_KINDS: readonly ParticleKind[] = ['sakura', 'firefly', 'none']
+
+export function isParticleKind(v: unknown): v is ParticleKind {
+  return v === 'sakura' || v === 'firefly' || v === 'none'
+}
 
 /** 解析结果。**把「哪里不对」带出来**：导入失败时用户要看到的是
  *  「皮肤 id 只能是 a-z0-9._-」，而不是「导入失败」四个字。 */
@@ -498,6 +517,9 @@ export function parseSkin(raw: unknown): Parsed<SkinManifest> {
   if (hint && !hint.ok) return hint
   const author = optionalText(raw.author, '作者', MAX_AUTHOR)
   if (author && !author.ok) return author
+  // 氛围粒子：认不出的值当「没写」，由 `manifestToSkin` 补缺省——与 fit/scrimDir
+  // 同一条先例（参数写错不该让人丢掉整张卡），也不该冒充一个存在的款式。
+  const particles = isParticleKind(raw.particles) ? raw.particles : undefined
 
   // 顶层那个「品牌色」。它与两个变体里的 accent 是一个东西的两种写法：
   // 写这里 = 亮暗共用；写变体里 = 那一边单独用。两边都没写也合法（会推一个兜底色）。
@@ -521,6 +543,7 @@ export function parseSkin(raw: unknown): Parsed<SkinManifest> {
       label: label.value,
       hint: hint?.value,
       author: author?.value,
+      particles,
       accent,
       light: light.value,
       dark: dark.value,
@@ -576,6 +599,8 @@ export function manifestToSkin(m: SkinManifest): Skin {
     label: m.label,
     hint: m.hint ?? '',
     author: m.author,
+    // 氛围粒子的缺省是**历史行为**：樱花一直都在，字段化不许悄悄把它关掉
+    particles: m.particles ?? 'sakura',
     light: toVariant(m.light, lightAccent, 'light'),
     dark: toVariant(m.dark, darkAccent, 'dark'),
   }
@@ -627,6 +652,9 @@ export function skinToManifest(s: Skin): SkinManifest {
     label: s.label,
     hint: s.hint || undefined,
     author: s.author,
+    // 樱花是缺省——「缺省的那一份不写出去」与中性阶/色阶是同一条纪律，
+    // 一份不想要粒子的皮肤导出来才带得走那句话。
+    particles: s.particles === 'sakura' ? undefined : s.particles,
     accent: s.light.accent,
     light: fromVariant(s.light, 'light'),
     dark: fromVariant(s.dark, 'dark'),

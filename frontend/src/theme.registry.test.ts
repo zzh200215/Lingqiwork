@@ -372,3 +372,36 @@ describe('皮肤注册表：改名', () => {
     expect(skinById('default').label).not.toBe('甲甲')
   })
 })
+
+describe('氛围粒子：装饰是数据', () => {
+  it('没写就是樱花——那是字段化之前的行为，不许悄悄变', () => {
+    const got = parseSkin(MINIMAL)
+    expect(got.ok).toBe(true)
+    if (got.ok) expect(manifestToSkin(got.value).particles).toBe('sakura')
+  })
+
+  it('写了 firefly 就用 firefly；认不出的退回缺省，不整条拒绝（与 fit/scrimDir 同一条先例）', () => {
+    const got = parseSkin({ ...MINIMAL, particles: 'firefly' })
+    expect(got.ok).toBe(true)
+    if (got.ok) expect(manifestToSkin(got.value).particles).toBe('firefly')
+    const weird = parseSkin({ ...MINIMAL, particles: '纸鹤' })
+    expect(weird.ok).toBe(true)
+    if (weird.ok) expect(manifestToSkin(weird.value).particles).toBe('sakura')
+  })
+
+  it('「none」跟着导出走；缺省的那一份不写出去', () => {
+    const got = parseSkin({ ...MINIMAL, particles: 'none' })
+    expect(got.ok).toBe(true)
+    if (!got.ok) return
+    expect(skinToManifest(manifestToSkin(got.value)).particles).toBe('none')
+    const plain = parseSkin(MINIMAL)
+    expect(plain.ok).toBe(true)
+    if (plain.ok) expect(skinToManifest(manifestToSkin(plain.value)).particles).toBeUndefined()
+  })
+
+  it('内置的流萤自带 firefly，其余是缺省的樱花', () => {
+    for (const s of BUILTIN_SKINS) {
+      expect(s.particles, s.id).toBe(s.id === 'firefly' ? 'firefly' : 'sakura')
+    }
+  })
+})

@@ -19,4 +19,16 @@ describe('SakuraLayer', () => {
     const { container } = render(<SakuraLayer on={false} />)
     expect(container.querySelector('canvas')).toBeNull()
   })
+
+  it('firefly：还是同一层 canvas，属性写明款式', () => {
+    const { container } = render(<SakuraLayer on kind="firefly" />)
+    const c = container.querySelector('canvas')
+    expect(c).toBeTruthy()
+    expect(c?.getAttribute('data-ambience')).toBe('firefly')
+  })
+
+  it('皮肤说「none」：开着也不画——款式是皮肤的，不是开关的', () => {
+    const { container } = render(<SakuraLayer on kind="none" />)
+    expect(container.querySelector('canvas')).toBeNull()
+  })
 })

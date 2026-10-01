@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { upsertArtifact } from './artifacts'
 import SakuraLayer from './SakuraLayer'
+import { useTheme } from './ThemeProvider'
 import { api, type AgentPreset, type Conversation, type ProviderConfig } from './api'
 import {
   streamChat,
@@ -20,9 +21,12 @@ import ChatHeader from './ChatHeader'
 import CollabPanel from './CollabPanel'
 
 export default function App() {
+  // 氛围粒子的**款式**跟皮肤走（装饰是数据）：流萤自带萤火虫，其余默认樱花。
+  // App 在 ThemeProvider 之内；单测里单独渲染时 useTheme 退回默认那份（樱花），行为不变。
+  const { resolved } = useTheme()
   return (
     <>
-      <SakuraLayer on={ambienceOn()} />
+      <SakuraLayer on={ambienceOn()} kind={resolved.skin.particles} />
       <ChatView />
     </>
   )

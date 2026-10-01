@@ -22,7 +22,7 @@
  *
  *  **默认皮肤的数值 = 改动前 Tailwind 的 neutral / violet 原值**：换肤功能上线后，
  *  没动过设置的人看到的应该还是原来那一版，一个色号都不差。 */
-import { manifestToSkin, type SkinBg, type SkinManifest } from './manifest'
+import { manifestToSkin, type ParticleKind, type SkinBg, type SkinManifest } from './manifest'
 import type { SkinSurfaces } from './surfaces'
 import type { Channels } from './color'
 
@@ -58,6 +58,8 @@ export interface Skin {
   hint: string
   /** 谁做的。内置的没有；导入的会带着原作者一起走 */
   author?: string
+  /** 自带的氛围粒子款式（樱花 / 萤火虫 / 不画）。缺省樱花 = 字段化之前的行为 */
+  particles: ParticleKind
   light: SkinVariant
   dark: SkinVariant
 }
@@ -372,6 +374,8 @@ export const BUILTIN_MANIFESTS: SkinManifest[] = [
     id: 'firefly',
     label: '流萤',
     hint: '深蓝黑的夜里一点萤绿。安静地亮着，不吵。',
+    // 这套皮肤自带萤火虫氛围层：缓慢上浮、呼吸明灭——名字的来处。
+    particles: 'firefly',
     // 与「暖调」同一条路：色阶手抄一整条（见上面 FIREFLY 的说明——600 是为
     // 这套皮肤自己的底色手压过的，推导推不出来）。
     light: {
