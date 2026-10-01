@@ -7,6 +7,7 @@ import PetWidget from './PetWidget'
 import ThemeBackdrop from './ThemeBackdrop'
 import { useTheme } from './ThemeProvider'
 import { api } from './api'
+import { APPEARANCE_VISITED_KEY } from './theme'
 import { NAV, navCrumbs, navState, useModule } from './routes'
 
 // 外壳：侧栏 + 顶栏 + 内容区。外观（皮肤 / 亮暗 / 自定义背景）是**全局状态**，
@@ -44,16 +45,43 @@ function ThemeToggle() {
  *  顶栏紧挨着亮暗按钮，一眼能看见。
  *
  *  入口是链接不是弹层：地址是 `/settings?section=appearance`，可以收藏、可以深链，
- *  与全站「侧栏是唯一入口、地址是唯一真相」的约定一致。 */
+ *  与全站「侧栏是唯一入口、地址是唯一真相」的约定一致。
+ *
+ *  **首次提示**：没进过外观页时图标右上角亮一颗小圆点——进过一次（在外观页落键）
+ *  就永远消失。不弹窗、不常驻文案：发现得了的人点一下就有，不想看的人永远不被打断。 */
 function AppearanceLink() {
+  const [hint, setHint] = useState(() => {
+    try {
+      return !localStorage.getItem(APPEARANCE_VISITED_KEY)
+    } catch {
+      return false
+    }
+  })
+  const location = useLocation()
+  // Layout 是常驻壳，state 初始化只跑一次——路由变化时重读一次键，
+  // 「进过外观页回来」的下一跳圆点就没了。
+  useEffect(() => {
+    try {
+      setHint(!localStorage.getItem(APPEARANCE_VISITED_KEY))
+    } catch {
+      setHint(false)
+    }
+  }, [location])
   return (
     <Link
       to="/settings?section=appearance"
       data-topbar-appearance=""
       title="外观：皮肤与背景"
-      className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+      className="relative flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
     >
       <Palette className="h-4 w-4" />
+      {hint ? (
+        <span
+          data-appearance-hint=""
+          title="换肤：皮肤 / 背景 / 强调色（点这里看）"
+          className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-violet-500 animate-pulse-dot"
+        />
+      ) : null}
     </Link>
   )
 }
