@@ -170,3 +170,13 @@ export function safeImageUrl(url: string): string {
   const u = (url || '').trim()
   return isSafeImageUrl(u) ? u : ''
 }
+
+/** 视频壁纸的认法：按扩展名认 mp4 / webm（浏览器原生能播的两种）。
+ *
+ *  只用于「这一层画 `<video>` 还是画图」的分派，**合法性仍由 `isSafeImageUrl`
+ *  把关**——那条只认站内与 http(s)，扩展名它不关心。动态壁纸与静态图在数据里
+ *  是同一个字段（`bg.image`），分派是渲染层的事：加一种「会动的壁纸」
+ *  没有给皮肤格式加第二个真相。 */
+export function isVideoUrl(url: string): boolean {
+  return /\.(mp4|webm)(?:[?#]|$)/i.test((url || '').trim())
+}

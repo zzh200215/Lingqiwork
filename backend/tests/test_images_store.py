@@ -68,3 +68,38 @@ def test_extra_keep_from_frontend_skins():
 
     assert held["name"] in without_keep  # 后端自己看，它就是「未引用」
     assert held["name"] not in with_keep  # 前端说皮肤用着，就保下来
+
+
+def _mp4(n: int) -> bytes:
+    """假 mp4。后端不做容器嗅探——扩展名与大小是仅有的两道闸（本地单机工具的取舍）。"""
+    return b"\x00\x00\x00\x18ftypmp42" + bytes([n]) * 32
+
+
+def test_video_upload_uses_same_store_and_dedup():
+    """视频壁纸与图片走同一个库：同内容去重、同样的命名，没有第二个真相。"""
+    a = images.save_upload(_mp4(1), "video/mp4")
+    b = images.save_upload(_mp4(1), "video/mp4")
+    assert a["name"].endswith(".mp4")
+    assert b["name"] == a["name"]
+    assert images.NAME_RE.match(a["name"])
+    webm = images.save_upload(_mp4(2), "video/webm")
+    assert webm["name"].endswith(".webm")
+
+
+def test_video_over_cap_rejected_image_cap_unchanged():
+    """视频 64MB、图片 20MB，两道闸分开量。"""
+    import pytest
+
+    big_video = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64_000_001
+    with pytest.raises(ValueError, match="64MB"):
+        images.save_upload(big_video, "video/mp4")
+    with pytest.raises(ValueError, match="20MB"):
+        images.save_upload(b"\x89PNG\r\n\x1a\n" + bytes([9]) * 20_000_001, "image/png")
+
+
+def test_theme_background_video_reference_protects_it():
+    """视频壁纸的引用也长在 config.json 的 theme 里，扫描认得（漏算 = 当场删掉正在播的壁纸）。"""
+    held = images.save_upload(_mp4(3), "video/mp4")
+    save_config({"theme": {"bg": {"mode": "image", "image": held["url"]}}})
+
+    assert held["name"] not in {r["name"] for r in images.unreferenced_images()}

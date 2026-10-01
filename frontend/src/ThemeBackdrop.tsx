@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { useTheme } from './ThemeProvider'
+import { isVideoUrl } from './theme/background'
 
 /** 这张图还在不在。
  *
@@ -37,6 +38,31 @@ function useImageAlive(url: string): boolean {
   return alive
 }
 
+/** 视频壁纸还够不够得着。与 `useImageAlive` 同一个纪律（探一次，坏就整层不画），
+ *  但探法是 `preload='metadata'`——只拿头部，不为探活把整段视频拉下来。
+ *  jsdom 里两个回调都不会触发，初值 `true` 让既有测试的背景层不凭空消失。 */
+function useVideoAlive(url: string): boolean {
+  const [alive, setAlive] = useState(true)
+  useEffect(() => {
+    if (!url) return
+    let live = true
+    setAlive(true)
+    const probe = document.createElement('video')
+    probe.preload = 'metadata'
+    probe.onloadedmetadata = () => {
+      if (live) setAlive(true)
+    }
+    probe.onerror = () => {
+      if (live) setAlive(false)
+    }
+    probe.src = url
+    return () => {
+      live = false
+    }
+  }, [url])
+  return alive
+}
+
 /** 自定义背景层：铺在应用内容**下面**的一张固定画布。
  *
  *  为什么不把图直接挂到根容器的 `background-image` 上：侧栏与顶栏是半透明的
@@ -56,23 +82,44 @@ function useImageAlive(url: string): boolean {
 export default function ThemeBackdrop() {
   const { resolved } = useTheme()
   const url = resolved.bg.mode === 'image' ? resolved.image : ''
-  const alive = useImageAlive(url)
-  if (resolved.bg.mode !== 'image' || !resolved.image || !alive) return null
+  const video = isVideoUrl(url)
+  const alive = useVideoAlive(video ? url : '')
+  const imgAlive = useImageAlive(video ? '' : url)
+  if (resolved.bg.mode !== 'image' || !resolved.image || !(video ? alive : imgAlive)) return null
 
   const repeat = resolved.bg.fit === 'repeat'
+  // reduced-motion 下不自动播：视频停在首帧（preload 拉得着），画面在、动不在。
+  // 这是把「开屏动画 respect reduced-motion」那条纪律接到会动的壁纸上。
+  const reduced =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
   return (
     <div className="wb-backdrop" data-wb-backdrop="" aria-hidden="true">
-      <div
-        className="wb-backdrop-img"
-        data-wb-backdrop-img={resolved.image}
-        data-wb-fit={resolved.bg.fit}
-        style={{
-          backgroundImage: `url("${resolved.image}")`,
-          // 平铺时 `cover` 会把一个格子拉伸成整屏，那不是平铺。格子自己多大就是多大
-          // （图本身带尺寸），所以这一项交给 CSS 的 `auto`。
-          backgroundSize: repeat ? undefined : resolved.bg.fit,
-        }}
-      />
+      {video ? (
+        <video
+          className="wb-backdrop-img wb-backdrop-video"
+          data-wb-backdrop-img={resolved.image}
+          data-wb-fit={resolved.bg.fit}
+          src={resolved.image}
+          muted
+          loop
+          playsInline
+          autoPlay={!reduced}
+          preload="auto"
+        />
+      ) : (
+        <div
+          className="wb-backdrop-img"
+          data-wb-backdrop-img={resolved.image}
+          data-wb-fit={resolved.bg.fit}
+          style={{
+            backgroundImage: `url("${resolved.image}")`,
+            // 平铺时 `cover` 会把一个格子拉伸成整屏，那不是平铺。格子自己多大就是多大
+            // （图本身带尺寸），所以这一项交给 CSS 的 `auto`。
+            backgroundSize: repeat ? undefined : resolved.bg.fit,
+          }}
+        />
+      )}
       {/* 色调薄纱：图与压暗层之间的那一层。**顺序在 DOM 里就是顺序**——
           不做成压暗层上的第二个 `background-image`，因为那要靠层叠顺序的记忆，
           而这里读一眼就知道谁在谁上面。 */}

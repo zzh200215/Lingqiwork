@@ -33,11 +33,14 @@ from app.models import ProviderConfig
 log = logging.getLogger(__name__)
 
 IMAGE_DIR = DATA_DIR / "images"
-NAME_RE = re.compile(r"^img-\d{8}-\d{6}-[0-9a-f]{6}\.(png|jpg|jpeg|webp)$")
+# mp4/webm：视频壁纸走的也是这个库——与图片同一个引用扫描、同一个清理入口，
+# 要是给它单开一个目录，「清理未引用」就永远扫不到它了。
+NAME_RE = re.compile(r"^img-\d{8}-\d{6}-[0-9a-f]{6}\.(png|jpg|jpeg|webp|mp4|webm)$")
 SIZE_RE = re.compile(r"^(\d{3,4}[*x]\d{3,4}|\d{1,2}:\d{1,2})$")
 _PROMPT_CAP = 1200
 _TIMEOUT = 300.0  # qwen-image-3.0 takes ~60s at 1024*1024; leave headroom
 _MAX_BYTES = 20_000_000
+_MAX_VIDEO_BYTES = 64_000_000
 
 
 # ---------- local store ----------
@@ -55,9 +58,9 @@ def _new_name(ext: str, data: bytes | None = None) -> str:
 
 
 def resolve_name(name: str) -> Path:
-    """Validate a stored image name and return its path. Raises ValueError."""
+    """Validate a stored file name and return its path. Raises ValueError."""
     if not NAME_RE.match(name or ""):
-        raise ValueError("非法图片名")
+        raise ValueError("非法文件名")
     return IMAGE_DIR / name
 
 
@@ -91,9 +94,9 @@ def delete_image(name: str) -> bool:
 # ---------- 引用扫描（清理入口的后半件事）----------
 
 
-# 引用长什么样：聊天附件、笔记、背景图里嵌的都是 /api/images/{name} 这个 URL，
-# name 的形状由 NAME_RE 钉死，所以对字节流正则一遍就能把引用找全。
-_IMG_REF_BYTES_RE = re.compile(rb"img-\d{8}-\d{6}-[0-9a-f]{6}\.(?:png|jpe?g|webp)")
+# 引用长什么样：聊天附件、笔记、背景图（含视频壁纸）里嵌的都是 /api/images/{name}
+# 这个 URL，name 的形状由 NAME_RE 钉死，所以对字节流正则一遍就能把引用找全。
+_IMG_REF_BYTES_RE = re.compile(rb"img-\d{8}-\d{6}-[0-9a-f]{6}\.(?:png|jpe?g|webp|mp4|webm)")
 # 单文件扫描上限：兜的是被异常喂进来的巨物，正常 vault/数据库远够不着。
 _REF_SCAN_CAP = 1 << 30
 
@@ -171,17 +174,24 @@ _EXT_BY_MIME = {
     "image/jpeg": "jpg",
     "image/webp": "webp",
     "image/gif": "png",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
 }
+
+_VIDEO_EXTS = {"mp4", "webm"}
 
 
 def save_upload(data: bytes, mime: str) -> dict:
-    """Store a user-pasted/uploaded image. Raises ValueError on bad input."""
+    """Store a user-pasted/uploaded image or wallpaper video. Raises ValueError on bad input."""
     ext = _EXT_BY_MIME.get((mime or "").split(";")[0].strip().lower())
     if not ext:
-        raise ValueError(f"不支持的图片类型: {mime or '未知'}，仅支持 png/jpg/webp")
+        raise ValueError(f"不支持的类型: {mime or '未知'}，仅支持 png/jpg/webp/mp4/webm")
     if not data:
-        raise ValueError("图片内容为空")
-    if len(data) > _MAX_BYTES:
+        raise ValueError("内容为空")
+    if ext in _VIDEO_EXTS:
+        if len(data) > _MAX_VIDEO_BYTES:
+            raise ValueError("视频超过 64MB 上限")
+    elif len(data) > _MAX_BYTES:
         raise ValueError("图片超过 20MB 上限")
     return _save(data, ext)
 

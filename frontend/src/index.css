@@ -205,6 +205,20 @@ body {
   background-position: top left;
   transform: none;
 }
+/* 视频壁纸：同一层的另一种画法。`<video>` 没有 `background-*`，
+   铺法换 `object-fit`、焦点换 `object-position`（读的是同一个
+   `--wb-bg-focus`），模糊 / 缩放 / 不透明度沿用 `.wb-backdrop-img` 那几条。
+   「平铺」对视频没有意义（repeat 当铺满用）——三种铺法它只认两种。 */
+.wb-backdrop-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: var(--wb-bg-focus, center);
+  background: none;
+}
+.wb-backdrop-video[data-wb-fit='contain'] {
+  object-fit: contain;
+}
 /* **色调薄纱**：图与压暗层之间的那一层。
  *
  *  为什么单独一层而不是并进压暗层：两者的职责不同，顺序也不能反。

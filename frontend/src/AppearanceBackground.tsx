@@ -26,9 +26,10 @@ function variantOf(r: ResolvedTheme): SkinVariant {
   return r.dark ? r.skin.dark : r.skin.light
 }
 
-/** 本机看得到、后端看不到的图片引用：用户皮肤存在 `wb:skins`，当前主题缓存在
+/** 本机看得到、后端看不到的文件引用：用户皮肤存在 `wb:skins`，当前主题缓存在
  *  `wb:theme`——后端的引用扫描只覆盖 config.json / 数据库 / vault，皮肤底图
- *  的引用必须由这里算好传上去（`keep`），否则清理会把皮肤正在用的图删掉。 */
+ *  的引用必须由这里算好传上去（`keep`），否则清理会把皮肤正在用的图删掉。
+ *  正则与后端 `_IMG_REF_BYTES_RE` 认同一个名字清单（含视频壁纸）。 */
 function localImageRefs(): string[] {
   const refs = new Set<string>()
   for (const key of ['wb:skins', 'wb:theme'] as const) {
@@ -39,12 +40,14 @@ function localImageRefs(): string[] {
       throw new Error(`读不到本机皮肤数据（${key}）——为不误删皮肤底图，这次先不扫`)
     }
     if (!raw) continue
-    for (const m of raw.match(/img-\d{8}-\d{6}-[0-9a-f]{6}\.(?:png|jpeg|jpg|webp)/g) ?? []) {
+    for (const m of raw.match(/img-\d{8}-\d{6}-[0-9a-f]{6}\.(?:png|jpeg|jpg|webp|mp4|webm)/g) ?? []) {
       refs.add(m)
     }
   }
   return [...refs]
 }
+
+const isVideoName = (name: string): boolean => /\.(mp4|webm)$/i.test(name)
 
 function fmtBytes(n: number): string {
   return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
@@ -82,8 +85,10 @@ export default function AppearanceBackground({
 
   async function upload(file: File) {
     setError('')
-    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
-      setError('只支持 png / jpg / webp 图片')
+    const isImage = /^image\/(png|jpeg|webp|gif)$/.test(file.type)
+    const isVideo = file.type === 'video/mp4' || file.type === 'video/webm'
+    if (!isImage && !isVideo) {
+      setError('只支持 png / jpg / webp / mp4 / webm')
       return
     }
     setUploading(true)
@@ -92,7 +97,8 @@ export default function AppearanceBackground({
       // 上传完直接设为背景——用户点「上传」的意思是「用它」，不是「存起来」
       patchBg({ mode: 'image', image: item.url })
       setLibrary((cur) => [item, ...cur])
-      setUploaded(file)
+      // 「顺手做皮肤」只对图片成立：取色那一套吃的是像素，视频进去是空转
+      if (isImage) setUploaded(file)
     } catch (e) {
       setError(`上传失败：${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -291,7 +297,7 @@ export default function AppearanceBackground({
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"
                 data-bg-file=""
                 className="hidden"
                 onChange={(e) => {
@@ -301,7 +307,9 @@ export default function AppearanceBackground({
                   if (f) void upload(f)
                 }}
               />
-              <span className="text-xs text-neutral-400">png / jpg / webp，单张 20MB 以内</span>
+              <span className="text-xs text-neutral-400">
+                png / jpg / webp 20MB 内 · mp4 / webm（视频壁纸）64MB 内
+              </span>
             </div>
 
             {/* **「壁纸 ≠ 皮肤」的分岔**：拿到一张图的人最容易只做前者（背景换上了，
@@ -417,7 +425,11 @@ export default function AppearanceBackground({
                             : 'border-transparent hover:border-neutral-300 dark:hover:border-neutral-600'
                         }`}
                       >
-                        <img src={img.url} alt={img.name} className="h-full w-full object-cover" />
+                        {isVideoName(img.name) ? (
+                          <video src={img.url} muted preload="metadata" className="h-full w-full object-cover" />
+                        ) : (
+                          <img src={img.url} alt={img.name} className="h-full w-full object-cover" />
+                        )}
                       </button>
                     ))}
                   </div>
