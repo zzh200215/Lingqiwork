@@ -20,9 +20,36 @@ body {
 /* ---------- brand tokens ----------
  *
  * 这两个名字留着是因为 `:focus-visible` 那条规则用它们；**值跟着强调色阶走**——
- * 焦点环是「当前主题的品牌色」最典型的一处，换肤时它必须一起变。 */
+ * 焦点环是「当前主题的品牌色」最典型的一处，换肤时它必须一起变。
+ *
+ * ---------- 语义 Token（2026-10-02 皮肤中心那一轮补齐）----------
+ *
+ * 全站的颜色从此有**两层名字**：
+ *
+ *  · `--wb-accent*` —— 品牌层。它就是强调色阶（`--wb-violet-*`，tailwind.config.js
+ *    把 violet / fuchsia 两个调色板都接到它上面），所以组件里写 `text-violet-600`
+ *    本来就在用它。这两个别名给 **CSS 里的规则**用——类名里没有 CSS，
+ *    而 `.wb-card-hero`、焦点环这类地方需要一个说得出口的名字。
+ *  · `--wb-status-*` —— 状态层。错误 rose、等人 amber、完成 emerald、运行 sky、
+ *    产出 teal。**它们刻意不跟着皮肤走**：状态色是功能语义（哪里坏了、哪里好了），
+ *    换一套绿皮不该把「错误」也染绿。组件里照旧写 `text-rose-600` 那些工具类
+ *    （几百处，全是状态语义），这一组变量管的是**没有类名的场合**——
+ *    keyframes、canvas 取色、以及将来的新规则。
+ *
+ *  判据只有一条：**装饰与品牌跟皮肤，状态跟语义。** */
 :root {
-  --brand: rgb(var(--wb-violet-500));
+  --wb-accent: rgb(var(--wb-violet-500));
+  --wb-accent-strong: rgb(var(--wb-violet-600));
+  --wb-accent-soft: rgb(var(--wb-violet-100));
+  --wb-status-success: #059669;
+  --wb-status-warning: #d97706;
+  --wb-status-error: #e11d48;
+  --wb-status-info: #0284c7;
+  --wb-status-output: #0d9488;
+  /* 运行中节点那一圈呼吸光晕（下面 `wb-node-pulse` 消费）：keyframes 里写不了
+     `rgb(var(--x) / alpha)` 之外还要能淡到 0，所以连「光晕色」一起给成整值。 */
+  --wb-status-info-glow: rgba(2, 132, 199, 0.35);
+  --brand: var(--wb-accent);
   --brand-soft: rgb(var(--wb-violet-400));
   /* 实底主按钮的渐变两端由**皮肤**给（`theme.ts` 从强调色阶的 600/700 推），
      这里只放一份「没有任何 JS 时」的兜底。为什么要按皮肤给而不是写死：
@@ -31,6 +58,18 @@ body {
      强调文字（那一档可以浅）不是同一个要求。 */
   --wb-btn-from: rgb(var(--wb-violet-600));
   --wb-btn-to: rgb(var(--wb-violet-700));
+}
+/* 暗色下的语义色：强调提一档（暗底上的强调色由 400 承担，见 skins.ts 的说明），
+   状态色换成各自的暗色档——亮色下那几个 600 级的深色压在深底上读不清。 */
+.dark {
+  --wb-accent: rgb(var(--wb-violet-400));
+  --wb-accent-soft: rgb(var(--wb-violet-500) / 0.15);
+  --wb-status-success: #34d399;
+  --wb-status-warning: #fbbf24;
+  --wb-status-error: #fb7185;
+  --wb-status-info: #38bdf8;
+  --wb-status-output: #2dd4bf;
+  --wb-status-info-glow: rgba(56, 189, 248, 0.35);
 }
 
 /* ---------- 交互微细节（2026-09-27 前端美化轮）----------
@@ -395,10 +434,11 @@ body {
    这里只留「没有任何 JS 时」的兜底——那种情况下沿用亮色图表色即可。 */
 
 /* 调度台 pipeline 节点：running 的那颗呼吸（脉的是外圈光晕，不是节点本身，
-   避免跟 wb-card-hover 那种位移动画打架） */
+   避免跟 wb-card-hover 那种位移动画打架）。光晕色走 `--wb-status-info-glow`
+   ——「运行中」是状态语义，不是品牌色；它的名字与取值在上面那一节。 */
 @keyframes wb-node-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.35); }
-  50% { box-shadow: 0 0 0 6px rgba(14, 165, 233, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 var(--wb-status-info-glow); }
+  50% { box-shadow: 0 0 0 6px transparent; }
 }
 .wb-node-running {
   animation: wb-node-pulse 1.6s ease-in-out infinite;

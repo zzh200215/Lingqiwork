@@ -29,11 +29,11 @@ import { api } from './api'
 import AppearanceSettings from './AppearanceSettings'
 import ThemeBackdrop from './ThemeBackdrop'
 import { ThemeProvider } from './ThemeProvider'
-import { DEFAULT_THEME, APPEARANCE_VISITED_KEY, installUserSkins, loadTheme, loadUserSkins, userSkinManifests } from './theme'
+import { DEFAULT_THEME, APPEARANCE_VISITED_KEY, accentPalette, installUserSkins, loadTheme, loadUserSkins, userSkinManifests } from './theme'
 import { BUILTIN_SKINS } from './theme/skins'
 import { parseSkin } from './theme/manifest'
 import { skinFromImage } from './theme/extract'
-import { buildExport, serializeExport } from './theme/transfer'
+import { buildExport, buildSkinShare, serializeExport } from './theme/transfer'
 
 /** 一份「从图里做出来」的皮肤 + 取色报告。形状与 `skinFromImage` 的返回值一致。 */
 const PHOTO_URL = '/api/images/img-20261001-120000-abcdef.png'
@@ -268,14 +268,16 @@ describe('外观 · 自定义背景', () => {
     fireEvent.click(document.querySelector('[data-bg-mode="solid"]')!)
     const line = document.querySelector('[data-accent-contrast]')
     expect(line, '强调色一节应该有对比度读数').toBeTruthy()
-    // 默认强调色（出厂皮肤带的）也照量——两个数都摆出来，AA 够不够由数字自己说
-    expect(line!.textContent).toMatch(/白字压这色 \d+\.\d:1/)
-    expect(line!.textContent).toMatch(/彩字压底色 \d+\.\d:1/)
+    // 默认强调色（出厂皮肤带的）也照量——两个数都摆出来，AA 够不够由数字自己说。
+    // 量的是**真实用法上的档**：按钮实底 600、强调字亮 600 / 暗 400（与
+    // `theme.contrast.test.ts` 同两对），不是显示用的那个色号。
+    expect(line!.textContent).toMatch(/白字压按钮 \d+\.\d:1/)
+    expect(line!.textContent).toMatch(/强调字压底色 \d+\.\d:1/)
 
-    // 换一个肯定够不上 AA 的灰：读数要跟着变，并把「低于 AA」说出口
-    fireEvent.change(document.querySelector('[data-appearance-accent]')!, {
-      target: { value: '#aaaaaa' },
-    })
+    // 「低于 AA」这条报警路径在推导色阶上踩不到（`accentPalette` 会把淡色的 600
+    // 压到 4.5 为止），能踩到的是**手抄色阶**的那一档已知例外：默认皮肤暗色的
+    // 600 是改动前的老值（4.34:1，整条渐变兜着）。读数对它也照实说。
+    fireEvent.click(document.querySelector('[data-appearance-mode="dark"]')!)
     expect(document.querySelector('[data-accent-contrast]')!.textContent).toContain('低于 AA')
   })
 })
@@ -332,14 +334,19 @@ describe('外观 · 清理未引用', () => {
 })
 
 describe('外观 · 用一张图现做一套皮肤', () => {
-  /** 走一遍「选文件 → 上传 → 取色 → 装上皮」。 */
+  /** 走一遍「选文件 → 上传 → 取色 → 创建器」。
+   *  取色完成**不落地**——创建器那一幕开着，用不用由用户决定。 */
   async function pickPhoto(name = '海边.jpg') {
     const input = document.querySelector('input[data-skin-photo-file]') as HTMLInputElement
     const file = new File(['x'], name, { type: 'image/jpeg' })
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => {
-      expect(document.querySelector('[data-skin-photo-report]')).toBeTruthy()
+      expect(document.querySelector('[data-skin-creator]')).toBeTruthy()
     })
+  }
+  /** 创建器里的「使用这款皮肤」。 */
+  function applyCreator(): void {
+    fireEvent.click(document.querySelector('[data-skin-creator-apply]')!)
   }
 
   it('背景图上传完给「顺手做成皮肤」的引导——壁纸 ≠ 皮肤，把最有价值的那条路点亮', async () => {
@@ -353,14 +360,18 @@ describe('外观 · 用一张图现做一套皮肤', () => {
       expect(document.querySelector('[data-bg-make-skin]'), '选完图的当下就要给引导').toBeTruthy()
     })
     fireEvent.click(screen.getByText('用这张图做一款皮肤'))
+    // 走的就是 makeSkin 那条路：先进创建器，落地要再点一下
     await waitFor(() => {
-      // 走的就是 makeSkin 那条路：装上皮、背景切回「跟随皮肤」
+      expect(document.querySelector('[data-skin-creator]')).toBeTruthy()
+    })
+    applyCreator()
+    await waitFor(() => {
       expect(userSkinManifests().map((m) => m.id)).toContain('photo-abc')
       expect(loadTheme().bg.mode).toBe('skin')
     })
   })
 
-  it('传一张图 → 现做一套皮肤、**当场切过去**，并成为皮肤表里的一张卡', async () => {
+  it('传一张图 → 创建器先给整套预览，点「使用」才落地并当场切过去', async () => {
     mockPhoto()
     renderPanel()
     await pickPhoto()
@@ -368,9 +379,11 @@ describe('外观 · 用一张图现做一套皮肤', () => {
     expect(api.uploadImage).toHaveBeenCalled()
     // 取色用的是**刚上传回来的那个地址**与**原始文件名**（名字与出处都从它来）
     expect(skinFromImage).toHaveBeenCalledWith(PHOTO_URL, '海边.jpg')
-    expect(userSkinManifests().map((m) => m.id)).toEqual(['photo-abc'])
-    // 落盘是 effect 里做的，而**报告的 DOM 与设置是同一次 commit**——effect 还在
-    // 它后面跑。所以读存储要等一下：这不是「迟早会对」，是「提交之后 effect 才跑」。
+    // 取色完成时**还没装**——装不装、用不用是创建器那一幕的事
+    expect(userSkinManifests().map((m) => m.id)).toEqual([])
+    expect(loadTheme().skin).toBe('default')
+
+    applyCreator()
     await waitFor(() => {
       expect(loadTheme().skin).toBe('photo-abc')
     })
@@ -380,19 +393,49 @@ describe('外观 · 用一张图现做一套皮肤', () => {
     expect(document.querySelector('[data-skin-remove="photo-abc"]')).toBeTruthy()
   })
 
-  it('**背景切回「跟随皮肤」**——不切的话自己原来设的那张会盖住新皮肤', async () => {
+  it('背景切回「跟随皮肤」——不切的话自己原来设的那张会盖住新皮肤', async () => {
     mockPhoto()
     renderPanel()
     fireEvent.click(document.querySelector('[data-bg-mode="solid"]')!)
     expect(loadTheme().bg.mode).toBe('solid')
 
     await pickPhoto()
+    applyCreator()
 
     await waitFor(() => {
       expect(loadTheme().bg.mode).toBe('skin')
     })
     // 而且要说一句，免得用户以为自己的背景被悄悄吃掉了
     expect(document.querySelector('[data-skin-photo-report]')?.textContent).toContain('跟随皮肤')
+  })
+
+  it('「存到我的皮肤」只入库不切换', async () => {
+    mockPhoto()
+    renderPanel()
+    await pickPhoto()
+    fireEvent.change(document.querySelector('[data-skin-creator-name]')!, {
+      target: { value: '海边的那天' },
+    })
+    fireEvent.click(document.querySelector('[data-skin-creator-keep]')!)
+
+    await waitFor(() => {
+      expect(userSkinManifests().map((m) => m.label)).toEqual(['海边的那天'])
+    })
+    // 入库了但**没有**切过去——「收藏」与「穿上」是两个动作
+    expect(loadTheme().skin).toBe('default')
+    expect(document.querySelector('[data-skin="photo-abc"]')).toBeTruthy()
+    expect(document.querySelector('[data-appearance-notice]')?.textContent).toContain('我的皮肤')
+  })
+
+  it('「重新选一张」什么都不动', async () => {
+    mockPhoto()
+    renderPanel()
+    await pickPhoto()
+    fireEvent.click(document.querySelector('[data-skin-creator-dismiss]')!)
+
+    expect(document.querySelector('[data-skin-creator]')).toBeNull()
+    expect(userSkinManifests()).toEqual([])
+    expect(loadTheme()).toEqual(DEFAULT_THEME)
   })
 
   it('**取到了什么要摆出来**：色块、色号、算出来的两个压暗', async () => {
@@ -416,13 +459,16 @@ describe('外观 · 用一张图现做一套皮肤', () => {
     expect(document.querySelector('[data-skin-photo-report]')?.textContent).toContain('基本没有颜色')
   })
 
-  it('**这张图在亮色下托不住 → 直接落到暗色**，并说清是顺手切的', async () => {
-    // 用户点「用这张图做一款」要的是一个**能用的结果**，不是「一套读不清的皮肤 +
+  it('**这张图在亮色下托不住 → 点「使用」时直接落到暗色**，并说清是顺手切的', async () => {
+    // 用户点「使用这款皮肤」要的是一个**能用的结果**，不是「一套读不清的皮肤 +
     // 一句警告」。而警告里那个按钮做的本来就是这同一个动作。
     mockPhoto({ okLight: false, ratioLight: 3.6, okDark: true })
     renderPanel()
     await pickPhoto()
+    // 创建器那一幕就先把话说了：当前模式托不住，另一边托得住
+    expect(document.querySelector('[data-skin-photo-warn]')?.textContent).toContain('托不住')
 
+    applyCreator()
     await waitFor(() => {
       expect(loadTheme().mode).toBe('dark')
     })
@@ -464,6 +510,24 @@ describe('外观 · 用一张图现做一套皮肤', () => {
     const text = document.querySelector('[data-skin-photo-report]')?.textContent ?? ''
     expect(text).toContain('面板通透度给到 78%')
     expect(text).toContain('模糊 6px')
+  })
+
+  it('创建器里可以**换强调色**：从图里切出来的前几色里挑一个，预览与落地都跟着走', async () => {
+    mockPhoto() // accent '#c2703a'，色块 ['#c2703a', '#2b3a4a', '#d8cbb8']
+    renderPanel()
+    await pickPhoto()
+
+    // 候选全是这张图自己的颜色——怎么选都不跳出这张图的气质
+    fireEvent.click(document.querySelector('[data-skin-creator-accent="#2b3a4a"]')!)
+    expect(document.querySelector('[data-skin-photo-report] code')?.textContent).toBe('#2b3a4a')
+    expect(document.querySelector('[data-skin-creator-accent="#2b3a4a"]')?.getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(document.querySelector('[data-skin-creator-apply]')!)
+    await waitFor(() => {
+      expect(loadTheme().skin).toBe('photo-abc')
+    })
+    // 落地的皮肤用的是**换过的**强调色（色阶由它重推）
+    expect(root().style.getPropertyValue('--wb-violet-600')).toBe(accentPalette('#2b3a4a')['600'])
   })
 
   it('取色失败时说得出为什么，且**什么都没改**', async () => {
@@ -680,6 +744,52 @@ describe('外观 · 导入导出', () => {
       SKINS.default.light.accentScale['600']
     )
   })
+
+  it('导出**单个**皮肤：分享文件里只有皮肤、没有设置；内置皮肤没有这个按钮', async () => {
+    const got = parseSkin({ id: 'sakura', label: '樱', accent: '#d9558a' })
+    if (!got.ok) throw new Error('fixture')
+    installUserSkins([got.value])
+
+    const blobs: Blob[] = []
+    const origCreate = URL.createObjectURL
+    const origRevoke = URL.revokeObjectURL
+    const origClick = HTMLAnchorElement.prototype.click
+    URL.createObjectURL = (b: Blob) => {
+      blobs.push(b)
+      return 'blob:fake'
+    }
+    URL.revokeObjectURL = () => {}
+    HTMLAnchorElement.prototype.click = function () {}
+    try {
+      renderPanel()
+      fireEvent.click(document.querySelector('[data-skin-export="sakura"]')!)
+    } finally {
+      URL.createObjectURL = origCreate
+      URL.revokeObjectURL = origRevoke
+      HTMLAnchorElement.prototype.click = origClick
+    }
+
+    expect(blobs).toHaveLength(1)
+    const parsed = JSON.parse(await blobs[0].text())
+    expect(parsed.schema).toBe(1)
+    expect(parsed.skins.map((m: { id: string }) => m.id)).toEqual(['sakura'])
+    // **没有 config**——收的人要的是这张卡，不是导出者的亮暗、强调色与壁纸
+    expect(parsed.config).toBeUndefined()
+    expect(document.querySelector('[data-skin-export="default"]'), '内置皮肤不给导出').toBeNull()
+  })
+
+  it('皮肤分享文件（只有皮肤）导入时**只装皮肤、外观一字不动**', async () => {
+    renderPanel()
+    const share = serializeExport(
+      buildSkinShare([{ format: 1, id: 'sakura', label: '樱', accent: '#d9558a' }])
+    )
+    await importFile(share)
+
+    expect(userSkinManifests().map((m) => m.id)).toEqual(['sakura'])
+    expect(loadTheme()).toEqual(DEFAULT_THEME)
+    // 话也要说对：不是「已套用」，是「装上了、外观没动」
+    expect(document.querySelector('[data-appearance-notice]')?.textContent).toContain('外观没动')
+  })
 })
 
 // 分区域：八个值各有一根滑块，而「没拨过的跟着主旋钮走」是一条规则。
@@ -811,6 +921,43 @@ describe('外观 · 分区域', () => {
     expect(loadTheme().surfaces).toEqual({})
     expect(root().dataset.wbSkin).toBe(mine!.id)
   })
+
+  it('存成新皮肤**图表色跟着原皮肤走**——以前这里不写 chart，深海存的副本图表会退回出厂蓝绿', () => {
+    renderPanel()
+    fireEvent.click(screen.getByTitle(SKINS.ocean.hint))
+    drag('glass', 70)
+    fireEvent.click(document.querySelector('[data-skin-save]')!)
+    fireEvent.click(document.querySelector('[data-skin-save-confirm]')!)
+
+    const mine = userSkinManifests().find((m) => m.id.startsWith('mine-'))
+    expect(mine?.light?.chart).toEqual(SKINS.ocean.light.chart)
+    expect(mine?.dark?.chart).toEqual(SKINS.ocean.dark.chart)
+  })
+
+  it('「保存修改」把调整**覆盖回同一套用户皮肤**——id 不变、名字不变、仍然套着', () => {
+    const got = parseSkin({ id: 'sakura', label: '樱', accent: '#d9558a' })
+    if (!got.ok) throw new Error('fixture')
+    installUserSkins([got.value])
+    renderPanel()
+    // 点**卡片**套用（不能用 title 找——强调色快捷圆点的 title 也是皮肤名）
+    fireEvent.click(document.querySelector('[data-skin="sakura"]')!)
+    drag('sidebarGlass', 30)
+    // 当前是用户皮肤 → 出口是「保存修改」，不是「存成新皮肤」
+    fireEvent.click(document.querySelector('[data-skin-save]')!)
+    expect(document.querySelector('[data-skin-save]')?.textContent).toContain('保存修改')
+    fireEvent.click(document.querySelector('[data-skin-save-confirm]')!)
+
+    const mine = userSkinManifests()
+    const saved = mine[0]!
+    // **同一个 id**：编辑不是另存，货架上不会多出一张卡
+    expect(mine.map((m) => m.id)).toEqual(['sakura'])
+    expect(saved.label).toBe('樱')
+    expect(saved.light!.surfaces).toMatchObject({ sidebarGlass: 30 })
+    // 仍然套着它，覆盖层让位（已经写进皮肤数据里了）
+    expect(loadTheme().skin).toBe('sakura')
+    expect(loadTheme().surfaces).toEqual({})
+    expect(root().dataset.wbSkin).toBe('sakura')
+  })
 })
 
 describe('外观 · 壁纸轮换池', () => {
@@ -906,5 +1053,68 @@ describe('外观 · 折叠区', () => {
     })
     fireEvent.click(document.querySelector('[data-bg-rotate-add]')!)
     expect(meta()).toContain('轮换 1 张')
+  })
+})
+
+// Skin Center 的信息架构：开门是「当前皮肤」，主角是「皮肤库」，调参收进折叠区。
+// 这里钉的是**结构与层级**——用户打开这一页时，第一眼该是货架，不是参数。
+describe('外观 · 皮肤中心的信息架构', () => {
+  it('开门第一块是「当前皮肤」：大预览、正在使用徽章、编辑与恢复默认都在', () => {
+    renderPanel()
+    const first = document.querySelector('[data-appearance]')?.firstElementChild
+    expect(first?.hasAttribute('data-skin-hero'), '当前皮肤应当是第一块').toBe(true)
+    expect(document.querySelector('[data-skin-active-badge]')?.textContent).toContain('正在使用')
+    expect(document.querySelector('[data-skin-edit]')).toBeTruthy()
+    expect(document.querySelector('[data-appearance-reset]')).toBeTruthy()
+    // 明暗搬进了 hero（它正交于皮肤，描述的是「这块屏幕现在亮着还是暗着」）
+    expect(document.querySelector('[data-appearance-mode="dark"]')).toBeTruthy()
+  })
+
+  it('「编辑皮肤」把高级调整拨开——出口在 hero，参数在折叠区，一条路连着', () => {
+    renderPanel()
+    const tuning = document.querySelector('details[data-appearance-fold="tuning"]')!
+    expect(tuning.hasAttribute('open')).toBe(false)
+    fireEvent.click(document.querySelector('[data-skin-edit]')!)
+    expect(tuning.hasAttribute('open')).toBe(true)
+    // 里面是强调色与八个旋钮
+    expect(document.querySelector('[data-appearance-accent]')).toBeTruthy()
+    expect(document.querySelector('[data-surf-slider="glass"]')).toBeTruthy()
+  })
+
+  it('皮肤库按策展分组陈列，「我的皮肤」是独立的一栏', () => {
+    const got = parseSkin({ id: 'sakura', label: '樱', accent: '#d9558a' })
+    if (!got.ok) throw new Error('fixture')
+    installUserSkins([got.value])
+    renderPanel()
+    const ids = (key: string) =>
+      [...document.querySelectorAll(`[data-gallery-section="${key}"] [data-skin]`)].map((el) =>
+        el.getAttribute('data-skin'),
+      )
+    expect(ids('featured')).toEqual(['default', 'night', 'firefly'])
+    expect(ids('ambient')).toEqual(['aurora', 'ridge'])
+    expect(ids('minimal')).toEqual(['ink', 'paper', 'grid'])
+    expect(ids('mood')).toEqual(['forest', 'ocean', 'warm'])
+    expect(ids('mine')).toEqual(['sakura'])
+  })
+
+  it('筛选条切到某一栏就只看那一栏；没有我的皮肤时不给那一个入口', () => {
+    renderPanel()
+    fireEvent.click(document.querySelector('[data-gallery-filter="ambient"]')!)
+    expect(document.querySelectorAll('[data-gallery-section]').length).toBe(1)
+    expect(document.querySelector('[data-gallery-section="ambient"] [data-skin="ridge"]')).toBeTruthy()
+    expect(document.querySelector('[data-skin="default"]')).toBeNull()
+    expect(document.querySelector('[data-gallery-filter="mine"]'), '空栏不该有入口').toBeNull()
+  })
+
+  it('切到「我的皮肤」：徽标带着数量，栏里只有自己的那些', () => {
+    const got = parseSkin({ id: 'sakura', label: '樱', accent: '#d9558a' })
+    if (!got.ok) throw new Error('fixture')
+    installUserSkins([got.value])
+    renderPanel()
+    const chip = document.querySelector('[data-gallery-filter="mine"]')
+    expect(chip?.textContent).toContain('1')
+    fireEvent.click(chip!)
+    expect(document.querySelectorAll('[data-gallery-section]').length).toBe(1)
+    expect(document.querySelector('[data-gallery-section="mine"] [data-skin="sakura"]')).toBeTruthy()
   })
 })

@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { BookmarkPlus, RotateCcw } from 'lucide-react'
+import { BookmarkPlus, Save } from 'lucide-react'
 
-import SkinPreview from './SkinPreview'
 import { useTheme } from './ThemeProvider'
+import { isBuiltinSkin, type SkinManifest, type VariantManifest } from './theme'
 import { newPhotoId } from './theme/extract'
-import { SKIN_FORMAT, type SkinManifest, type VariantManifest } from './theme/manifest'
+import { SKIN_FORMAT } from './theme/manifest'
 import {
   PANEL_FLOOR,
   applyOverrides,
@@ -17,14 +17,10 @@ import {
 } from './theme/surfaces'
 import { inputCls } from './settingsShared'
 
-/** **皮肤中心的最上面那一块**：当前皮肤的大预览 + 分区域旋钮 + 两个出口。
+/** 「高级调整」里的**分区域面板**：八个旋钮 + 「存成新皮肤」的出口。
  *
- *  ## 为什么要有「大预览」
- *
- *  皮肤库里那一排小卡片回答的是「这套皮肤大概什么样」，而这一块回答的是
- *  「**我现在这个工作台具体长什么样**」——两者不是同一件事。
- *  小卡片是挑的时候看的，大预览是调的时候看的：拖一根滑块，这一块跟着动，
- *  而小卡片不动（它们画的是皮肤自己的值，不跟着用户覆盖走）。
+ *  （当前皮肤的大预览与「恢复默认」在页首的 `SkinHero`——大预览是挑与看的东西，
+ *  离画廊近；这里是调的东西，收在折叠区里。两者各答各的问题，别再挤在一起。）
  *
  *  ## 分区域：八个旋钮，不是两个
  *
@@ -46,36 +42,31 @@ import { inputCls } from './settingsShared'
  *  是在骗人（「我明明拨到底了，怎么还这么实」）。显示的数与看到的像素
  *  是同一个数——`surfValue()` 就是那个数。
  *
- *  ## 恢复默认 = 回到出厂那套
+ *  ## 存成新皮肤 / 保存修改 = 把生效值固化
  *
- *  它只动**外观设置**，不动导入的皮肤（那句话说的一直是外观，不是
- *  「清空我装过的东西」）。这与 `ThemeProvider.reset` 是同一条，写在这里
- *  只是因为它现在离用户更近了——「一键恢复原始界面」该挨着当前皮肤。 */
+ *  「自定义皮肤可以保存」的出口。存的是**生效值**而不是「皮肤 + 覆盖」：
+ *  用户拨出来的这一套东西就是他想要的那套，而一份「皮肤 + 三个覆盖项」
+ *  换台机器打开时，任何一个覆盖项丢了都会变成另一套外观。
+ *
+ *  出口有两个，按**当前皮肤是谁的**分叉：
+ *  · 内置皮肤 → **存成新皮肤**（生成一个新 id，进「我的皮肤」）；
+ *  · 用户皮肤 → **保存修改**（同一个 id 覆盖回去——这就是「编辑我的皮肤」：
+ *    套用 → 拨旋钮 → 保存。不改 id，改名走卡片上那支笔）。 */
 export default function SkinCenter() {
-  const {
-    config,
-    resolved,
-    setSurface,
-    clearSurfaces,
-    reset,
-    addSkin,
-    setSkin,
-  } = useTheme()
+  const { config, resolved, setSurface, clearSurfaces, addSkin, setSkin } = useTheme()
   const [notice, setNotice] = useState('')
   const [name, setName] = useState('')
   const [naming, setNaming] = useState(false)
 
   const surf: SkinSurfaces = resolved.surfaces
   const custom = hasOverrides(config.surfaces)
+  /** 当前套着的是不是自己装的皮肤 → 这一块是「编辑」还是「另存」。 */
+  const editing = !isBuiltinSkin(config.skin)
 
-  /** 把**现在生效的这一套**存成一份新皮肤。
-   *
-   *  「自定义皮肤可以保存」这句话的实现。存的是**生效值**而不是「皮肤 + 覆盖」：
-   *  用户拨出来的这一套东西就是他想要的那套，而一份「皮肤 + 三个覆盖项」
-   *  换台机器打开时，任何一个覆盖项丢了都会变成另一套外观。
-   *  存成一条自洽的皮肤数据，它自己就是完整的。 */
+  /** 把**现在生效的这一套**存下来。`editing` 时覆盖回原来的 id（保存修改），
+   *  否则生成一个新 id（存成新皮肤）。两条路存的都是**生效值**：
+   *  皮肤给一套、用户拨过的覆盖叠上去之后的结果。 */
   function save(name: string): void {
-    const label = name.trim() || '我的皮肤'
     const variant = (side: 'light' | 'dark'): VariantManifest => {
       const sv = side === 'light' ? resolved.skin.light : resolved.skin.dark
       const out: VariantManifest = {
@@ -86,6 +77,10 @@ export default function SkinCenter() {
         // 直接用 `sv.surfaces` 的话，拨到 40 再存，存下来的还是皮肤原本的 82
         // ——而界面上明明写着「存的是现在生效的这一套」。
         surfaces: applyOverrides(sv.surfaces, config.surfaces),
+        // 图表色**跟着原皮肤走**：这是修正「另存会丢图表配色」的一笔——
+        // 以前这里不写 chart，导出与运行时都退回默认调色板，深海存的副本
+        // 图表变成了出厂蓝绿。与 `skinToManifest` 同一条规矩（chart 恒写）。
+        chart: sv.chart,
       }
       // 底图只在这一刻**生效的是图**的时候才写进去——用户把背景换成纯色之后
       // 再存一份皮肤，那套皮肤不该还带着一张看不见的图。
@@ -108,51 +103,62 @@ export default function SkinCenter() {
       }
       return out
     }
-    const manifest: SkinManifest = {
-      format: SKIN_FORMAT,
-      id: newPhotoId().replace(/^photo-/, 'mine-'),
-      label: label.slice(0, 16),
-      hint: '从当前外观存下来的',
-      accent: resolved.accent,
-      light: variant('light'),
-      dark: variant('dark'),
-    }
+    const manifest: SkinManifest = editing
+      ? {
+          format: SKIN_FORMAT,
+          id: config.skin,
+          label: (name.trim() || resolved.skin.label).slice(0, 16),
+          hint: resolved.skin.hint || undefined,
+          author: resolved.skin.author,
+          particles: resolved.skin.particles === 'sakura' ? undefined : resolved.skin.particles,
+          accent: resolved.accent,
+          light: variant('light'),
+          dark: variant('dark'),
+        }
+      : {
+          format: SKIN_FORMAT,
+          id: newPhotoId().replace(/^photo-/, 'mine-'),
+          label: (name.trim() || '我的皮肤').slice(0, 16),
+          hint: '从当前外观存下来的',
+          accent: resolved.accent,
+          light: variant('light'),
+          dark: variant('dark'),
+        }
     const report = addSkin(manifest)
-    if (!report.added.length) {
+    if (!report.added.length && !report.replaced.length) {
       setNotice(`没存上：${report.refused.map((r) => r.reason).join('；') || '未知原因'}`)
       return
     }
-    setSkin(manifest.id)
+    if (!editing) setSkin(manifest.id)
     // 存成皮肤之后，那一层覆盖就该让位了——它已经被写进新皮肤的数据里，
     // 留着的话「跟随皮肤」与「覆盖」会同时生效，而它们说的是同一件事。
     clearSurfaces()
     setNaming(false)
     setName('')
-    setNotice(`已存成「${manifest.label}」，并切了过去`)
+    setNotice(
+      editing
+        ? `已把修改保存进「${manifest.label}」`
+        : `已存成「${manifest.label}」，进了「我的皮肤」并切了过去`
+    )
   }
 
   return (
     <div className="wb-card p-5" data-skin-center="">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">当前皮肤</h2>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setNaming((v) => !v)}
-            data-skin-save=""
-            className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2 py-1 text-xs transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
-          >
-            <BookmarkPlus className="h-3.5 w-3.5" />
-            存成新皮肤
-          </button>
-          <button
-            onClick={reset}
-            data-appearance-reset=""
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            恢复原始界面
-          </button>
+        <div>
+          <h2 className="font-semibold">分区域微调</h2>
+          <p className="mt-0.5 text-xs text-neutral-400">
+            没拨过的跟着「{resolved.skin.label}」走——只拖第一根就是整套界面一起通透。
+          </p>
         </div>
+        <button
+          onClick={() => setNaming((v) => !v)}
+          data-skin-save=""
+          className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2 py-1 text-xs transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
+        >
+          {editing ? <Save className="h-3.5 w-3.5" /> : <BookmarkPlus className="h-3.5 w-3.5" />}
+          {editing ? '保存修改' : '存成新皮肤'}
+        </button>
       </div>
 
       {naming ? (
@@ -178,26 +184,14 @@ export default function SkinCenter() {
             存下来
           </button>
           <span className="text-xs text-neutral-400">
-            存的是现在生效的这一套（含你拨过的通透度与背景）
+            {editing
+              ? `覆盖「${resolved.skin.label}」——存的是现在生效的这一套（含你拨过的通透度与背景）`
+              : '存的是现在生效的这一套（含你拨过的通透度与背景）'}
           </span>
         </div>
       ) : null}
 
-      {/* 大预览：把整套外观摆成一个工作台的样子。**它跟着覆盖走**——
-          拖下面那两根滑块，这一块立刻变，而那正是「实时预览」该有的意思。 */}
-      <SkinPreview
-        skin={resolved.skin}
-        dark={resolved.dark}
-        className="h-44 w-full sm:h-52"
-        rounded="rounded-lg"
-      />
-
-      <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-sm font-medium">{resolved.skin.label}</span>
-        <span className="text-xs text-neutral-400">{resolved.skin.hint}</span>
-      </div>
-
-      <div className="mt-4 border-t border-neutral-200/80 pt-4 dark:border-neutral-800/80">
+      <div>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">分区域</h3>
           {custom ? (

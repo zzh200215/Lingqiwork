@@ -51,6 +51,28 @@ export interface AppearanceExport {
   skins: SkinManifest[]
 }
 
+/** **皮肤分享文件**：只有皮肤、没有设置的那一种。导出一个皮肤给别人的时候，
+ *  收的人要的是「装上这张卡」，不是「连你的亮暗、强调色、壁纸一起搬过来」——
+ *  所以这份文件**不带 config**，导入时保留对方当前的外观。
+ *  结构上是 `AppearanceExport` 去掉 config，`planImport` 认得它。 */
+export interface SkinShare {
+  schema: number
+  source: string
+  exportedAt: string
+  skins: SkinManifest[]
+}
+
+/** 组装一份**单皮肤分享**。与 `buildExport` 分开：两者「带不带外观」是两种意图，
+ *  在文件里就应该是两种形状，而不是靠接收方去猜。 */
+export function buildSkinShare(skins: SkinManifest[], now?: string): SkinShare {
+  return {
+    schema: EXPORT_SCHEMA,
+    source: EXPORT_SOURCE,
+    exportedAt: now ?? new Date().toISOString(),
+    skins,
+  }
+}
+
 /** 组装一份导出。**键的顺序是固定的**（schema → source → exportedAt → config → skins）：
  *  固定顺序的 JSON 才可能进版本管理、才可能被人用 diff 看出一处改动。 */
 export function buildExport(config: ThemeConfig, skins: SkinManifest[], now?: string): AppearanceExport {
@@ -63,7 +85,7 @@ export function buildExport(config: ThemeConfig, skins: SkinManifest[], now?: st
   }
 }
 
-export function serializeExport(e: AppearanceExport): string {
+export function serializeExport(e: AppearanceExport | SkinShare): string {
   // 末尾一个换行：这是文本文件，不是数据流。
   return `${JSON.stringify(e, null, 2)}\n`
 }
@@ -83,17 +105,26 @@ export interface ImportPlan {
    *  不对」，而他不会知道原因在文件里少了一份皮肤。读的是**文件里写的那个名字**，
    *  不是收拾过之后的（见 `planImport` 里那段说明）。 */
   missingSkin: string | null
+  /** 这份文件**带不带外观设置**。皮肤分享文件（`buildSkinShare` 的产物）不带——
+   *  导入它只装皮肤，外观保持对方自己那套；界面的说明文字按它分叉。 */
+  appliesConfig: boolean
 }
 
 /** 读一份文件，算出「装上去会是什么样」。**纯函数**：不改任何东西。
  *
  *  `currentSkins` 是本机现在装着的那些（`userSkinManifests()`），
  *  `installedIds` 是「装完之后本机会有哪些皮肤 id」（内置 + 现有 + 文件里的）——
- *  由调用方给，因为「装没装」这件事的真相在注册表里，不在这里。 */
+ *  由调用方给，因为「装没装」这件事的真相在注册表里，不在这里。
+ *
+ *  `currentConfig` 只在**皮肤分享文件**（不带 config 的那种）进口时用：那种文件
+ *  不该动对方的外观，计划里的 config 就是他现在这份。带 config 的文件照旧
+ *  全盘应用——两种文件、两种意图，判据是**结构**（有没有 config 字段），
+ *  不是文件名或来源标记。 */
 export function planImport(
   text: string,
   currentSkins: SkinManifest[],
-  installedIds: Set<string>
+  installedIds: Set<string>,
+  currentConfig?: ThemeConfig
 ): Parsed<ImportPlan> {
   if (!text.trim()) return { ok: false, reason: '文件是空的' }
   // 先卡体积再 parse：一份 200MB 的文本不该先被 JSON.parse 走一遍。
@@ -119,7 +150,12 @@ export function planImport(
   // 设置：走 `parseTheme` 那条**和读取本机存储完全一样**的路。
   // 一份从别处来的设置与本机存的那份是同一种东西，就不该有两套读法——
   // 两套读法的下场是「本机存的能读、导入的读不了」，或者反过来的静默差异。
-  const base = parseTheme(o.config)
+  //
+  // **皮肤分享文件没有 config**：计划里的设置就是调用方现在这份（导入它 = 只装
+  // 皮肤，外观不动）。没传 currentConfig 的话退回默认——那是「裸调这个函数」的
+  // 老行为，不至于崩，但 UI 永远该传。
+  const sharesOnly = o.config === undefined && Array.isArray(o.skins)
+  const base = parseTheme(sharesOnly ? (currentConfig ?? {}) : o.config)
 
   // ---- 先读文件里的皮肤，再定设置里的皮肤 ----
   //
@@ -198,6 +234,7 @@ export function planImport(
       // 判据是 `afterInstall`（本机现在有的 + 这份文件带来的），不是「本机现在有的」：
       // 文件里自带的那套皮肤装完之后就在了，不该报成缺失。
       missingSkin: afterInstall.has(askedSkin) ? null : askedSkin,
+      appliesConfig: !sharesOnly,
     },
   }
 }
