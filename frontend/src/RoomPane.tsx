@@ -27,7 +27,7 @@ import {
 import { conceptState } from './conceptState'
 import Skeleton from './Skeleton'
 import EmptyHint from './EmptyHint'
-import { petSprite } from './petFace'
+import PetSprite from './PetSprite'
 import { ago, isFresh } from './reltime'
 
 /** 服务端那句人话（`{"detail": "..."}`）——`request()` 抛的是「状态码: 原文」，
@@ -352,15 +352,11 @@ export default function RoomPane() {
         {/* hero 在 md 档占满一行（§C：hero 卡占满行或 8/12 跨度），xl 起才是 5/7 分栏 */}
         <section className="wb-card-hero rounded-lg p-5 md:col-span-2 xl:col-span-5">
           <div className="flex h-full flex-col items-center justify-center">
-            <img
-              data-room-pet
+            <PetSprite
+              action={state?.action}
+              data-room-pet=""
               data-room-action={state?.action || 'idle'}
-              src={petSprite(state?.action)}
-              alt="零柒"
               className="h-24 w-24 object-contain drop-shadow-md"
-              onError={(e) => {
-                e.currentTarget.src = '/pet-avatar.png'
-              }}
             />
             {/* 它此刻的一句话。**空着就不画**——安静是默认（与悬浮那个同一份台词，
                 来自 `pet_state._line()`，不是这里另编一句）。 */}

@@ -17,7 +17,7 @@ import PageShell from './PageShell'
 import RoomPane from './RoomPane'
 import { STARTER_CARDS, StarterGrid, StarterTile } from './StarterCards'
 import { Mic } from 'lucide-react'
-import { petSprite } from './petFace'
+import PetSprite from './PetSprite'
 import { useVoiceInput } from './voice'
 import { historyOf, receiptLabel, streamPetChat, toolCallLabel, type PetToolReceipt } from './petChat'
 import { COMPANION_TABS, type CompanionTab } from './routes'
@@ -367,14 +367,7 @@ function ChatPane() {
           第一句话本身）。这不是把一行字挪到中间，是成熟聊天产品的空态范式。 */}
       {chat.length === 0 && !error ? (
         <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-8">
-          <img
-            src={petSprite(pet?.action)}
-            alt="零柒"
-            className="h-20 w-20 object-contain drop-shadow-md"
-            onError={(e) => {
-              e.currentTarget.src = '/pet-avatar.png'
-            }}
-          />
+          <PetSprite action={pet?.action} className="h-20 w-20 object-contain drop-shadow-md" />
           <h2 className="mt-3 text-lg font-semibold text-neutral-800 dark:text-neutral-100">
             {pet?.busy_with ? `它在${pet.busy_with}，聊两句也不耽误。` : '我在。想聊什么都行。'}
           </h2>

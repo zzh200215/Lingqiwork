@@ -60,6 +60,8 @@ export interface Skin {
   author?: string
   /** 自带的氛围粒子款式（樱花 / 萤火虫 / 不画）。缺省樱花 = 字段化之前的行为 */
   particles: ParticleKind
+  /** **挂件风格**。不写 = 内置的那只零柒。见 `manifest.ts` 的 `SkinPetManifest`。 */
+  pet?: { sprite: string }
   light: SkinVariant
   dark: SkinVariant
 }

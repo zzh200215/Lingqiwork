@@ -6,6 +6,9 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { MemoryRouter } from 'react-router-dom'
 
 import PetWidget from './PetWidget'
+import { ThemeProvider } from './ThemeProvider'
+import { DEFAULT_THEME, installUserSkins, loadUserSkins } from './theme'
+import { parseSkin } from './theme/manifest'
 import { receiptLabel, toolCallLabel } from './petChat'
 import type { DecisionWitness, PetRoom, PetState, PetThing, ScheduledTask } from './api'
 
@@ -39,6 +42,9 @@ vi.mock('./api', () => ({
     petChats: vi.fn().mockResolvedValue({ chats: [] }),
     tts: vi.fn(),
     transcribeAudio: vi.fn(),
+    // 皮肤中心的镜像与回读（给零柒换形象那条用例会包一层 ThemeProvider）
+    getTheme: vi.fn().mockResolvedValue({ theme: null }),
+    putTheme: vi.fn().mockResolvedValue({ theme: null }),
   },
 }))
 import { api } from './api'
@@ -215,6 +221,9 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  // 装过皮肤用例（换形象那一条）之后，把注册表也复位——它是模块级的活状态，
+  // localStorage.clear() 清不掉已经装进内存的那几个
+  loadUserSkins()
 })
 
 describe('PetWidget · 主动提醒', () => {
@@ -1223,5 +1232,46 @@ describe('PetWidget · 弹出置顶（Document PiP）', () => {
     } finally {
       body.remove()
     }
+  })
+})
+
+// 皮肤给零柒换形象：`pet.sprite`（§8.11 挂件风格那条腿）。
+// 钉住的是渲染层的两件事——**皮肤那张图真的被画出来**，以及**图挂了逐级退回**
+// （自定义图 → 内置动作图 → 头像兜底），退回的级数记在 dataset 上。
+describe('PetWidget · 皮肤给零柒换形象', () => {
+  it('pet.sprite → 挂件画皮肤那张；图挂了先退内置动作图，再挂才退头像', () => {
+    const got = parseSkin({
+      format: 1,
+      id: 'cat',
+      label: '猫',
+      accent: '#8a6a4a',
+      pet: { sprite: '/api/images/cat.png' },
+    })
+    if (!got.ok) throw new Error('fixture')
+    installUserSkins([got.value])
+    localStorage.setItem('wb:theme', JSON.stringify({ ...DEFAULT_THEME, skin: 'cat' }))
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <PetWidget />
+        </ThemeProvider>
+      </MemoryRouter>
+    )
+
+    const img = sprite() as HTMLImageElement
+    expect(img.getAttribute('src')).toBe('/api/images/cat.png')
+
+    // 皮肤那张图挂了 → 退回内置动作图（不是直接跳头像——动作还在就先像零柒）
+    fireEvent.error(img)
+    expect(img.getAttribute('src')).toBe('/pet/idle.webp')
+    // 内置那张也挂了（公共资源级别的灾难）→ 头像兜底，零柒不消失
+    fireEvent.error(img)
+    expect(img.getAttribute('src')).toBe('/pet-avatar.png')
+  })
+
+  it('没写 pet 的皮肤不改变任何现状', () => {
+    renderWidget()
+    expect((sprite() as HTMLImageElement).getAttribute('src')).toBe('/pet/idle.webp')
   })
 })

@@ -134,6 +134,19 @@ export interface VariantManifest {
   surfaces?: SkinSurfacesInput
 }
 
+/** 挂件的皮肤数据（v1 只有一项：**换一只「零柒」**）。
+ *
+ *  这是「一套皮肤同时定义背景氛围、零柒挂件风格、工作区视觉」三条腿的最后一条。
+ *  与 `bg.image` 同一条安全线：地址必须过 `isSafeImageUrl`（站内或 http(s)，
+ *  不收 `data:`）——皮肤可能来自别人的一份 JSON，这个值会进 `<img src>`。 */
+export interface SkinPetManifest {
+  /** 自定义形象：一张图，**用在全部动作上**（`petFace` 的动作系统让位给它；
+   *  CSS 的呼吸 / Q 弹动画照旧生效，因为它们画在这个 `<img>` 元素上）。
+   *  加载失败**逐级退回**：这张图 → 内置动作 webp → `/pet-avatar.png`——
+   *  图挂了不该让零柒消失（与背景图「探一次就撤」同一条纪律，只是这里能退的层级更多）。 */
+  sprite?: string
+}
+
 /** 一份皮肤的完整数据。**这就是「一个皮肤」的全部**——没有别处藏着状态。
  *
  *  ## 最少要写多少
@@ -170,6 +183,9 @@ export interface SkinManifest {
    *  `'sakura'`，也就是这个字段出现之前的行为。认不出的值退回缺省、
    *  不整条拒绝——它不是安全问题，只是参数（与 `fit` / `scrimDir` 同一条先例）。 */
   particles?: ParticleKind
+  /** 挂件风格。**可以不写**：不写就是内置的那只零柒、零变化。
+   *  与 `bg` 同一条校验线（写错了整条拒绝）——它是 `<img src>`，不是纯参数。 */
+  pet?: SkinPetManifest
   /** 整套皮肤的那个「品牌色」。**只写它也能成一套皮肤**（见上面那段）。 */
   accent?: string
   light?: VariantManifest
@@ -491,6 +507,29 @@ function clampNum(v: unknown, lo: number, hi: number, fallback: number): number 
   return Math.min(hi, Math.max(lo, Math.round(n)))
 }
 
+/** 挂件层。**与 `bg.image` 同一条闸**：`sprite` 必须过 `isSafeImageUrl`——
+ *  它会进 `<img src>`，而皮肤可能来自别人给的一份 JSON。写了就整个字段都要合法：
+ *  「写错」与「没写」在这里仍然是两件事（没写 = 内置的那只零柒）。
+ *  空串按「写错」处理，不按「没写」——想把自定义形象去掉，删掉这个键就是了，
+ *  留一个空串多半是手改 JSON 时的手滑，静默放过它反而让人以为改上了。 */
+function parsePet(raw: unknown): Parsed<SkinPetManifest | undefined> {
+  if (raw === undefined || raw === null) return { ok: true, value: undefined }
+  if (!isObj(raw)) return bad('pet 要写成对象')
+  const out: SkinPetManifest = {}
+  if (raw.sprite !== undefined) {
+    const sprite = typeof raw.sprite === 'string' ? raw.sprite.trim() : ''
+    if (!sprite) return bad('pet.sprite 要写成图片地址（不想要就删掉这个键）')
+    if (!isSafeImageUrl(sprite)) {
+      return bad('pet.sprite 只能是站内 /skins|/pet|/api/images/… 或 http(s) 地址')
+    }
+    out.sprite = sprite
+  }
+  // 一个字段都没写（`pet: {}`）= 没写。运行时对象上留 undefined 而不是空对象，
+  // 否则 `manifestToSkin` 会推出一个 `{ sprite: undefined }`，导出时又写成
+  // `{ sprite: null }`——「没有自定义形象」就该在每一层都是同一个形状。
+  return { ok: true, value: out.sprite ? out : undefined }
+}
+
 /** 把「任何东西」收成一份合法的皮肤。**这是唯一的入口**——内置皮肤与导入的皮肤
  *  都走它，所以「内置的能用、导入的不能用」这种分叉没有存在的余地。
  *
@@ -520,6 +559,8 @@ export function parseSkin(raw: unknown): Parsed<SkinManifest> {
   // 氛围粒子：认不出的值当「没写」，由 `manifestToSkin` 补缺省——与 fit/scrimDir
   // 同一条先例（参数写错不该让人丢掉整张卡），也不该冒充一个存在的款式。
   const particles = isParticleKind(raw.particles) ? raw.particles : undefined
+  const pet = parsePet(raw.pet)
+  if (!pet.ok) return pet
 
   // 顶层那个「品牌色」。它与两个变体里的 accent 是一个东西的两种写法：
   // 写这里 = 亮暗共用；写变体里 = 那一边单独用。两边都没写也合法（会推一个兜底色）。
@@ -544,6 +585,7 @@ export function parseSkin(raw: unknown): Parsed<SkinManifest> {
       hint: hint?.value,
       author: author?.value,
       particles,
+      pet: pet.value,
       accent,
       light: light.value,
       dark: dark.value,
@@ -601,6 +643,9 @@ export function manifestToSkin(m: SkinManifest): Skin {
     author: m.author,
     // 氛围粒子的缺省是**历史行为**：樱花一直都在，字段化不许悄悄把它关掉
     particles: m.particles ?? 'sakura',
+    // 挂件层：不写就是内置的那只零柒（运行时对象上留 undefined，不是空对象——
+    // 「没有自定义形象」与「有一个空的自定义」是两件事）
+    pet: m.pet?.sprite ? { sprite: m.pet.sprite } : undefined,
     light: toVariant(m.light, lightAccent, 'light'),
     dark: toVariant(m.dark, darkAccent, 'dark'),
   }
@@ -655,6 +700,8 @@ export function skinToManifest(s: Skin): SkinManifest {
     // 樱花是缺省——「缺省的那一份不写出去」与中性阶/色阶是同一条纪律，
     // 一份不想要粒子的皮肤导出来才带得走那句话。
     particles: s.particles === 'sakura' ? undefined : s.particles,
+    // 挂件层同理：内置形象的皮肤导出来不带 pet，JSON 才读得下去
+    pet: s.pet ? { sprite: s.pet.sprite } : undefined,
     accent: s.light.accent,
     light: fromVariant(s.light, 'light'),
     dark: fromVariant(s.dark, 'dark'),

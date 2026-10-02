@@ -28,7 +28,8 @@ import { historyOf, streamPetChat, toolCallLabel, type PetToolReceipt } from './
 // Animation states come from the Codex pet atlas (awesome-codex-pet v1):
 // 9 states, each shipped as an animated webp under /pet/<state>.webp.
 // The browser plays them natively, so switching state is just swapping src.
-import { asPetAction, petSprite, type PetAction } from './petFace'
+import { asPetAction, type PetAction } from './petFace'
+import PetSprite from './PetSprite'
 import { blipOn as isBlipOn, playBlip, setBlipOn as storeBlipOn } from './petSound'
 import { MODE_LABEL, DIM_MODES, type ChatMsg, type PetEvent } from './petShared'
 import { gatherNudges, markNudged, wasNudged, type Nudge } from './petNudges'
@@ -732,20 +733,16 @@ export default function PetWidget() {
           className="pointer-events-auto relative flex h-16 w-16 touch-none items-center justify-center transition-transform hover:scale-105 active:scale-95 md:h-24 md:w-24"
         >
           <div className="pet-idle flex items-center justify-center">
-            <img
-              key={action}
-              src={petSprite(action)}
-              alt="零柒"
-              data-pet-action={action}
+            {/* 零柒的脸共用 PetSprite：皮肤给 `pet.sprite` 就画皮肤那只（换一套
+                皮肤连零柒一起换），图挂了逐级退回内置动作图——见 PetSprite。 */}
+            <PetSprite
+              action={action}
               // 你走开久了 → 只把宠物自己降饱和（陪伴不是管教，页面不动）
               style={dimmed ? { filter: 'saturate(0.25)' } : undefined}
               className={
                 'h-14 w-14 object-contain drop-shadow-md transition-[filter] duration-700 md:h-[88px] md:w-[88px]' +
                 (squash ? ' pet-squash' : '')
               }
-              onError={(e) => {
-                e.currentTarget.src = '/pet-avatar.png'
-              }}
             />
           </div>
           {/* 它身上带着的那件东西（P4）：屋里**最近到手**的一件，或刚交出去的成品。
@@ -773,14 +770,10 @@ export default function PetWidget() {
               </p>
             ) : null}
             <div className="pet-idle">
-              <img
-                src={petSprite(action)}
-                alt="零柒"
+              <PetSprite
+                action={action}
                 className={'h-24 w-24 object-contain drop-shadow-md' + (squash ? ' pet-squash' : '')}
                 style={dimmed ? { filter: 'saturate(0.25)' } : undefined}
-                onError={(e) => {
-                  e.currentTarget.src = '/pet-avatar.png'
-                }}
               />
             </div>
             {state?.line ? (

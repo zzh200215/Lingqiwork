@@ -169,6 +169,10 @@ export function isSafeImageUrl(url: string): boolean {
   if (!u) return false
   if (u.startsWith('/api/images/')) return true
   if (u.startsWith('/skins/')) return true
+  // 站内的零柒资产（动作 webp 与头像兜底）——挂件的 `pet.sprite` 会指到它们。
+  // 与上面两条同性质：同源静态文件，进 `url()` 或 `<img src>` 都无新增风险。
+  if (u.startsWith('/pet/')) return true
+  if (u === '/pet-avatar.png') return true
   return /^https?:\/\//i.test(u)
 }
 
