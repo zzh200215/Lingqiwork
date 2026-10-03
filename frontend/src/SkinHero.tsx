@@ -2,6 +2,7 @@ import { Pencil, RotateCcw } from 'lucide-react'
 
 import SkinPreview from './SkinPreview'
 import { useTheme } from './ThemeProvider'
+import { GroupHead } from './SettingsUI'
 import { SKIN_TAGS } from './skinGallery'
 
 /** **当前皮肤**——皮肤中心的开门第一块。
@@ -31,35 +32,38 @@ export default function SkinHero({ onEdit }: { onEdit: () => void }) {
   const tags = SKIN_TAGS[skin.id] ?? []
 
   return (
-    <div className="wb-card p-5" data-skin-hero="">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">当前皮肤</h2>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={onEdit}
-            data-skin-edit=""
-            className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2.5 py-1.5 text-xs font-medium transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            编辑皮肤
-          </button>
-          <button
-            onClick={reset}
-            data-appearance-reset=""
-            className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            恢复默认外观
-          </button>
-        </div>
-      </div>
-
+    <div className="wb-card" data-skin-hero="">
+      <GroupHead
+        title="当前皮肤"
+        description="这块屏幕现在的样子。预览跟着生效值走——皮肤给了底色，你拨过的通透度也画在里面。"
+        actions={
+          <>
+            <button
+              onClick={onEdit}
+              data-skin-edit=""
+              className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2.5 py-1.5 text-xs font-medium transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              编辑皮肤
+            </button>
+            <button
+              onClick={reset}
+              data-appearance-reset=""
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              恢复默认外观
+            </button>
+          </>
+        }
+      />
+      <div className="p-5">
       {/* 大预览：**它跟着生效值走**——皮肤给了底色，用户拨过的通透度也画在里面。 */}
       <SkinPreview
         key={`${skin.id}-${resolved.dark}`}
         skin={skin}
         dark={resolved.dark}
-        className="mt-3 h-44 w-full animate-fade-in sm:h-56"
+        className="h-44 w-full animate-fade-in sm:h-56"
         rounded="rounded-lg"
       />
 
@@ -115,6 +119,7 @@ export default function SkinHero({ onEdit }: { onEdit: () => void }) {
             '暗色下会换用这套皮肤的另一组值，不是简单地把亮色反相'
           )}
         </span>
+      </div>
       </div>
     </div>
   )

@@ -23,6 +23,7 @@ import {
 } from './theme'
 import { GALLERY_GROUPS, MINE_KEY, SKIN_TAGS } from './skinGallery'
 import { skinFromImage, type ImageSkinReport } from './theme/extract'
+import { GroupHead } from './SettingsUI'
 import { contrastRatio, contrastWithWhite, hexToRgb } from './theme/color'
 import {
   MAX_EXPORT_BYTES,
@@ -341,45 +342,49 @@ export default function AppearanceSettings() {
   ]
 
   return (
-    <section className="mb-6 flex flex-col gap-4" data-appearance="">
+    <section className="flex flex-col gap-4" data-appearance="">
       {/* ---------- 当前皮肤：开门第一块 ---------- */}
       <SkinHero onEdit={openTuning} />
 
       {/* ---------- 皮肤库：这一页的主角 ---------- */}
-      <div className="wb-card p-5" data-skin-gallery="">
-        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">
-            皮肤库 <span className="text-xs font-normal text-neutral-400">{skins.length} 套</span>
-          </h2>
-          {/* 一级入口「创建皮肤」：与「换背景」那条路分开——它做的是一整套皮肤
-              （强调色从图里取、压暗按图算），做完先进创建器，由你决定用不用。 */}
-          <button
-            onClick={() => photoRef.current?.click()}
-            disabled={skinBusy}
-            data-skin-from-image=""
-            className="wb-btn-primary px-3 py-1.5 text-sm"
-          >
-            {skinBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {skinBusy ? '取色中…' : '创建皮肤'}
-          </button>
-          <input
-            ref={photoRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            data-skin-photo-file=""
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              // 清空 value：同一个文件再选一次也要能触发 change
-              e.target.value = ''
-              if (f) void makeSkin(f)
-            }}
-          />
-        </div>
-        <p className="mb-3 text-xs text-neutral-500">
-          点一下就换上——底色、强调色、面板通透一起走。想要自己的那套，传一张图现做。
-        </p>
-
+      <div className="wb-card" data-skin-gallery="">
+        <GroupHead
+          title={
+            <>
+              皮肤库 <span className="ml-1 text-xs font-normal text-neutral-400">{skins.length} 套</span>
+            </>
+          }
+          description="点一下就换上——底色、强调色、面板通透一起走。想要自己的那套，传一张图现做。"
+          actions={
+            <>
+              {/* 一级入口「创建皮肤」：与「换背景」那条路分开——它做的是一整套皮肤
+                  （强调色从图里取、压暗按图算），做完先进创建器，由你决定用不用。 */}
+              <button
+                onClick={() => photoRef.current?.click()}
+                disabled={skinBusy}
+                data-skin-from-image=""
+                className="wb-btn-primary px-3 py-1.5 text-sm"
+              >
+                {skinBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {skinBusy ? '取色中…' : '创建皮肤'}
+              </button>
+              <input
+                ref={photoRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                data-skin-photo-file=""
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  // 清空 value：同一个文件再选一次也要能触发 change
+                  e.target.value = ''
+                  if (f) void makeSkin(f)
+                }}
+              />
+            </>
+          }
+        />
+        <div className="p-5">
         {/* 筛选条：**全部**展开所有栏目；选中某一栏只看那一栏。
             这是「收藏感」的最廉价实现——不用动皮肤数据，货架换一种摆法而已。 */}
         <div className="mb-4 flex flex-wrap items-center gap-1.5">
@@ -504,6 +509,7 @@ export default function AppearanceSettings() {
             )
           })()
         ) : null}
+        </div>
       </div>
 
       {error ? (
@@ -532,12 +538,12 @@ export default function AppearanceSettings() {
           ) : null
         }
       >
-        <div className="flex flex-col gap-4">
-          <div className="wb-card p-5">
-            <h2 className="mb-1 font-semibold">强调色</h2>
-            <p className="mb-4 text-xs text-neutral-500">
-              按钮、选中态、链接、图表首色都跟它。留空即跟随皮肤——填了之后整条色阶由它推导。
-            </p>
+        <section className="flex flex-col gap-3">
+          <GroupHead
+            bare
+            title="强调色"
+            description="按钮、选中态、链接、图表首色都跟它。留空即跟随皮肤——填了之后整条色阶由它推导。"
+          />
 
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 text-sm">
@@ -598,7 +604,7 @@ export default function AppearanceSettings() {
             ) : null}
 
             {/* 当前皮肤自带的几个候选：不填自定义色也能一键换一个接近的口味 */}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-neutral-400">换一个</span>
               {skins.map((s) => {
                 const c = s[resolved.dark ? 'dark' : 'light'].accent
@@ -613,10 +619,11 @@ export default function AppearanceSettings() {
                 )
               })}
             </div>
-          </div>
+        </section>
 
+        <section className="border-t border-neutral-100 pt-5 dark:border-neutral-800/80">
           <SkinCenter />
-        </div>
+        </section>
       </Fold>
 
       {/* ---------- 自定义壁纸与轮换（折叠） ---------- */}
@@ -634,29 +641,27 @@ export default function AppearanceSettings() {
             : '备份 · 迁移'
         }
       >
-        <div className="wb-card p-5">
-          <h2 className="mb-1 font-semibold">导入 / 导出</h2>
-          <p className="mb-4 text-xs leading-relaxed text-neutral-500">
-            把这一页的设置（皮肤、明暗、强调色、背景）连自己导入的皮肤一起存成一份文件，
-            换台机器、或者重装之后再导回来。文件是普通 JSON，可以直接手改：
-            <span className="text-neutral-400">
-              {' '}
-              只写 <code>{"{ \"id\": \"sakura\", \"label\": \"樱\", \"accent\": \"#d9558a\" }"}</code>{' '}
-              就是一个能用的皮肤——亮暗两套、十一条色阶、页面底色都由这一个色号推出来。
+        <p className="text-xs leading-relaxed text-neutral-500">
+          把这一页的设置（皮肤、明暗、强调色、背景）连自己导入的皮肤一起存成一份文件，
+          换台机器、或者重装之后再导回来。文件是普通 JSON，可以直接手改：
+          <span className="text-neutral-400">
+            {' '}
+            只写 <code>{"{ \"id\": \"sakura\", \"label\": \"樱\", \"accent\": \"#d9558a\" }"}</code>{' '}
+            就是一个能用的皮肤——亮暗两套、十一条色阶、页面底色都由这一个色号推出来。
+          </span>
+          {userSkinManifests().length > 0 ? (
+            <span data-skins-local-only="" className="mt-1 block text-amber-700 dark:text-amber-300">
+              本机现在有 {userSkinManifests().length} 个导入的皮肤——它们会自动同步一份到后端
+              （data/skins.json），清缓存、换浏览器都能从后端找回来；换台机器时跟着 data/ 目录走。
+              导出 JSON 仍是留底的正路。
             </span>
-            {userSkinManifests().length > 0 ? (
-              <span data-skins-local-only="" className="mt-1 block text-amber-700 dark:text-amber-300">
-                本机现在有 {userSkinManifests().length} 个导入的皮肤——它们会自动同步一份到后端
-                （data/skins.json），清缓存、换浏览器都能从后端找回来；换台机器时跟着 data/ 目录走。
-                导出 JSON 仍是留底的正路。
-              </span>
-            ) : (
-              <span data-skins-local-only="" className="mt-1 block">
-                自己导入的皮肤会自动同步一份到后端（data/skins.json）——清缓存、换浏览器能找回来。
-              </span>
-            )}
-          </p>
-          <div className="flex flex-wrap items-center gap-2">
+          ) : (
+            <span data-skins-local-only="" className="mt-1 block">
+              自己导入的皮肤会自动同步一份到后端（data/skins.json）——清缓存、换浏览器能找回来。
+            </span>
+          )}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={doExport}
               data-appearance-export=""
@@ -695,12 +700,11 @@ export default function AppearanceSettings() {
           {notice ? (
             <p
               data-appearance-notice=""
-              className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
+              className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
             >
               {notice}
             </p>
           ) : null}
-        </div>
       </Fold>
 
       <p className="text-xs text-neutral-400">
@@ -753,15 +757,17 @@ function Fold({
   detailsRef?: Ref<HTMLDetailsElement>
   children: ReactNode
 }) {
+  // 折叠区 = **可收起的组卡**：头部就是组头（标题 + meta + 徽标），展开后
+  // 内容区与其他组卡的身体同款内边距。收起时它长得和 SettingGroup 一样高。
   return (
-    <details ref={detailsRef} data-appearance-fold={id} className="group">
-      <summary className="flex cursor-pointer select-none list-none items-center gap-2 rounded-lg border border-neutral-200 px-4 py-3 text-sm transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900/60 [&::-webkit-details-marker]:hidden">
+    <details ref={detailsRef} data-appearance-fold={id} className="group wb-card">
+      <summary className="flex cursor-pointer select-none list-none items-center gap-2 rounded-lg px-5 py-3.5 text-sm transition-colors group-open:rounded-b-none group-open:border-b group-open:border-neutral-100 group-open:dark:border-neutral-800/80 [&::-webkit-details-marker]:hidden">
         <ChevronDown className="h-4 w-4 shrink-0 text-neutral-400 transition-transform group-open:rotate-180" />
-        <span className="font-medium">{title}</span>
+        <span className="text-sm font-semibold">{title}</span>
         {badge}
         <span className="ml-auto text-xs text-neutral-400">{meta}</span>
       </summary>
-      <div className="mt-3">{children}</div>
+      <div className="flex flex-col gap-5 p-5">{children}</div>
     </details>
   )
 }

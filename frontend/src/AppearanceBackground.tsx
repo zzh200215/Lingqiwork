@@ -12,6 +12,7 @@ import { ImagePlus, Loader2, Upload } from 'lucide-react'
 
 import { api, type ImageItem } from './api'
 import { useTheme } from './ThemeProvider'
+import { GroupHead } from './SettingsUI'
 import {
   GRADIENT_PRESETS,
   MAX_BG_POOL,
@@ -165,14 +166,18 @@ export default function AppearanceBackground({
 
   return (
     <>
-      {/* ---------- 自定义背景 ---------- */}
-      <div className="wb-card p-5">
-        <h2 className="mb-1 font-semibold">自定义背景</h2>
-        <p className="mb-4 text-xs leading-relaxed text-neutral-500">
-          背景是<b>卡片下面那一层</b>。图片会铺满整窗，侧栏与顶栏是半透明的，所以图会从它们下面透出来；
-          正文与卡片保持不透明——可读性优先于通透。
-        </p>
-
+      {/* ---------- 自定义背景：壁纸折叠卡里的一节（卡壳由折叠区出，这里只出组头） ---------- */}
+      <section className="flex flex-col gap-4">
+        <GroupHead
+          bare
+          title="自定义背景"
+          description={
+            <>
+              背景是<b>卡片下面那一层</b>。图片会铺满整窗，侧栏与顶栏是半透明的，所以图会从它们下面透出来；
+              正文与卡片保持不透明——可读性优先于通透。
+            </>
+          }
+        />
         <div className="mb-4 flex flex-wrap gap-1.5">
           {(
             [
@@ -687,11 +692,11 @@ export default function AppearanceBackground({
             )}
           </div>
         ) : null}
-      </div>
+      </section>
       {error ? (
         <p
           data-bg-err=""
-          className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300"
+          className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300"
         >
           {error}
         </p>

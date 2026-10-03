@@ -16,7 +16,9 @@ wb-*/
 # 一次性的验证脚本与截图（每轮的 scratch；留作证据，但不进版本库）
 .tmp-*/
 
-# Node handled by frontend/.gitignore
+# Node handled by frontend/.gitignore——根目录不装依赖；在根误跑 npx 会留下
+# node_modules/，加一行兜底，别让流浪目录挂在 git status 里。
+node_modules/
 
 # Tool / agent data
 .workbuddy/

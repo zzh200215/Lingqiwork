@@ -1,10 +1,11 @@
-// data 分区的备份卡（方向 6 第十五刀，2026-09-30 自 SettingsPage 拆出）：
-// 备份开关 / 时刻 / 保留份数 / 目录 + 手动备份与备份列表管理。
-// 状态与处理器自含，挂载时自拉备份列表，失败走 failLoad；偏好字段编辑经 props。
+// data 分区（方向 6 第十五刀拆出，2026-10-02 设置中心改版）：
+// 数据概览（知识库 / 备份状态）→ 自动备份 → 手动备份 → 备份记录，像个数据管理中心，
+// 不再是一张 checkbox 与输入框挤在一行的大表单。
+// 偏好字段编辑走页面级自动保存；备份列表挂载时自拉，失败走 failLoad。
 import { useEffect, useState } from 'react'
-import { Save } from 'lucide-react'
-import { api, type BackupList } from './api'
+import { api, type BackupList, type HealthReport } from './api'
 import { fmtSize, inputCls, type WorkbenchPrefs } from './settingsShared'
+import { askConfirm, SettingGroup, SettingRow, SettingSwitch } from './SettingsUI'
 
 export default function SettingsData({
   prefs,
@@ -17,11 +18,14 @@ export default function SettingsData({
 }) {
 
   const [backups, setBackups] = useState<BackupList | null>(null)
+  const [health, setHealth] = useState<HealthReport | null>(null)
   const [backupBusy, setBackupBusy] = useState(false)
   const [backupMsg, setBackupMsg] = useState('')
 
   useEffect(() => {
     api.listBackups().then(setBackups).catch((e) => failLoad('备份', e))
+    // 概览读数复用体检报告的现成端点：知识库规模与备份状态都在里面
+    api.healthReport().then(setHealth).catch(() => {/* 概览拿不到就摆「—」，不必进页级错误条 */})
   }, [])
 
   // ---- backups ----
@@ -45,28 +49,57 @@ export default function SettingsData({
   }
 
   async function removeBackup(name: string) {
-    if (!window.confirm(`删除备份 ${name}？此操作不可恢复。`)) return
+    if (
+      !(await askConfirm({
+        title: `删除备份 ${name}？`,
+        description: '此操作不可恢复。',
+        confirmLabel: '删除',
+      }))
+    )
+      return
     await api.deleteBackup(name).catch((e) => setBackupMsg(`✗ ${String(e)}`))
     setBackups(await api.listBackups())
   }
 
+  const backupCount = backups?.backups.length ?? health?.backups.count ?? 0
+  const lastBackup = backups?.backups[0]?.created_at ?? health?.backups.latest_at ?? null
+
   return (
-    <>
-      {/* Backup & restore */}
-      <section className="mb-6 wb-card p-5">
-        <h2 className="mb-1 flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Save className="h-3.5 w-3.5" /></span></h2>
-        <p className="mb-4 text-xs text-neutral-500">
-          打包 vault/（全部笔记）+ data/workbench.db（会话/记忆/配置库，一致性快照）+ data/config.json 为 zip。
-          向量索引不入包，可由 vault 重建。
-        </p>
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={prefs.backup_enabled}
-              onChange={(e) => setPrefs({ ...prefs, backup_enabled: e.target.checked })}
-            />
-            每日自动备份
+    <div className="flex flex-col gap-4">
+      {/* 数据概览：进页先看到「现在手里有什么、最后一次安全网是什么时候」 */}
+      <SettingGroup title="数据概览" description="工作台的数据资产与它们的安全网。">
+        <div className="grid grid-cols-2 gap-x-6 gap-y-4 px-5 py-4 sm:grid-cols-4">
+          <div>
+            <p className="text-xl font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
+              {health ? (health.kb.indexer?.files ?? 0).toLocaleString() : '—'}
+            </p>
+            <p className="mt-0.5 text-xs text-neutral-500">知识库来源</p>
+          </div>
+          <div>
+            <p className="text-xl font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
+              {health ? (health.kb.indexer?.chunks ?? 0).toLocaleString() : '—'}
+            </p>
+            <p className="mt-0.5 text-xs text-neutral-500">索引块</p>
+          </div>
+          <div>
+            <p className="text-xl font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">{backupCount}</p>
+            <p className="mt-0.5 text-xs text-neutral-500">备份份数</p>
+          </div>
+          <div>
+            <p className="text-xl font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">
+              {lastBackup ? lastBackup.slice(5, 16).replace('T', ' ') : '—'}
+            </p>
+            <p className="mt-0.5 text-xs text-neutral-500">最后备份（月-日 时:分）</p>
+          </div>
+        </div>
+      </SettingGroup>
+
+      <SettingGroup
+        title="自动备份"
+        description="打包 vault/（全部笔记）+ data/workbench.db（会话/记忆/配置库，一致性快照）+ data/config.json 为 zip。向量索引不入包，可由 vault 重建。"
+      >
+        <SettingRow title="每日自动备份" description="到点自动打包一次；备份是唯一不可重建资产的安全网。">
+          <div className="flex items-center gap-2.5">
             <input
               type="time"
               value={prefs.backup_time}
@@ -74,84 +107,99 @@ export default function SettingsData({
               onChange={(e) => setPrefs({ ...prefs, backup_time: e.target.value })}
               className={`${inputCls} w-28 disabled:opacity-40`}
             />
-            <span className="ml-2 text-neutral-500">保留最近</span>
-            <input
-              type="number"
-              min={1}
-              max={99}
-              value={prefs.backup_keep}
-              onChange={(e) => setPrefs({ ...prefs, backup_keep: Number(e.target.value) })}
-              className={`${inputCls} w-16`}
+            <SettingSwitch
+              checked={prefs.backup_enabled}
+              onChange={(v) => setPrefs({ ...prefs, backup_enabled: v })}
+              ariaLabel="每日自动备份"
             />
-            <span className="text-neutral-500">份（超出自动滚动删除）</span>
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={prefs.backup_removable}
-              onChange={(e) => setPrefs({ ...prefs, backup_removable: e.target.checked })}
-            />
-            落到外接盘（自动探测 U 盘/移动硬盘，插上才备；正本与备份不同盘，盘坏不两失）
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            备份目录（留空 = 项目下 backups/；勾了外接盘时忽略此项）
-            <input
-              value={prefs.backup_dir}
-              disabled={prefs.backup_removable}
-              onChange={(e) => setPrefs({ ...prefs, backup_dir: e.target.value })}
-              placeholder={backups?.dir || 'D:\\TP\\A\\backups'}
-              className={`${inputCls} disabled:opacity-40`}
-            />
-          </label>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={runBackup}
-              disabled={backupBusy}
-              className="rounded-md border border-violet-500 px-3 py-1.5 text-sm font-medium text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-50 dark:text-violet-300 dark:hover:bg-violet-950"
+        </SettingRow>
+        <SettingRow title="保留份数" description="超出后自动滚动删除最旧的。" htmlFor="pref-backup-keep">
+          <input
+            id="pref-backup-keep"
+            type="number"
+            min={1}
+            max={99}
+            value={prefs.backup_keep}
+            onChange={(e) => setPrefs({ ...prefs, backup_keep: Number(e.target.value) })}
+            className={`${inputCls} w-20`}
+          />
+        </SettingRow>
+        <SettingRow
+          title="落到外接盘"
+          description="自动探测 U 盘/移动硬盘，插上才备；正本与备份不同盘，盘坏不两失。"
+        >
+          <SettingSwitch
+            checked={prefs.backup_removable}
+            onChange={(v) => setPrefs({ ...prefs, backup_removable: v })}
+            ariaLabel="备份落到外接盘"
+          />
+        </SettingRow>
+        <SettingRow
+          title="备份目录"
+          description="留空 = 项目下 backups/；勾了外接盘时忽略此项。"
+          htmlFor="pref-backup-dir"
+        >
+          <input
+            id="pref-backup-dir"
+            value={prefs.backup_dir}
+            disabled={prefs.backup_removable}
+            onChange={(e) => setPrefs({ ...prefs, backup_dir: e.target.value })}
+            placeholder={backups?.dir || 'D:\\TP\\A\\backups'}
+            className={`${inputCls} w-64 disabled:opacity-40`}
+          />
+        </SettingRow>
+      </SettingGroup>
+
+      <SettingGroup title="手动备份" description="想做一个「改动前的定格」时用——不用等凌晨三点。">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
+          <button
+            onClick={runBackup}
+            disabled={backupBusy}
+            className="wb-btn-primary px-4 py-1.5 text-sm"
+          >
+            {backupBusy ? '打包中…' : '立即备份'}
+          </button>
+          <span className="text-xs text-neutral-500">
+            保存路径 {backups?.dir || '—'}
+            {backups?.next_run ? ` · 下次自动备份 ${backups.next_run.slice(5, 16).replace('T', ' ')}` : ''}
+          </span>
+        </div>
+        {backupMsg && <div className="px-5 pb-3.5 text-xs text-neutral-600 dark:text-neutral-300">{backupMsg}</div>}
+        {backups?.removable_missing && (
+          <div className="px-5 pb-3.5 text-xs text-amber-600 dark:text-amber-400">🔌 {backups.removable_missing}</div>
+        )}
+      </SettingGroup>
+
+      <SettingGroup title="备份记录" divide={false}>
+        <div className="flex flex-col gap-1.5 px-5 py-4">
+          {(backups?.backups ?? []).map((b) => (
+            <div
+              key={b.name}
+              className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800"
             >
-              {backupBusy ? '打包中…' : '立即备份'}
-            </button>
-            <span className="text-xs text-neutral-500">
-              保存路径 {backups?.dir || '—'}
-              {backups?.next_run ? ` · 下次自动备份 ${backups.next_run.slice(5, 16).replace('T', ' ')}` : ''}
-            </span>
-          </div>
-          {backupMsg && <div className="text-xs text-neutral-600 dark:text-neutral-300">{backupMsg}</div>}
-          <div className="flex flex-col gap-1">
-            {backups?.removable_missing && (
-              <div className="text-xs text-amber-600 dark:text-amber-400">🔌 {backups.removable_missing}</div>
-            )}
-            {(backups?.backups ?? []).length === 0 && (
-              <div className="text-xs text-neutral-400">还没有备份</div>
-            )}
-            {(backups?.backups ?? []).map((b) => (
-              <div
-                key={b.name}
-                className="flex items-center justify-between rounded-md border border-neutral-200 px-3 py-1.5 text-xs dark:border-neutral-800"
-              >
-                <span className="truncate font-mono">{b.name}</span>
-                <span className="flex shrink-0 items-center gap-3">
-                  <span className="text-neutral-500">{fmtSize(b.size)}</span>
-                  <span className="text-neutral-400">{b.created_at.slice(0, 16).replace('T', ' ')}</span>
-                  <a
-                    href={api.backupDownloadUrl(b.name)}
-                    className="text-violet-600 hover:underline dark:text-violet-300"
-                  >
-                    下载
-                  </a>
-                  <button onClick={() => removeBackup(b.name)} className="text-red-500 hover:underline">
-                    删除
-                  </button>
-                </span>
-              </div>
-            ))}
-          </div>
-          <details className="text-xs text-neutral-500">
+              <span className="min-w-0 truncate font-mono">{b.name}</span>
+              <span className="flex shrink-0 items-center gap-3">
+                <span className="text-neutral-500">{fmtSize(b.size)}</span>
+                <span className="text-neutral-400">{b.created_at.slice(0, 16).replace('T', ' ')}</span>
+                <a href={api.backupDownloadUrl(b.name)} className="text-violet-600 hover:underline dark:text-violet-300">
+                  下载
+                </a>
+                <button onClick={() => removeBackup(b.name)} className="text-red-500 hover:underline">
+                  删除
+                </button>
+              </span>
+            </div>
+          ))}
+          {(backups?.backups ?? []).length === 0 && (
+            <p className="text-xs text-neutral-400">还没有备份。</p>
+          )}
+          <details className="mt-1 text-xs text-neutral-500">
             <summary className="cursor-pointer select-none">如何恢复？</summary>
             <p className="mt-2 leading-relaxed">{backups?.restore_hint || ''}</p>
           </details>
         </div>
-      </section>
-    </>
+      </SettingGroup>
+    </div>
   )
 }

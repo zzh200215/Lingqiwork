@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { BookmarkPlus, Save } from 'lucide-react'
 
 import { useTheme } from './ThemeProvider'
+import { GroupHead } from './SettingsUI'
 import { isBuiltinSkin, type SkinManifest, type VariantManifest } from './theme'
 import { newPhotoId } from './theme/extract'
 import { SKIN_FORMAT } from './theme/manifest'
@@ -143,23 +144,22 @@ export default function SkinCenter() {
   }
 
   return (
-    <div className="wb-card p-5" data-skin-center="">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="font-semibold">分区域微调</h2>
-          <p className="mt-0.5 text-xs text-neutral-400">
-            没拨过的跟着「{resolved.skin.label}」走——只拖第一根就是整套界面一起通透。
-          </p>
-        </div>
-        <button
-          onClick={() => setNaming((v) => !v)}
-          data-skin-save=""
-          className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2 py-1 text-xs transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
-        >
-          {editing ? <Save className="h-3.5 w-3.5" /> : <BookmarkPlus className="h-3.5 w-3.5" />}
-          {editing ? '保存修改' : '存成新皮肤'}
-        </button>
-      </div>
+    <section data-skin-center="" className="flex flex-col gap-4">
+      <GroupHead
+        bare
+        title="分区域微调"
+        description={`没拨过的跟着「${resolved.skin.label}」走——只拖第一根就是整套界面一起通透。`}
+        actions={
+          <button
+            onClick={() => setNaming((v) => !v)}
+            data-skin-save=""
+            className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-2 py-1 text-xs transition-colors hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-violet-500/50 dark:hover:text-violet-300"
+          >
+            {editing ? <Save className="h-3.5 w-3.5" /> : <BookmarkPlus className="h-3.5 w-3.5" />}
+            {editing ? '保存修改' : '存成新皮肤'}
+          </button>
+        }
+      />
 
       {naming ? (
         <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -238,12 +238,12 @@ export default function SkinCenter() {
       {notice ? (
         <p
           data-skin-center-notice=""
-          className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
+          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
         >
           {notice}
         </p>
       ) : null}
-    </div>
+    </section>
   )
 }
 

@@ -4,7 +4,6 @@
 // 状态与处理器整体住在这里，挂载时并发自拉（沿用「进 agents 页才取」的语义，
 // 改为每次进页取一次），失败逐项 failLoad 汇总到页级错误条。
 import { Fragment, useEffect, useState } from 'react'
-import { Brain, GraduationCap, HeartPulse, Plug, Star, Trophy } from 'lucide-react'
 import {
   api,
   type ArenaResult,
@@ -18,6 +17,7 @@ import {
   type TutorProfile,
 } from './api'
 import { fmtTime, inputCls } from './settingsShared'
+import { askConfirm, SettingGroup } from './SettingsUI'
 import TurnLedger from './TurnLedger'
 
 /** 四个成文引擎的展示顺序（与 core/engine_eval.ENGINES 一致）。 */
@@ -111,7 +111,7 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
   }
 
   async function clearAllMemories() {
-    if (!confirm('清空全部长期记忆？')) return
+    if (!(await askConfirm({ title: '清空全部长期记忆？', confirmLabel: '清空' }))) return
     await api.clearMemories()
     setMemories(await api.listMemories())
   }
@@ -174,8 +174,8 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
   return (
     <>
       {/* 体检报告：自检 + 备份 + 索引 + 任务失败 + 整理员，一页看全 */}
-      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
-        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-400/15 dark:text-rose-300"><HeartPulse className="h-3.5 w-3.5" /></span></h2>
+      <SettingGroup title="体检报告" description="自检、备份、索引、任务失败与整理员，一页看全。" divide={false}>
+        <div className="px-5 py-4">
         {!health ? (
           <p className="text-xs text-neutral-400">正在体检…</p>
         ) : (
@@ -217,15 +217,16 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
             </li>
           </ul>
         )}
-      </section>
+        </div>
+      </SettingGroup>
 
       {/* MCP server（能力开放）：把工作台的读状态开放给外部 MCP 客户端 */}
-      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
-        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><Plug className="h-3.5 w-3.5" /></span></h2>
-        <p className="text-xs leading-relaxed text-neutral-500">
-          外部 MCP 客户端（Claude Desktop 等）可以连进来查你的知识库、对话/教学历史、长期记忆、学习画像和今日建议。
-          端点只绑本机（127.0.0.1），且全部是<strong>读</strong>操作——外部工具看工作台，改动仍走工作台自己的界面。
-        </p>
+      <SettingGroup
+        title="能力开放（对外 MCP）"
+        description="外部 MCP 客户端（Claude Desktop 等）可以连进来查你的知识库、对话/教学历史、长期记忆、学习画像和今日建议。端点只绑本机（127.0.0.1），且全部是只读——外部工具看工作台，改动仍走工作台自己的界面。"
+        divide={false}
+      >
+        <div className="flex flex-col gap-2.5 px-5 py-4">
         <div className="flex items-center gap-2 text-xs">
           <code className="rounded bg-neutral-100 px-2 py-1 dark:bg-neutral-800">{window.location.origin}/mcp</code>
           <button
@@ -248,19 +249,21 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
         <p className="text-xs text-neutral-400">
           工具：search_knowledge · search_history · get_user_memory · get_learning_profile · get_today_briefing
         </p>
-      </section>
+        </div>
+      </SettingGroup>
 
       {/* 模型竞技场：同一段 prompt 打到所有已启用 provider 并排对比 */}
-      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
-        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300"><Trophy className="h-3.5 w-3.5" /></span></h2>
-        <p className="text-xs text-neutral-500">
-          同一段话并行发给每个已启用的 provider，并排看回答、耗时和错误——也是降级链候选的检阅台。
-        </p>
+      <SettingGroup
+        title="模型竞技场"
+        description="同一段话并行发给每个已启用的 provider，并排看回答、耗时和错误——也是降级链候选的检阅台。"
+        divide={false}
+      >
+        <div className="flex flex-col gap-3 px-5 py-4">
         <textarea
           value={arenaPrompt}
           onChange={(e) => setArenaPrompt(e.target.value)}
           rows={2}
-          className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-400 dark:border-neutral-700 dark:bg-neutral-900"
+          className={`${inputCls} resize-y`}
         />
         <div>
           <button
@@ -293,15 +296,16 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
             ))}
           </div>
         )}
-      </section>
+        </div>
+      </SettingGroup>
 
       {/* 生成质量闭环：研究/产出/复盘/方案 每次成文后都能评一次，按「哪版提示词 + 哪个模型」聚合 */}
-      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
-        <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300"><Star className="h-3.5 w-3.5" /></span></h2>
-        <p className="text-xs text-neutral-500">
-          研究 / 产出 / 复盘 / 方案 每次成文后，各自的卡片底部都有一次 👍/👎。评价按「哪版提示词 + 哪个模型」聚合——
-          改过提示词或换过 provider 之后，前后两版会分开统计，不用靠感觉判断。
-        </p>
+      <SettingGroup
+        title="生成质量"
+        description="研究 / 产出 / 复盘 / 方案 每次成文后，各自的卡片底部都有一次 👍/👎。评价按「哪版提示词 + 哪个模型」聚合——改过提示词或换过 provider 之后，前后两版会分开统计，不用靠感觉判断。"
+        divide={false}
+      >
+        <div className="flex flex-col gap-3 px-5 py-4">
         {!quality ? (
           <p className="text-xs text-neutral-400">正在统计…</p>
         ) : quality.total === 0 ? (
@@ -444,14 +448,16 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
             放在满意率与自动标尺下面，因为它们是同一个问题的三个面：
             人点的、机器判的、以及**这一轮到底发生了什么**。 */}
         <TurnLedger />
-      </section>
+        </div>
+      </SettingGroup>
 
       {tutorProfile && (tutorProfile.known.length > 0 || tutorProfile.half.length > 0 || tutorProfile.preferences.length > 0) ? (
-        <section className="mb-6 flex flex-col gap-2 wb-card p-5">
-          <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300"><GraduationCap className="h-3.5 w-3.5" /></span></h2>
-          <p className="text-xs text-neutral-500">
-            自动汇总自教学记录，注入教学提示词校准讲解深度。是派生的记录，不能手改；教学页里它会自己更新。
-          </p>
+        <SettingGroup
+          title="教学画像"
+          description="自动汇总自教学记录，注入教学提示词校准讲解深度。是派生的记录，不能手改；教学页里它会自己更新。"
+          divide={false}
+        >
+          <div className="flex flex-col gap-2 px-5 py-4">
           {tutorProfile.known.length > 0 ? (
             <p className="text-sm text-neutral-700 dark:text-neutral-200">
               <span className="text-neutral-400">已说通（{tutorProfile.known.length}）：</span>
@@ -470,21 +476,22 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
               {tutorProfile.preferences.map((p) => p.content).join('；')}
             </p>
           ) : null}
-        </section>
+          </div>
+        </SettingGroup>
       ) : null}
-      <section className="mb-6 flex flex-col gap-3 wb-card p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="flex items-center gap-2 font-semibold"><span className="wb-chip h-6 w-6 rounded-lg bg-pink-100 text-pink-600 dark:bg-pink-400/15 dark:text-pink-300"><Brain className="h-3.5 w-3.5" /></span></h2>
-          {memories.length > 0 && (
+      <SettingGroup
+        title="长期记忆"
+        description="模型在对话中可通过 memory_save 自动记住你的偏好与背景；开启「自动记忆」后每轮对话结束还会自主判断是否值得记住（带 🤖 徽标）。注入对话时，记忆条数多会按当前问题相关性选取；保存时相似内容自动去重。「整理重复记忆」会把跨会话积累的近似表述交给模型合并成一条（合并前先经模型确认确为同一事实）。可编辑。"
+        divide={false}
+        actions={
+          memories.length > 0 ? (
             <button onClick={clearAllMemories} className="text-xs text-red-400 hover:text-red-600">
               清空全部
             </button>
-          )}
-        </div>
-        <p className="-mt-1 text-xs leading-relaxed text-neutral-400">
-          模型在对话中可通过 memory_save 自动记住你的偏好与背景；开启「自动记忆」后每轮对话结束还会自主判断是否值得记住（带 🤖
-          徽标）。注入对话时，记忆条数多会按当前问题相关性选取；保存时相似内容自动去重。「整理重复记忆」会把跨会话积累的近似表述交给模型合并成一条（合并前先经模型确认确为同一事实）。可编辑。
-        </p>
+          ) : undefined
+        }
+      >
+        <div className="flex flex-col gap-2.5 px-5 py-4">
         {memories.map((m) => (
           <Fragment key={m.id}>
             <div
@@ -595,7 +602,7 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
           <button
             onClick={runTidy}
             disabled={tidyBusy || memories.length < 2}
-            className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium disabled:opacity-40 dark:border-neutral-700"
+            className="wb-btn-secondary px-3 py-1.5 text-xs"
           >
             {tidyBusy ? '整理中…' : '整理重复记忆'}
           </button>
@@ -648,7 +655,7 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
               </pre>
               <button
                 onClick={() => navigator.clipboard.writeText(memExpose.snippet_json)}
-                className="mt-2 rounded-md border border-neutral-300 px-2.5 py-1 text-xs dark:border-neutral-700"
+                className="mt-2 wb-btn-secondary px-2.5 py-1 text-xs"
               >
                 复制配置
               </button>
@@ -657,7 +664,8 @@ export default function SettingsEval({ failLoad }: { failLoad: (what: string, e:
             <p className="mt-2 text-xs text-neutral-400">展开时加载…</p>
           )}
         </details>
-      </section>
+        </div>
+      </SettingGroup>
     </>
   )
 }

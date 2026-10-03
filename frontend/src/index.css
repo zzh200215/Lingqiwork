@@ -91,6 +91,13 @@ body {
   @apply rounded-md border border-violet-300 font-medium text-violet-700 transition-[background-color,border-color] hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-violet-500/40 dark:text-violet-300 dark:hover:bg-violet-500/10;
 }
 
+/* 中性次级按钮：与主按钮（wb-btn-primary）、强调次级（wb-btn-ghost）同一族的
+   第三种语气——「这个动作存在，但它不是主角」（同步全部 / 整理记忆 / 复制配置）。
+   此前设置域里这一种是各处手写的 `border border-neutral-300 px-3 …`，六处三个样。 */
+.wb-btn-secondary {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-neutral-300 font-medium text-neutral-700 transition-colors hover:border-neutral-400 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-200 dark:hover:border-neutral-600 dark:hover:bg-neutral-800/60;
+}
+
 .wb-btn-primary {
   /* `disabled:bg-none` 是给**少数需要中性禁用底**的按钮的出口（App.tsx 那个录音键）：
      `bg-none` 把 background-image 清掉，剩下的交给 `disabled:bg-neutral-200`。
@@ -442,6 +449,30 @@ body {
 }
 .wb-node-running {
   animation: wb-node-pulse 1.6s ease-in-out infinite;
+}
+
+/* ---------- 抽屉（设置中心，2026-10-02）----------
+ *
+ * 资源编辑器（provider / MCP / 智能体 / 任务…）住右侧抽屉。入场只做一件小事：
+ * 从右缘滑入 16px + 淡入——「这里出现了一层」的交代，不是动画表演；
+ * prefers-reduced-motion 下直接出现（§I）。 */
+@keyframes wb-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.wb-drawer {
+  animation: wb-drawer-in 0.18s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-drawer {
+    animation: none;
+  }
 }
 
 /* ---------- 弹层 z-index 分级（全站约定，2026-09-27 宠物模块改造定档）----------

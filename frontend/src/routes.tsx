@@ -142,15 +142,17 @@ export type CompanionTab = (typeof COMPANION_TABS)[number]['key']
  *  2026-10-01 加「外观」：皮肤 / 亮暗 / 强调色 / 自定义背景。它**排在第二位**，
  *  紧挨着「通用」——换肤是每个人都会碰一次的设置，埋在最后等于没有；
  *  而它不属于「通用」：那一片是行为开关（提示词、检索、语音），与外观不是一回事。 */
+// `desc` 给设置页的分区页头用（`SettingsPage` 的 `SettingPage`）：侧栏不摆它，
+// 页面要念——「这页管什么」的一句话，是每个分区进门先看到的那行字。
 export const SETTING_SECTIONS = [
-  { key: 'general', icon: Settings, label: '通用' },
-  { key: 'appearance', icon: Palette, label: '外观' },
-  { key: 'models', icon: Brain, label: '模型' },
-  { key: 'agents', icon: Bot, label: '智能体' },
-  { key: 'automation', icon: Timer, label: '自动化' },
-  { key: 'content', icon: Wand2, label: '内容生成' },
-  { key: 'data', icon: Database, label: '数据' },
-  { key: 'mcp', icon: Plug, label: 'MCP' },
+  { key: 'general', icon: Settings, label: '通用', desc: '控制 AI 工作台的默认行为、知识检索、记忆与语音。' },
+  { key: 'appearance', icon: Palette, label: '外观', desc: '挑选和打造你的工作台皮肤：明暗、强调色与背景氛围。' },
+  { key: 'models', icon: Brain, label: '模型', desc: '管理模型供应商、可用性探测与系统默认模型。' },
+  { key: 'agents', icon: Bot, label: '智能体', desc: '管理智能体预设、提示词模板、技能与质量观测。' },
+  { key: 'automation', icon: Timer, label: '自动化', desc: '配置定时任务、订阅抓取、摘要与邮件通知。' },
+  { key: 'content', icon: Wand2, label: '内容生成', desc: '代码轻执行、图片生成与图库管理。' },
+  { key: 'data', icon: Database, label: '数据', desc: '管理工作台数据安全：自动备份、手动备份与恢复。' },
+  { key: 'mcp', icon: Plug, label: 'MCP', desc: '管理外部工具服务器、网页搜索源与连接状态。' },
 ] as const
 export type SettingSection = (typeof SETTING_SECTIONS)[number]['key']
 
